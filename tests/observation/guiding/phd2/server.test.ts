@@ -94,8 +94,8 @@ describe('connection', () => {
 		expect(context.server.connections).toBe(2)
 
 		// Every PHD2 event reaches every socket; the Guiding Assistant events of the local guider do not.
-		context.guider.emitEvent('GuidingAssistantStarted', { Result: {} as never })
-		context.guider.emitEvent('SettleDone', { Status: 0, TotalFrames: 1, DroppedFrames: 0 })
+		context.guider.emitEvent('assistantStarted', { result: {} as never })
+		context.guider.emitEvent('settleDone', { succeeded: true, totalFrames: 1, droppedFrames: 0 })
 		for (const each of [first, second]) await waitUntil(() => each.events().some((event) => event.Event === 'SettleDone'), 2000, 1)
 		expect(first.events().map((event) => event.Event)).toEqual(['Version', 'AppState', 'LockPositionSet', 'SettleDone'])
 		expect(second.events().map((event) => event.Event)).toEqual(['Version', 'LockPositionSet', 'AppState', 'SettleDone'])
@@ -114,7 +114,7 @@ describe('connection', () => {
 		expect(context.server.connections).toBe(0)
 		expect(context.server.port).toBe(-1)
 		expect(await client.getAppState()).toEqual({ success: false, error: 'socketUnavailable' })
-		context.guider.emitEvent('SettleDone', { Status: 0, TotalFrames: 1, DroppedFrames: 0 })
+		context.guider.emitEvent('settleDone', { succeeded: true, totalFrames: 1, droppedFrames: 0 })
 
 		// It can listen again.
 		expect(context.server.start('127.0.0.1', 0)).toBeTrue()

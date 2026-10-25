@@ -105,7 +105,7 @@ function reserve(session: LocalGuidingSession) {
 }
 
 function settleDone(client: GuiderClient, status = 0) {
-	client.emitEvent('SettleDone', { Status: status, TotalFrames: 1, DroppedFrames: 0 })
+	client.emitEvent('settleDone', { succeeded: status === 0, totalFrames: 1, droppedFrames: 0 })
 }
 
 // Starts guiding and reports the settle once the client guides.
@@ -191,7 +191,7 @@ describe('49.11 run admission', () => {
 		const accepted: boolean[] = []
 		client.addHandler({
 			event: (_, event) => {
-				if (event.Event === 'SettleBegin' || event.Event === 'StartCalibration' || event.Event === 'StartGuiding') accepted.push(client.guidePulse(100, 'North'))
+				if (event.type === 'settleStarted' || event.type === 'calibrationStarted' || event.type === 'guidingStarted') accepted.push(client.guidePulse(100, 'North'))
 			},
 		})
 
@@ -205,7 +205,7 @@ describe('49.11 run admission', () => {
 		// A guider that refuses to guide leaves the gate closed at once.
 		const refused = spyOn(client, 'guide').mockReturnValue(false)
 		const settleEvents: string[] = []
-		client.addHandler({ event: (_, event) => void settleEvents.push(event.Event) })
+		client.addHandler({ event: (_, event) => void settleEvents.push(event.type) })
 		expect(await session.start(rig.coordinator, reservation, { recalibrate: false, settle: SETTLE, clock: context.clock })).toMatchObject({ ok: false, reason: 'unexpectedState' })
 		expect(client.guidePulse(100, 'North')).toBeFalse()
 		expect(settleEvents).toEqual([])
@@ -312,7 +312,7 @@ describe('49.11 start, settle and stop', () => {
 		const dispatched = clock.monotonicNow()
 		clock.jumpWall(-10_000)
 		await clock.advance(500)
-		client.emitEvent('StarLost', { Frame: 1, Time: 1, StarMass: 0, SNR: 0, AvgDist: 0, ErrorCode: 1, Status: 'star lost' })
+		client.emitEvent('starLost', { frameId: 1, guidingTime: 1, mass: 0, snr: 0, hfd: 0, averageDistance: 0, notes: ['star lost'] })
 		await clock.advance(500)
 		const finished = clock.monotonicNow()
 
@@ -469,8 +469,8 @@ describe('49.10 dither through the local guider', () => {
 		const amounts: number[] = []
 		const dither = spyOn(client, 'dither').mockImplementation((amount) => {
 			amounts.push(amount)
-			client.emitEvent('GuidingDithered', { dx: amount, dy: -amount })
-			client.emitEvent('SettleBegin')
+			client.emitEvent('dithered', { dx: amount, dy: -amount })
+			client.emitEvent('settleStarted')
 			return true
 		})
 

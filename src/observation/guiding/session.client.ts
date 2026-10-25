@@ -8,7 +8,7 @@ import { toArcsec } from '../../math/units/angle'
 import type { CameraCaptureClock } from '../capture/types'
 import type { GuidePulseAdmission, GuiderClient, GuiderClientConnectOptions, GuiderClientHandler } from './client'
 import { type Ditherer, type DitherPhase, type DitherRequest, type DitherResult, settleOnAbort } from './ditherer'
-import type { PHD2Events } from './phd2/types'
+import type { GuidingEvent } from './events'
 // oxfmt-ignore
 import { DEFAULT_GUIDING_CLOCK, type GuidingInterruptionKind, GuidingInterruptionHistory, type GuidingSession, type GuidingSessionResources, type GuidingSessionState, type GuidingSettle, GuidingSettleListeners, type GuidingStartOptions, guidingSettleWaitTimeout, waitForGuidingSettle } from './session'
 
@@ -315,29 +315,29 @@ export class LocalGuidingSession implements GuidingSession, Ditherer {
 		event: (_, event) => this.#onEvent(event),
 	}
 
-	#onEvent(event: PHD2Events) {
-		switch (event.Event) {
-			case 'StarLost':
-				this.#interrupt('starLost', event.Status)
+	#onEvent(event: GuidingEvent) {
+		switch (event.type) {
+			case 'starLost':
+				this.#interrupt('starLost', event.notes.join(','))
 				return
-			case 'LockPositionLost':
+			case 'lockLost':
 				this.#interrupt('lockPositionLost')
 				return
-			case 'Paused':
+			case 'paused':
 				if (this.#expecting !== 'pause') this.#interrupt('paused', 'guiding paused outside the session')
 				return
-			case 'GuidingStopped':
+			case 'guidingStopped':
 				if (this.#expecting !== 'stop') this.#interrupt('stopped', 'guiding stopped outside the session')
 				return
-			case 'GuidingDithered':
+			case 'dithered':
 				this.#settle.notify({ kind: 'dithered', dx: event.dx, dy: event.dy })
 				return
-			case 'SettleBegin':
-			case 'Settling':
+			case 'settleStarted':
+			case 'settling':
 				this.#settle.notify({ kind: 'settling' })
 				return
-			case 'SettleDone':
-				this.#settle.notify({ kind: 'done', status: event.Status, error: event.Error })
+			case 'settleDone':
+				this.#settle.notify({ kind: 'done', status: event.succeeded ? 0 : 1, error: event.error })
 		}
 	}
 

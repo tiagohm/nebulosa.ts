@@ -16,7 +16,8 @@ import { readImageFromBuffer, readImageFromSource } from '../src/imaging/model/i
 import type { Image } from '../src/imaging/model/types'
 import { detectStars } from '../src/imaging/stars/detector'
 import { base64Source, bufferSource } from '../src/io/io'
-import { type GuideFrameImage, GuiderClient, type GuiderEvents } from '../src/observation/guiding/client'
+import { type GuideFrameImage, GuiderClient } from '../src/observation/guiding/client'
+import type { GuidingEvent } from '../src/observation/guiding/events'
 import type { GuideTracker } from '../src/observation/guiding/tracker'
 import { nonSiderealTrackingOf } from '../src/observation/guiding/tracker.nonsidereal'
 import { enrichGuideStars } from '../src/observation/guiding/tracker.star'
@@ -302,11 +303,11 @@ export class GuidingSimulation {
 		this.#print('faults cleared; recovery requested')
 	}
 
-	#handleEvent(event: GuiderEvents) {
-		if (event.Event === 'CalibrationComplete') this.#options.calibrationComplete?.(this)
-		if (event.Event === 'CalibrationDataFlipped') this.#options.calibrationFlipped?.(this)
+	#handleEvent(event: GuidingEvent) {
+		if (event.type === 'calibrationCompleted') this.#options.calibrationComplete?.(this)
+		if (event.type === 'calibrationFlipped') this.#options.calibrationFlipped?.(this)
 		const detail = JSON.stringify(event)
-		this.#print(`[event] ${event.Event}${detail}`)
+		this.#print(`[event] ${event.type}${detail}`)
 	}
 
 	#handleFrame(frame: GuideFrameImage) {

@@ -12,9 +12,12 @@ import type { Image } from '../../../src/imaging/model/types'
 import { bufferSink } from '../../../src/io/io'
 import { mulberry32 } from '../../../src/math/numerical/random'
 import type { GuidingCalibrationResult } from '../../../src/observation/guiding/calibrator'
-import { GuiderClient, type GuideFrameImage, type GuiderClientConnectOptions, type GuiderClientHandler, type GuiderClientOptions, type GuiderEvents } from '../../../src/observation/guiding/client'
+import { GuiderClient, type GuideFrameImage, type GuiderClientConnectOptions, type GuiderClientHandler, type GuiderClientOptions } from '../../../src/observation/guiding/client'
 import { ditherPulsePlanFromCalibration } from '../../../src/observation/guiding/dither.pulse'
+import type { GuidingEvent } from '../../../src/observation/guiding/events'
 import { DEFAULT_GUIDER_CONFIG, type GuideDirectionDEC, type GuideDirectionRA } from '../../../src/observation/guiding/guider'
+import { phd2EventsOf } from '../../../src/observation/guiding/phd2/events'
+import type { PHD2Events } from '../../../src/observation/guiding/phd2/types'
 import { type GuideTargetEnvelope, type GuideTracker, type GuideTrackerContext, type GuideTrackerResult, trackingResultFromStars } from '../../../src/observation/guiding/tracker'
 import { NonSiderealTracker, nonSiderealTrackingOf } from '../../../src/observation/guiding/tracker.nonsidereal'
 import { SolarSystemTracker, solarSystemTrackingOf } from '../../../src/observation/guiding/tracker.solarsystem'
@@ -248,7 +251,10 @@ interface Harness {
 	readonly client: GuiderClient
 	readonly cameraManager: FakeCameraManager
 	readonly guideOutputManager: FakeGuideOutputManager
-	readonly events: GuiderEvents[]
+	// PHD2 translation of every native event, in emission order.
+	readonly events: PHD2Events[]
+	// Every native event, in emission order.
+	readonly native: GuidingEvent[]
 	readonly camera: Camera
 	readonly guideOutput: GuideOutput
 	readonly mount: MountSimulator
@@ -264,12 +270,18 @@ interface HarnessOptions extends Partial<GuiderClientOptions> {
 function makeHarness({ handler, ...options }: HarnessOptions = {}, tracker: GuideTracker = fixtureStarTracker()): Harness {
 	const cameraManager = new FakeCameraManager()
 	const guideOutputManager = new FakeGuideOutputManager()
-	const events: GuiderEvents[] = []
+	const events: PHD2Events[] = []
+	const native: GuidingEvent[] = []
 	const client = new GuiderClient(cameraManager as unknown as CameraManager, guideOutputManager as unknown as GuideOutputManager, tracker, { decodeImage: fixtureImageDecoder, ...options })
 	if (handler !== undefined) client.addHandler(handler)
-	client.addHandler({ event: (_client, event) => events.push(event) })
+	client.addHandler({
+		event: (_client, event) => {
+			native.push(event)
+			events.push(...phd2EventsOf(event))
+		},
+	})
 
-	return { client, cameraManager, guideOutputManager, events, camera: makeCamera(), guideOutput: makeGuideOutput(), mount: new MountSimulator(), frameCount: 0 }
+	return { client, cameraManager, guideOutputManager, events, native, camera: makeCamera(), guideOutput: makeGuideOutput(), mount: new MountSimulator(), frameCount: 0 }
 }
 
 // Connects the harness client to its camera/guide output.
@@ -289,7 +301,7 @@ async function feedBuffer(harness: Harness, buffer: Buffer) {
 	const expected = ++harness.frameCount
 
 	for (let attempt = 0; attempt < 100; attempt++) {
-		const eventsBefore = harness.events.length
+		const eventsBefore = harness.native.length
 		const exposuresBefore = harness.cameraManager.startExposureCalls.length
 		handler!.blobReceived!(harness.camera, buffer, 'raw')
 
@@ -298,7 +310,7 @@ async function feedBuffer(harness: Harness, buffer: Buffer) {
 		let accepted = false
 
 		for (let i = 0; i < 100 && !accepted; i++) {
-			accepted = harness.events.length > eventsBefore
+			accepted = harness.native.length > eventsBefore
 			if (!accepted) await Bun.sleep(1)
 		}
 
@@ -342,9 +354,14 @@ async function feedStars(harness: Harness, stars: readonly (readonly [number, nu
 	return await feedBuffer(harness, buildFrameBufferAt(shifted))
 }
 
-// Returns all recorded events of one type.
-function eventsOf<T extends GuiderEvents['Event']>(events: readonly GuiderEvents[], type: T) {
-	return events.filter((event) => event.Event === type) as Extract<GuiderEvents, { Event: T }>[]
+// Returns all recorded native events of one type.
+function nativeOf<T extends GuidingEvent['type']>(events: readonly GuidingEvent[], type: T) {
+	return events.filter((event) => event.type === type) as Extract<GuidingEvent, { type: T }>[]
+}
+
+// Returns all recorded PHD2 events of one type.
+function eventsOf<T extends PHD2Events['Event']>(events: readonly PHD2Events[], type: T) {
+	return events.filter((event) => event.Event === type) as Extract<PHD2Events, { Event: T }>[]
 }
 
 let harness: Harness
@@ -946,8 +963,8 @@ describe('handlers', () => {
 	test('every handler receives every event and frame in registration order', async () => {
 		const calls: string[] = []
 		const local = makeHarness()
-		local.client.addHandler({ event: (_client, event) => calls.push(`a:${event.Event}`), frame: () => calls.push('a:frame') })
-		local.client.addHandler({ event: (_client, event) => calls.push(`b:${event.Event}`), frame: () => calls.push('b:frame') })
+		local.client.addHandler({ event: (_client, event) => calls.push(`a:${event.type}`), frame: () => calls.push('a:frame') })
+		local.client.addHandler({ event: (_client, event) => calls.push(`b:${event.type}`), frame: () => calls.push('b:frame') })
 		connect(local)
 		local.client.loop()
 		await feedFrame(local)
@@ -959,7 +976,7 @@ describe('handlers', () => {
 			expect(calls[i].startsWith('a:')).toBeTrue()
 			expect(calls[i + 1]).toBe(`b:${calls[i].slice(2)}`)
 		}
-		expect(calls.filter((call) => call !== 'a:frame' && call.startsWith('a:'))).toHaveLength(local.events.length)
+		expect(calls.filter((call) => call !== 'a:frame' && call.startsWith('a:'))).toHaveLength(local.native.length)
 	})
 
 	test('a throwing handler neither stops the others nor the exposure loop', async () => {
@@ -984,11 +1001,11 @@ describe('handlers', () => {
 		const calls: string[] = []
 		const self: GuiderClientHandler = {
 			event: (client, event) => {
-				calls.push(`self:${event.Event}`)
+				calls.push(`self:${event.type}`)
 				client.removeHandler(self)
 			},
 		}
-		const twice: GuiderClientHandler = { event: (_client, event) => calls.push(`twice:${event.Event}`) }
+		const twice: GuiderClientHandler = { event: (_client, event) => calls.push(`twice:${event.type}`) }
 		harness.client.addHandler(self)
 		harness.client.addHandler(twice)
 		harness.client.addHandler(twice)
@@ -1000,7 +1017,7 @@ describe('handlers', () => {
 		harness.client.removeHandler(twice)
 		harness.client.setDeclinationGuideMode('Auto')
 
-		expect(calls).toEqual(['self:GuideParamChange', 'twice:GuideParamChange', 'twice:ConfigurationChange', 'twice:GuideParamChange', 'twice:ConfigurationChange'])
+		expect(calls).toEqual(['self:settingChanged', 'twice:settingChanged', 'twice:settingChanged'])
 		expect(eventsOf(harness.events, 'GuideParamChange')).toHaveLength(3)
 	})
 
@@ -1547,7 +1564,7 @@ describe('mode transitions', () => {
 		connect(harness)
 		expect(harness.client.guide(false)).toBeTrue()
 		expect(harness.client.startGuidingAssistant()).toBeFalse()
-		expect(eventsOf(harness.events, 'GuidingAssistantStarted')).toHaveLength(0)
+		expect(nativeOf(harness.native, 'assistantStarted')).toHaveLength(0)
 	})
 
 	test('clearCalibration leaves an uncalibrated client and emits configuration changes', () => {
@@ -1604,6 +1621,16 @@ describe('event envelope', () => {
 		expect(event.Inst).toBe(1)
 		expect(typeof event.Timestamp).toBe('number')
 		expect(Number.isFinite(event.Timestamp)).toBeTrue()
+	})
+
+	test('a setting change is one native event carrying the local value', () => {
+		const before = Date.now()
+		harness.client.setDeclinationGuideMode('North')
+
+		const change = nativeOf(harness.native, 'settingChanged').at(-1)!
+		expect(change).toMatchObject({ setting: 'decGuideMode', value: 'north-only' })
+		expect(change.timestamp).toBeGreaterThanOrEqual(before)
+		expect(eventsOf(harness.events, 'GuideParamChange').at(-1)).toMatchObject({ Name: 'DecGuideMode', Value: 'North', Timestamp: change.timestamp / 1000 })
 	})
 })
 
@@ -2029,15 +2056,17 @@ describe.skipIf(isTimeConsumingTestSkipped())('frame processing robustness', () 
 	test('an event handler throw does not stop the exposure loop', async () => {
 		const cameraManager = new FakeCameraManager()
 		const guideOutputManager = new FakeGuideOutputManager()
-		const events: GuiderEvents[] = []
+		const events: PHD2Events[] = []
+		const native: GuidingEvent[] = []
 		const client = new GuiderClient(cameraManager as unknown as CameraManager, guideOutputManager as unknown as GuideOutputManager, fixtureStarTracker(), { decodeImage: fixtureImageDecoder })
 		client.addHandler({
 			event: (_client, event) => {
-				events.push(event)
+				native.push(event)
+				events.push(...phd2EventsOf(event))
 				throw new Error('handler boom')
 			},
 		})
-		const local: Harness = { client, cameraManager, guideOutputManager, events, camera: makeCamera(), guideOutput: makeGuideOutput(), mount: new MountSimulator(), frameCount: 0 }
+		const local: Harness = { client, cameraManager, guideOutputManager, events, native, camera: makeCamera(), guideOutput: makeGuideOutput(), mount: new MountSimulator(), frameCount: 0 }
 
 		connect(local)
 		expect(local.client.loop()).toBeTrue()
@@ -2165,7 +2194,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('frame processing robustness', () 
 		const local = makeHarness({
 			handler: {
 				event: (client, event) => {
-					if (event.Event === 'Alert' && event.Type === 'warning' && event.Msg.includes('timed out')) client.stopCapture()
+					if (event.type === 'alert' && event.severity === 'warning' && event.message.includes('timed out')) client.stopCapture()
 				},
 			},
 		})
@@ -2187,7 +2216,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('frame processing robustness', () 
 		const local = makeHarness({
 			handler: {
 				event: (client, event) => {
-					if (!restarted && event.Event === 'Alert' && event.Type === 'warning' && event.Msg.includes('timed out')) {
+					if (!restarted && event.type === 'alert' && event.severity === 'warning' && event.message.includes('timed out')) {
 						restarted = true
 						client.stopCapture()
 						client.loop()
@@ -2213,7 +2242,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('frame processing robustness', () 
 		const local = makeHarness({
 			handler: {
 				event: (client, event) => {
-					if (event.Event === 'Alert' && event.Type === 'warning' && event.Msg.includes('timed out')) client.disconnect()
+					if (event.type === 'alert' && event.severity === 'warning' && event.message.includes('timed out')) client.disconnect()
 				},
 			},
 		})
@@ -3308,7 +3337,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 			{
 				handler: {
 					event: (_client, event) => {
-						if (event.Event === 'CalibrationDataFlipped') tracker.onCalibrationChanged()
+						if (event.type === 'calibrationFlipped') tracker.onCalibrationChanged()
 					},
 				},
 			},
@@ -3676,7 +3705,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		expect(harness.guideOutputManager.pulses.slice(before).filter((pulse) => pulse.direction === 'WEST' || pulse.direction === 'EAST')).toBeEmpty()
 
 		expect(harness.client.startGuidingAssistant({ backlashPulse: ceiling + 1 })).toBeFalse()
-		expect(eventsOf(harness.events, 'GuidingAssistantStarted')).toBeEmpty()
+		expect(nativeOf(harness.native, 'assistantStarted')).toBeEmpty()
 		expect(harness.client.startGuidingAssistant({ measureBacklash: true, backlashPulse: 300 })).toBeTrue()
 		await feedFrame(harness)
 		expect(harness.client.stopGuidingAssistant()?.status).toBe('backlash')
@@ -3732,16 +3761,16 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		await establishLockReference(harness)
 
 		expect(harness.client.startGuidingAssistant({ measureBacklash: false })).toBeTrue()
-		expect(eventsOf(harness.events, 'GuidingAssistantStarted').at(-1)!.Result.exposure).toBe(1)
+		expect(nativeOf(harness.native, 'assistantStarted').at(-1)!.result.exposure).toBe(1)
 		harness.client.stopGuidingAssistant()
 
 		expect(harness.client.setExposure(2500)).toBeTrue()
 		expect(harness.client.startGuidingAssistant({ measureBacklash: false })).toBeTrue()
-		expect(eventsOf(harness.events, 'GuidingAssistantStarted').at(-1)!.Result.exposure).toBe(2.5)
+		expect(nativeOf(harness.native, 'assistantStarted').at(-1)!.result.exposure).toBe(2.5)
 		harness.client.stopGuidingAssistant()
 
 		expect(harness.client.startGuidingAssistant({ exposure: 3, measureBacklash: false })).toBeTrue()
-		expect(eventsOf(harness.events, 'GuidingAssistantStarted').at(-1)!.Result.exposure).toBe(3)
+		expect(nativeOf(harness.native, 'assistantStarted').at(-1)!.result.exposure).toBe(3)
 		harness.client.stopGuidingAssistant()
 	})
 
@@ -5497,7 +5526,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 
 		const exposuresBefore = harness.cameraManager.startExposureCalls.length
 		const pulsesBefore = harness.guideOutputManager.pulses.length
-		const timedOut = (events: readonly GuiderEvents[]) => eventsOf(events, 'Alert').filter((alert) => alert.Type === 'warning' && alert.Msg.includes('timed out'))
+		const timedOut = (events: readonly PHD2Events[]) => eventsOf(events, 'Alert').filter((alert) => alert.Type === 'warning' && alert.Msg.includes('timed out'))
 		const timeoutBefore = timedOut(harness.events).length
 
 		for (let i = 0; i < 200 && timedOut(harness.events).length === timeoutBefore; i++) {
@@ -5594,6 +5623,32 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		return { errors, travel } as const
 	}
 
+	test('the native stream reports state changes, the solved calibration and guide steps in pixels', async () => {
+		const harness = await calibrateAndGuide()
+		await establishLockReference(harness)
+
+		expect(nativeOf(harness.native, 'connected')).toEqual([expect.objectContaining({ state: 'stopped' })])
+		const states = nativeOf(harness.native, 'stateChanged').map(({ previous, state }) => `${previous}>${state}`)
+		expect(states).toContain('stopped>looping')
+		expect(states).toContain('calibrating>guiding')
+		expect(harness.client.state).toBe('guiding')
+
+		const completed = nativeOf(harness.native, 'calibrationCompleted')
+		expect(completed).toHaveLength(1)
+		expect(completed[0].guideOutput).toBe(harness.guideOutput.name)
+		const { ra, dec } = completed[0].calibration
+		expect(ra.ratePxPerMs).toBeGreaterThan(0)
+
+		// Axis errors leave the controller in pulse-equivalent milliseconds and are reported in pixels.
+		const step = nativeOf(harness.native, 'guideStep').at(-1)!
+		expect(step.raDistance).toBeCloseTo((step.diagnostics.axisErrorRA ?? 0) * ra.ratePxPerMs, 9)
+		expect(step.decDistance).toBeCloseTo((step.diagnostics.axisErrorDEC ?? 0) * dec.ratePxPerMs, 9)
+		expect(step.ra.duration).toBe(Math.round(step.ra.requested))
+		expect(step.dec.duration).toBe(Math.round(step.dec.requested))
+
+		const phd2 = eventsOf(harness.events, 'GuideStep').at(-1)!
+		expect(phd2).toMatchObject({ Frame: step.frameId, RADistanceRaw: step.raDistance, DECDistanceRaw: step.decDistance, RADuration: step.ra.duration, DECDuration: step.dec.duration })
+	})
 	test('SolarSystemTracker calibrates and guides a drifting Lunar surface without chasing seeing', async () => {
 		// Each correction tick aggregates the three frames delivered within 375 ms with a robust mean.
 		const { errors, travel } = await lunarClosedLoop({ correctionIntervalMs: 375, correctionSampleCapacity: 32, correctionAggregation: 'robust' })

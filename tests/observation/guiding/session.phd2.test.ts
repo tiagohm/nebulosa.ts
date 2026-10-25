@@ -6,6 +6,7 @@ import { OperationCoordinator, successfulOperationResult } from '../../../src/de
 import { ResourceArbiter } from '../../../src/devices/orchestration/resource'
 import { arcsec } from '../../../src/math/units/angle'
 import type { DitherPhase, DitherRequest } from '../../../src/observation/guiding/ditherer'
+import type { GuidingEvent } from '../../../src/observation/guiding/events'
 import { PHD2Client } from '../../../src/observation/guiding/phd2/client'
 import type { PHD2Settle } from '../../../src/observation/guiding/phd2/types'
 import type { GuidingSettle } from '../../../src/observation/guiding/session'
@@ -58,7 +59,7 @@ function reserve(session: PHD2GuidingSession) {
 
 // Reports the end of the settle of the guider, as its frames would.
 function settleDone(rig: PHD2Rig, status = 0) {
-	rig.guider.emitEvent('SettleDone', { Status: status, TotalFrames: 1, DroppedFrames: 0 })
+	rig.guider.emitEvent('settleDone', { succeeded: status === 0, totalFrames: 1, droppedFrames: 0 })
 }
 
 // Number of executed requests of `method`.
@@ -98,8 +99,8 @@ describe('49.11 PHD2 guiding session', () => {
 
 		// The guider reports the settle while it executes the command, before the server replies.
 		const settleOnStart = {
-			event: (_: unknown, event: { readonly Event: string }) => {
-				if (event.Event === 'StartCalibration') settleDone(rig)
+			event: (_: unknown, event: GuidingEvent) => {
+				if (event.type === 'calibrationStarted') settleDone(rig)
 			},
 		}
 		rig.guider.addHandler(settleOnStart)
@@ -213,8 +214,8 @@ describe('49.10 dither through PHD2', () => {
 		// The guider has no calibration to dither with, so a guiding one is stood in for: it accepts the dither, reports
 		// the offset and begins the settle, as GuiderClient.dither does.
 		const dither = spyOn(rig.guider, 'dither').mockImplementation((_amount: number, _raOnly?: boolean, _settle?: Partial<PHD2Settle>) => {
-			rig.guider.emitEvent('GuidingDithered', { dx: 1, dy: 2 })
-			rig.guider.emitEvent('SettleBegin')
+			rig.guider.emitEvent('dithered', { dx: 1, dy: 2 })
+			rig.guider.emitEvent('settleStarted')
 			return true
 		})
 		cleanups.push(() => dither.mockRestore())
