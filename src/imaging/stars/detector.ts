@@ -73,8 +73,8 @@ interface ApertureMeasurement {
 	readonly radius: number
 	// Integrated positive signal above the sky, in sample units.
 	readonly flux: number
-	// Background-limited signal-to-noise ratio, flux / (noise * sqrt(pixels)): dimensionless, so the same in any
-	// sample scale.
+	// Background-limited signal-to-noise ratio, netFlux / (noise * sqrt(pixels)): dimensionless, so the same in any
+	// sample scale, and centred on 0 for a sky aperture.
 	readonly snr: number
 	// Curve-of-growth half-flux diameter, in pixels; 0 when it cannot be found.
 	readonly hfd: number
@@ -717,9 +717,10 @@ function measureAperture(raw: Image['raw'], width: number, height: number, strid
 
 	if (flux <= 0 || aperturePixels <= 0) return undefined
 
-	// The PHD2 background-limited SNR. The shot noise of the star needs the electrons per sample unit, which a
-	// normalized image does not carry; adding the flux to the variance mixed units and kept every SNR near sqrt(flux).
-	const snr = flux / Math.max(noise * Math.sqrt(aperturePixels), Number.EPSILON)
+	// The background-limited SNR, on the signed sum of the aperture: the positive-only flux of a sky aperture is about
+	// 0.4 N noise against an uncertainty of sqrt(N) noise, so noise peaks would read several sigma. The shot noise of the
+	// star needs the electrons per sample unit, which a normalized image does not carry.
+	const snr = netFlux / Math.max(noise * Math.sqrt(aperturePixels), Number.EPSILON)
 	const hfd = halfFluxDiameter(bins, binCount, flux)
 	// Gaussian-equivalent FWHM from the second radial moment; this avoids fitting a noisy radial profile.
 	const fwhm = radialMomentSq > 0 ? 2 * Math.sqrt((Math.LN2 * radialMomentSq) / flux) : 0
