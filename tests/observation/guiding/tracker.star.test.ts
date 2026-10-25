@@ -369,6 +369,30 @@ test('keeps the raw primary for telemetry when no search region is active', () =
 	expect(result.rejectedReasons.saturated_peak).toBe(1)
 })
 
+test('selects the best star of the whole frame, not only of the search box around the lock', () => {
+	const tracker = fixtureStarTracker()
+	// A manual lock on the fainter star: the acquisition target stays the star of its search box. Both stay
+	// below saturation, which would reject the brighter one.
+	const result = tracker.track(
+		{
+			image: imageWithStars([
+				[180, 180, 5],
+				[500, 400, 8],
+			]),
+			width: WIDTH,
+			height: HEIGHT,
+			timestamp: 0,
+			frameId: 1,
+		},
+		{ phase: 'looping', searchPosition: [180, 180], searchRegion: 64, allowAcquisition: true, preserveIdentity: false },
+	)
+
+	expect(result.selectionPrimary?.x).toBeCloseTo(180, 0)
+	const selected = tracker.select(result)!
+	expect(selected[0]).toBeCloseTo(500, 0)
+	expect(selected[1]).toBeCloseTo(400, 0)
+})
+
 test('uses initialPosition to seed unbounded acquisition', () => {
 	const tracker = fixtureStarTracker()
 	const result = tracker.track(

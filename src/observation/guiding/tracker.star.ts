@@ -547,6 +547,10 @@ export interface StarTrackerResult extends GuideTrackerResult {
 	readonly usedMode?: GuidingMode
 	// Number of associations used by the translation estimate.
 	readonly matches: number
+	// Width of the tracked frame, in pixels, whose borders the whole-frame selection of select() excludes.
+	readonly frameWidth: number
+	// Height of the tracked frame, in pixels.
+	readonly frameHeight: number
 }
 
 // Returns the built-in stellar result when a generic result carries stellar frame arrays.
@@ -579,17 +583,22 @@ export class StarTracker implements GuideTracker {
 		this.config = { ...DEFAULT_STAR_TRACKER_CONFIG, ...config, filter, selection }
 	}
 
-	// Selects the quality-approved acquisition target, or the detection nearest position, from a
-	// previously produced result. Positions use full-frame pixels, X right/Y down from the top-left.
-	// Returns a fresh tuple or undefined; equal distances retain detector order. Does not detect or
-	// mutate tracking state, and explicit nearest selection preserves the unfiltered detection policy.
+	// Selects the best guide star of the whole frame by the selection policy, or the detection nearest
+	// position, from a previously produced result, on the frame size that result carries. Positions use
+	// full-frame pixels, X right/Y down from the top-left. Returns a fresh tuple or undefined; equal
+	// distances retain detector order. Does not detect or mutate tracking state, and explicit nearest
+	// selection preserves the unfiltered detection policy. The best star is chosen among every detection,
+	// never only those of the search box around a current lock, whose quality-approved acquisition target
+	// `selectionPrimary` is: an automatic selection after a manual one must be free to move to a better
+	// star elsewhere.
 	select(result: GuideTrackerResult, position?: readonly [number, number]): readonly [number, number] | undefined {
 		const tracking = starTrackingOf(result)
 		if (tracking === undefined) return undefined
 
-		let selected: GuideStar | undefined = tracking.selectionPrimary
-		if (position !== undefined) {
-			selected = undefined
+		let selected: GuideStar | undefined
+		if (position === undefined) {
+			selected = selectGuideStar(tracking.detections, tracking.frameWidth, tracking.frameHeight, undefined, { ...this.config.selection, filter: { ...this.config.filter, ...this.config.selection.filter } }).primary
+		} else {
 			let distanceSq = Number.POSITIVE_INFINITY
 
 			for (const star of tracking.detections) {
@@ -782,7 +791,8 @@ export class StarTracker implements GuideTracker {
 	}
 
 	// Stores a fresh result while keeping no per-frame result history.
-	#publish(result: Omit<StarTrackerResult, 'targetOffset'>): StarTrackerResult {
+	#publish(fields: Omit<StarTrackerResult, 'targetOffset' | 'frameWidth' | 'frameHeight'>): StarTrackerResult {
+		const result = { ...fields, frameWidth: this.#width, frameHeight: this.#height }
 		this.#lastResult = result
 		return result
 	}
