@@ -5,10 +5,11 @@ import type { CameraManager } from '../../../src/devices/indi/manager/camera'
 import { type OperationScope, successfulOperationResult } from '../../../src/devices/orchestration/operation'
 import { type ResourceReservation, resourceKey } from '../../../src/devices/orchestration/resource'
 import { arcsec, deg } from '../../../src/math/units/angle'
-import { type GuidePulseAdmission, GuiderClient, type GuiderClientGuiderOptions } from '../../../src/observation/guiding/client'
+import { type GuidePulseAdmission, GuiderClient, type GuiderClientGuiderOptions, type GuiderClientHandler } from '../../../src/observation/guiding/client'
 import type { DitherPhase, DitherRequest } from '../../../src/observation/guiding/ditherer'
 import type { GuidingSettle } from '../../../src/observation/guiding/session'
-import { guideOutputLifecycleKey, LocalGuidingSession } from '../../../src/observation/guiding/session.client'
+import { LocalGuidingSession } from '../../../src/observation/guiding/session.client'
+import { guideOutputLifecycleKey } from '../../../src/observation/guiding/session.interactive'
 import { waitUntil } from '../../util'
 import { fixtureImageDecoder, fixtureStarTracker } from '../../util/guiding'
 import { connectSimulatorRig, createSimulatorRig, type DeviceLogEntry, expectNoRigLeaks, ManualClock, recordDevices, resetSimulatorRig } from '../../util/rig'
@@ -110,8 +111,13 @@ function settleDone(client: GuiderClient, status = 0) {
 
 // Starts guiding and reports the settle once the client guides.
 async function startGuiding(setup: Setup, reservation: OperationScope, task: OperationScope = rig.coordinator, status = 0) {
+	// The settle is reported only after the session asked the client to guide, which begins a settle.
+	let asked = false
+	const handler: GuiderClientHandler = { event: (_, event) => void (asked ||= event.type === 'settleStarted') }
+	setup.client.addHandler(handler)
 	const pending = setup.session.start(task, reservation, { recalibrate: false, settle: SETTLE, clock: setup.clock })
-	await waitUntil(() => setup.client.getAppState() !== 'Stopped', 2000, 1)
+	await waitUntil(() => asked, 2000, 1)
+	setup.client.removeHandler(handler)
 	settleDone(setup.client, status)
 	return await pending
 }
@@ -232,17 +238,14 @@ describe('49.11 start, settle and stop', () => {
 		expect(await pending).toMatchObject({ ok: false, reason: 'timeout' })
 	})
 
-	test('17 and 18: the root guiding holds the guide camera and the lifecycle resource of the guide output, never the mount', async () => {
+	test('17 and 18: the root guiding holds the guide camera, its run holds the guide output while guiding, and a pause frees the mount', async () => {
 		const context = setup()
 		const { session } = context
 		const { mount, guideOutput } = rig.devices()
 		const lifecycle = guideOutputLifecycleKey(guideOutput)
 		const { reserve: reserved, hold } = session.resources()
 
-		expect(hold).toEqual([
-			{ key: resourceKey(GUIDE_CAMERA), device: GUIDE_CAMERA },
-			{ key: lifecycle, device: guideOutput },
-		])
+		expect(hold).toEqual([{ key: resourceKey(GUIDE_CAMERA), device: GUIDE_CAMERA }])
 		expect(reserved.map((request) => request.key)).toEqual([resourceKey(GUIDE_CAMERA), resourceKey(guideOutput), lifecycle])
 
 		const reservation = reserve(session)
@@ -250,12 +253,19 @@ describe('49.11 start, settle and stop', () => {
 		expect(await startGuiding(context, reservation)).toEqual(successfulOperationResult(undefined))
 
 		const root = session.operationId()!
-		expect(rig.arbiter.ownersOfDevice(resourceKey(guideOutput)).map((owner) => owner.id)).toContain(root)
-		expect(rig.arbiter.ownersOf(resourceKey(mount))).toEqual([])
+		const run = session.interactive.snapshot().runId!
+		expect(run).toBeDefined()
 		expect(rig.arbiter.ownersOf(resourceKey(GUIDE_CAMERA)).map((owner) => owner.id)).toEqual([root])
+		// The run leases the mount for the tree of the root, which the arbiter reports as the owner.
+		expect(rig.arbiter.ownersOf(resourceKey(mount)).map((owner) => owner.id)).toEqual([root])
+		expect(rig.coordinator.get(run)).toBeDefined()
+		expect(rig.arbiter.ownersOfDevice(resourceKey(guideOutput)).map((owner) => owner.id)).toContain(root)
 
-		// After a pause, a slew of the session acquires the mount without conflict.
+		// After a pause, the run is over and a slew of the session acquires the mount without conflict.
 		expect((await session.pause(reservation)).ok).toBeTrue()
+		expect(session.interactive.snapshot().runId).toBeUndefined()
+		expect(rig.arbiter.ownersOf(resourceKey(mount))).toEqual([])
+		expect(session.operationId()).toBe(root)
 		const slewed = await rig.commanders.mount.goTo(reservation, mount, { type: 'JNOW', JNOW: { x: mount.equatorialCoordinate.rightAscension, y: mount.equatorialCoordinate.declination + deg(0.2) } })
 		expect(slewed.ok).toBeTrue()
 
@@ -276,7 +286,7 @@ describe('49.11 start, settle and stop', () => {
 
 		// 24: cancelling the task that started guiding cancels only the wait of the settle.
 		const task = rig.coordinator.start('task', [], (scope) => session.start(scope, reservation, { recalibrate: false, settle: SETTLE, clock }))
-		await waitUntil(() => client.getAppState() !== 'Stopped', 2000, 1)
+		await waitUntil(() => client.getSettling(), 2000, 1)
 		await task.cancel('aborted')
 		expect(await task.result).toMatchObject({ ok: false, reason: 'aborted' })
 		const root = session.operationId()!
@@ -386,9 +396,11 @@ describe('49.11 pause and resume', () => {
 		expect(window.busyAckDeadline - dispatched).toBeGreaterThanOrEqual(800 + GUIDE_PULSE_ACK_MARGIN - 1)
 		expect(window.busyAckDeadline - dispatched).toBeLessThan(800 + GUIDE_PULSE_ACK_MARGIN + 50)
 
+		// The pulse went through the commander, which keeps its evidence until its end is observed.
+		expect(rig.commanders.guideOutput.dispatchedPulseWindow(guideOutput)).toBeDefined()
+
 		expect((await session.pause(reservation)).ok).toBeTrue()
-		const resolved = performance.now()
-		expect(resolved).toBeGreaterThanOrEqual(window.busyAckDeadline)
+		expect(rig.commanders.guideOutput.dispatchedPulseWindow(guideOutput)).toBeUndefined()
 		expect(guideOutput.pulsing).toBeFalse()
 
 		// 28: nothing pulses once paused.
