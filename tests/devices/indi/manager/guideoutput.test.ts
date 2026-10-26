@@ -1,8 +1,8 @@
 import { expect, test } from 'bun:test'
-import { CLIENT, DEFAULT_MOUNT } from '../../../../src/devices/indi/device'
+import { CLIENT, type Client, DEFAULT_MOUNT } from '../../../../src/devices/indi/device'
 import { GuideOutputManager } from '../../../../src/devices/indi/manager/guideoutput'
 import { MountManager } from '../../../../src/devices/indi/manager/mount'
-import type { DefNumberVector } from '../../../../src/devices/indi/types'
+import type { DefNumberVector, SetSwitchVector } from '../../../../src/devices/indi/types'
 import { client, createRecordingClient, defNumber } from './util'
 
 test('clears the opposite timed-guide element for each pulse', () => {
@@ -193,4 +193,45 @@ test('reports every timed-guide definition and update with its state, even when 
 	manager.delProperty(client, { device: mount.name, name: 'TELESCOPE_TIMED_GUIDE_NS' })
 	expect(notifications.filter(([, property]) => property === 'pulsingNS').every(([, , state]) => state === undefined)).toBeTrue()
 	expect(notifications.some(([, property]) => property === 'pulsingNS')).toBeTrue()
+})
+
+test('reports the connection of the guide output whichever manager applies the switch first', () => {
+	const asked: string[] = []
+	const owner: Client = { ...client, getProperties: (command) => asked.push(command?.device ?? '') }
+	const mountManager = new MountManager()
+	const mount = structuredClone(DEFAULT_MOUNT)
+	mount.id = Bun.randomUUIDv7()
+	mount.name = 'Mount'
+	Object.defineProperty(mount, CLIENT, { value: owner })
+	mountManager.add(mount)
+
+	const manager = new GuideOutputManager(mountManager)
+	const notifications: [string, string][] = []
+	manager.addHandler({ added: () => {}, removed: () => {}, updated: (device, property) => property === 'connected' && notifications.push([device === mount ? 'mount' : 'view', property]) })
+	mountManager.addHandler({ added: () => {}, removed: () => {}, updated: (device, property) => property === 'connected' && notifications.push(['parent', property]) })
+	const connection = (connected: boolean): SetSwitchVector => ({ device: mount.name, name: 'CONNECTION', state: 'Ok', elements: { CONNECT: { name: 'CONNECT', value: connected }, DISCONNECT: { name: 'DISCONNECT', value: !connected } } })
+
+	// INDI defines the timed-guide vectors of a connected driver before it replays CONNECTION for the new device.
+	manager.numberVector(owner, { device: mount.name, name: 'TELESCOPE_TIMED_GUIDE_NS', permission: 'rw', state: 'Ok', elements: {} }, 'defNumberVector')
+	const guideOutput = manager.get(owner, mount.name)!
+	expect(guideOutput.connected).toBeFalse()
+
+	mountManager.switchVector(owner, connection(true), 'defSwitchVector')
+	manager.switchVector(owner, connection(true), 'defSwitchVector')
+	expect(notifications).toEqual([
+		['parent', 'connected'],
+		['view', 'connected'],
+	])
+	expect([mount.connected, guideOutput.connected]).toEqual([true, true])
+	// Only the manager of the physical device asks for its properties.
+	expect(asked).toEqual(['Mount'])
+
+	notifications.length = 0
+	manager.switchVector(owner, connection(false), 'setSwitchVector')
+	mountManager.switchVector(owner, connection(false), 'setSwitchVector')
+	expect(notifications).toEqual([
+		['view', 'connected'],
+		['parent', 'connected'],
+	])
+	expect([mount.connected, guideOutput.connected]).toEqual([false, false])
 })

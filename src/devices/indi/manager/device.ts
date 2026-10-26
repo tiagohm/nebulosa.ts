@@ -1,7 +1,7 @@
 import type { PickByValue, Writable } from '../../../core/types'
 import type { IndiClientHandler } from '../client'
 // oxfmt-ignore
-import { CLIENT, type Client, DEFAULT_CAMERA, DEFAULT_COVER, DEFAULT_DOME, DEFAULT_FLAT_PANEL, DEFAULT_FOCUSER, DEFAULT_MOUNT, DEFAULT_POWER, DEFAULT_ROTATOR, DEFAULT_WEATHER, DEFAULT_WHEEL, type Device, DeviceInterfaceType, type DeviceType, findDeviceTypes, isInterfaceType, type MinMaxValueProperty, type Parkable } from '../device'
+import { CLIENT, type Client, DEFAULT_CAMERA, DEFAULT_COVER, DEFAULT_DOME, DEFAULT_FLAT_PANEL, DEFAULT_FOCUSER, DEFAULT_MOUNT, DEFAULT_POWER, DEFAULT_ROTATOR, DEFAULT_WEATHER, DEFAULT_WHEEL, type Device, DeviceInterfaceType, type DeviceType, findDeviceTypes, isInterfaceType, isSubDevice, type MinMaxValueProperty, type Parkable } from '../device'
 import { IndiPropertyRegistry, makeHardwareId } from '../properties'
 import type { BlobEncoding, DefNumber, DefSwitchVector, DefText, DefTextVector, DefVector, DelProperty, OneNumber, PropertyState, SetSwitchVector, SetTextVector, SetVector, VectorType } from '../types'
 
@@ -53,6 +53,10 @@ export abstract class DeviceManager<D extends Device> implements IndiClientHandl
 	readonly #ownsProperties: boolean
 	// Track writable properties for each device.
 	readonly #writableProperties = new WeakMap<Device, Set<string>>()
+	// Last `connected` value this manager reported for each device, seeded when the device is added. A
+	// sub-interface proxy shares the flag with its parent, so whichever manager applies the CONNECTION switch
+	// second finds the flag already set and must judge the change against what it reported instead.
+	readonly #reportedConnection = new WeakMap<Device, boolean>()
 
 	// Creates the manager over a property registry shared with the other managers of the same clients,
 	// which the caller must register as a handler of those clients before the managers, so a manager
@@ -224,12 +228,16 @@ export abstract class DeviceManager<D extends Device> implements IndiClientHandl
 		}
 	}
 
-	// Applies the CONNECTION switch to the device's `connected` flag, asking for properties on connect.
+	// Applies the CONNECTION switch to the device's `connected` flag and returns whether to report it: when it
+	// differs from the value this manager last reported for the device, or on Alert. Asks for properties on
+	// connect, except for a sub-interface proxy, whose parent's manager asks for the same physical device.
 	protected handleConnection(device: D, message: DefSwitchVector | SetSwitchVector, client = device[CLIENT]!) {
 		const connected = message.elements.CONNECT?.value === true
+		handleSwitchValue<Device>(device, 'connected', connected)
 
-		if (handleSwitchValue<Device>(device, 'connected', connected, message.state)) {
-			if (connected) this.ask(device)
+		if (this.#reportedConnection.get(device) !== connected || message.state === 'Alert') {
+			this.#reportedConnection.set(device, connected)
+			if (connected && !isSubDevice(device)) this.ask(device)
 			return true
 		}
 
@@ -272,6 +280,7 @@ export abstract class DeviceManager<D extends Device> implements IndiClientHandl
 		if (!this.has(client, device.id)) {
 			this.#devices.set(device.id, device)
 			this.#clients.set(client.id, client)
+			this.#reportedConnection.set(device, device.connected)
 			this.added(device)
 			return true
 		} else {
