@@ -1,15 +1,15 @@
 import { describe, expect, test } from 'bun:test'
 import { DEG2RAD } from '../../../../src/core/constants'
 import { IndiClientHandlerSet } from '../../../../src/devices/indi/client'
-import type { DeviceProperty } from '../../../../src/devices/indi/device'
 import { WeatherManager } from '../../../../src/devices/indi/manager/weather'
+import type { IndiProperty } from '../../../../src/devices/indi/properties'
 import { ClientSimulator } from '../../../../src/devices/indi/simulator/client'
 import type { SimulatorProperty } from '../../../../src/devices/indi/simulator/types'
 import { WeatherSimulator } from '../../../../src/devices/indi/simulator/weather'
 import { makeNumberVector } from '../../../../src/devices/indi/types'
 import { waitUntil } from '../../../util'
 
-function permissionOf(property: DeviceProperty) {
+function permissionOf(property: IndiProperty) {
 	return property.type === 'LIGHT' ? undefined : property.permission
 }
 

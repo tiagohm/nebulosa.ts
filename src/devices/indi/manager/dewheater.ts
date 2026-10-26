@@ -1,4 +1,5 @@
 import { CLIENT, type Client, DEFAULT_DEW_HEATER, type DewHeater, type SubDevice } from '../device'
+import type { IndiPropertyRegistry } from '../properties'
 import type { DefNumberVector, DefSwitchVector, DefVector, DelProperty, SetNumberVector, SetVector } from '../types'
 import { DeviceManager, type DeviceProvider, handleMinMaxValue, handleSwitchValue, makeDeviceId, proxyDevice, resetDeviceValue } from './device'
 
@@ -6,8 +7,13 @@ import { DeviceManager, type DeviceProvider, handleMinMaxValue, handleSwitchValu
 export class DewHeaterManager extends DeviceManager<DewHeater> {
 	readonly #pwm = new WeakMap<DewHeater, readonly [string, string]>()
 
-	constructor(readonly provider: DeviceProvider<DewHeater>) {
-		super()
+	// Creates the manager over the provider of the parent devices; properties is the registry shared with
+	// the other managers (see DeviceManager).
+	constructor(
+		readonly provider: DeviceProvider<DewHeater>,
+		properties?: IndiPropertyRegistry,
+	) {
+		super(properties)
 	}
 
 	dutyCycle(heater: DewHeater, value: number, client = heater[CLIENT]!) {

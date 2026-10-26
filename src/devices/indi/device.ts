@@ -4,7 +4,7 @@ import { PIOVERTWO, SIDEREAL_DAYSEC, TAU } from '../../core/constants'
 import type { CfaPattern } from '../../imaging/model/types'
 import type { Point } from '../../math/numerical/geometry'
 import { type Angle, normalizeAngle, toHour } from '../../math/units/angle'
-import type { DefBlobVector, DefLightVector, DefNumber, DefNumberVector, DefSwitchVector, DefTextVector, EnableBlob, GetProperties, NewNumberVector, NewSwitchVector, NewTextVector, PropertyState } from './types'
+import type { DefNumber, EnableBlob, GetProperties, NewNumberVector, NewSwitchVector, NewTextVector, PropertyState } from './types'
 
 // Device model shared across all client backends (INDI, Alpaca, simulator, Firmata): the device-type
 // union, per-device-type interfaces (camera, mount, focuser, etc.) describing their capabilities and
@@ -13,15 +13,6 @@ import type { DefBlobVector, DefLightVector, DefNumber, DefNumberVector, DefSwit
 
 // Logical device category.
 export type DeviceType = 'camera' | 'mount' | 'wheel' | 'focuser' | 'rotator' | 'gps' | 'dome' | 'guideOutput' | 'flatPanel' | 'cover' | 'power' | 'thermometer' | 'dewHeater' | 'safetyMonitor' | 'weather'
-
-// A defined property vector tagged with its concrete type.
-export type DeviceProperty = (DefTextVector & { type: 'TEXT' }) | (DefNumberVector & { type: 'NUMBER' }) | (DefSwitchVector & { type: 'SWITCH' }) | (DefLightVector & { type: 'LIGHT' }) | (DefBlobVector & { type: 'BLOB' })
-
-// Discriminant tag of a DeviceProperty.
-export type DevicePropertyType = DeviceProperty['type']
-
-// A device's properties keyed by property name.
-export type DeviceProperties = Record<string, DeviceProperty>
 
 // Exposure frame intent.
 export type FrameType = 'LIGHT' | 'DARK' | 'FLAT' | 'BIAS'

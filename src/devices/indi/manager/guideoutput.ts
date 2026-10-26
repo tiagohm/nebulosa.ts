@@ -1,12 +1,18 @@
 import { CLIENT, type Client, DEFAULT_GUIDE_OUTPUT, type GuideDirection, type GuideOutput, type SubDevice } from '../device'
+import type { IndiPropertyRegistry } from '../properties'
 import type { DefNumberVector, DefVector, DelProperty, SetNumberVector, SetVector } from '../types'
 import { DeviceManager, type DeviceProvider, handleNumberValue, handleSwitchValue, makeDeviceId, proxyDevice, resetDeviceValue } from './device'
 
 // Manager for stand-alone or embedded guide outputs. Command methods send pulse-guide (durations in
 // milliseconds) and guide-rate commands; property handling reflects pulse-guiding capability/state.
 export class GuideOutputManager extends DeviceManager<GuideOutput> {
-	constructor(readonly provider: DeviceProvider<GuideOutput>) {
-		super()
+	// Creates the manager over the provider of the parent devices; properties is the registry shared with
+	// the other managers (see DeviceManager).
+	constructor(
+		readonly provider: DeviceProvider<GuideOutput>,
+		properties?: IndiPropertyRegistry,
+	) {
+		super(properties)
 	}
 
 	// Issues a timed pulse-guide in one direction; duration is milliseconds. No-op without the capability.

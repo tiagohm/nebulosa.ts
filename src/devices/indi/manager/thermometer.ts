@@ -1,11 +1,17 @@
 import { type Client, DEFAULT_THERMOMETER, type SubDevice, type Thermometer } from '../device'
+import type { IndiPropertyRegistry } from '../properties'
 import type { DefNumberVector, DefVector, DelProperty, SetNumberVector, SetVector } from '../types'
 import { DeviceManager, type DeviceProvider, handleNumberValue, handleSwitchValue, makeDeviceId, proxyDevice, resetDeviceValue } from './device'
 
 // Manager for temperature sensors; reflects the device temperature (degrees Celsius) from its properties.
 export class ThermometerManager extends DeviceManager<Thermometer> {
-	constructor(readonly provider: DeviceProvider<Thermometer>) {
-		super()
+	// Creates the manager over the provider of the parent devices; properties is the registry shared with
+	// the other managers (see DeviceManager).
+	constructor(
+		readonly provider: DeviceProvider<Thermometer>,
+		properties?: IndiPropertyRegistry,
+	) {
+		super(properties)
 	}
 
 	#addProxy(client: Client, parent: Thermometer) {

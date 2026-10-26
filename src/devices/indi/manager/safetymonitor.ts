@@ -1,4 +1,5 @@
 import { CLIENT, type Client, DEFAULT_SAFETY_MONITOR, type Device, DeviceInterfaceType, isInterfaceType, isSafetyMonitor, isSubDevice, type SafetyMonitor, type SubDevice } from '../device'
+import type { IndiPropertyRegistry } from '../properties'
 import type { DefLightVector, DefSwitchVector, DefTextVector, DelProperty, SetLightVector, SetSwitchVector, SetTextVector } from '../types'
 import { DeviceManager, type DeviceProvider, makeDevice, makeDeviceId, proxyDevice } from './device'
 
@@ -18,9 +19,13 @@ export class SafetyMonitorManager extends DeviceManager<SafetyMonitor> {
 	// Discovery state is isolated by client and released when that client closes.
 	readonly #pendingByClient = new WeakMap<Client, Map<string, PendingSafetyMonitor>>()
 
-	// Parent provider must cover the primary device managers and must not resolve this manager itself.
-	constructor(readonly provider: DeviceProvider<Device>) {
-		super()
+	// Parent provider must cover the primary device managers and must not resolve this manager itself. properties
+	// is the registry shared with the other managers (see DeviceManager).
+	constructor(
+		readonly provider: DeviceProvider<Device>,
+		properties?: IndiPropertyRegistry,
+	) {
+		super(properties)
 	}
 
 	// Returns the cached discovery state for one physical device, creating it when requested.

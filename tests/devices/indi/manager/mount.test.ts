@@ -719,7 +719,9 @@ describe('INDI alignment', () => {
 
 		const properties = manager.properties.get(mount)
 
-		expect(properties?.ALIGNMENT_SUBSYSTEM_MATH_PLUGINS).toBe(plugins as never)
+		// The registry keeps a copy, never the parsed message other handlers may mutate.
+		expect(properties?.ALIGNMENT_SUBSYSTEM_MATH_PLUGINS).not.toBe(plugins as never)
+		expect(properties?.ALIGNMENT_SUBSYSTEM_MATH_PLUGINS).toMatchObject({ type: 'SWITCH', name: plugins.name, rule: plugins.rule })
 		expect(properties?.ALIGNMENT_SUBSYSTEM_MATH_PLUGINS.elements['SVD Math Plugin'].value).toBeTrue()
 		expect(mount.alignment.plugin).toBe('SVD Math Plugin')
 	})

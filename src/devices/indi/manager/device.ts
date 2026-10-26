@@ -1,8 +1,9 @@
 import type { PickByValue, Writable } from '../../../core/types'
 import type { IndiClientHandler } from '../client'
 // oxfmt-ignore
-import { CLIENT, type Client, DEFAULT_CAMERA, DEFAULT_COVER, DEFAULT_DOME, DEFAULT_FLAT_PANEL, DEFAULT_FOCUSER, DEFAULT_MOUNT, DEFAULT_POWER, DEFAULT_ROTATOR, DEFAULT_WEATHER, DEFAULT_WHEEL, type Device, DeviceInterfaceType, type DeviceProperties, type DeviceProperty, type DeviceType, findDeviceTypes, isInterfaceType, type MinMaxValueProperty, type Parkable } from '../device'
-import type { BlobEncoding, DefNumber, DefSwitchVector, DefText, DefTextVector, DefVector, DelProperty, OneNumber, PropertyState, SetSwitchVector, SetTextVector, SetVector, ValueType } from '../types'
+import { CLIENT, type Client, DEFAULT_CAMERA, DEFAULT_COVER, DEFAULT_DOME, DEFAULT_FLAT_PANEL, DEFAULT_FOCUSER, DEFAULT_MOUNT, DEFAULT_POWER, DEFAULT_ROTATOR, DEFAULT_WEATHER, DEFAULT_WHEEL, type Device, DeviceInterfaceType, type DeviceType, findDeviceTypes, isInterfaceType, type MinMaxValueProperty, type Parkable } from '../device'
+import { IndiPropertyRegistry, makeHardwareId } from '../properties'
+import type { BlobEncoding, DefNumber, DefSwitchVector, DefText, DefTextVector, DefVector, DelProperty, OneNumber, PropertyState, SetSwitchVector, SetTextVector, SetVector, VectorType } from '../types'
 
 // Device managers that turn the raw INDI property stream into typed device state. A DeviceManager per
 // device type consumes def*/set* vectors as an IndiClientHandler, maintains the device objects, applies
@@ -18,13 +19,6 @@ export interface DeviceHandler<D extends Device> {
 	readonly removed: (device: D) => void
 	// Notified when an image/data BLOB arrives for the device.
 	readonly blobReceived?: (device: D, data: Buffer, encoding: BlobEncoding) => void
-}
-
-// Subscriber to raw INDI property add/update/remove events for a device type.
-export interface DevicePropertyHandler<D extends Device> {
-	readonly added: (device: D, property: DeviceProperty) => void
-	readonly updated: (device: D, property: DeviceProperty) => void
-	readonly removed: (device: D, property: DeviceProperty) => void
 }
 
 // Resolves a device by client and id (optionally constrained to a type).
@@ -46,156 +40,6 @@ const MODEL_DEVICES = {
 	[DeviceInterfaceType.WEATHER]: DEFAULT_WEATHER,
 } as const
 
-// Tracks the raw INDI property vectors per device and notifies property-level handlers on
-// define/update/delete. Backs each DeviceManager's `properties` view.
-export class DevicePropertyManager<D extends Device> implements IndiClientHandler, DevicePropertyHandler<D> {
-	readonly #properties = new Map<Device, DeviceProperties>()
-	readonly #handlers = new Set<DevicePropertyHandler<D>>()
-
-	constructor(readonly deviceProvider: DeviceProvider<D>) {}
-
-	// Number of devices currently holding properties.
-	get length() {
-		return this.#properties.size
-	}
-
-	// Registers/unregisters a property-event handler.
-	addHandler(handler: DevicePropertyHandler<D>) {
-		this.#handlers.add(handler)
-	}
-
-	removeHandler(handler: DevicePropertyHandler<D>) {
-		this.#handlers.delete(handler)
-	}
-
-	// Fan-out of property add/update/remove events to all registered handlers.
-	added(device: D, property: DeviceProperty) {
-		for (const e of this.#handlers) e.added(device, property)
-	}
-
-	updated(device: D, property: DeviceProperty) {
-		for (const e of this.#handlers) e.updated(device, property)
-	}
-
-	removed(device: D, property: DeviceProperty) {
-		for (const e of this.#handlers) e.removed(device, property)
-	}
-
-	// Returns the property map for a device, if any.
-	get(device: D) {
-		return this.#properties.get(device)
-	}
-
-	// Whether the device has any tracked properties.
-	has(device: D) {
-		return this.#properties.has(device) === true
-	}
-
-	// Applies a def*/set* vector: a def tags and stores the property (added); a set merges changed state
-	// and element values into the existing property (updated). BLOB vectors are skipped here. Returns
-	// whether anything changed.
-	vector(client: Client, message: DefVector | SetVector, tag: string) {
-		const device = this.deviceProvider.get(client, message.device)
-
-		if (device === undefined) return false
-
-		let properties = this.#properties.get(device)
-
-		if (properties === undefined) {
-			properties = Object.create(null) as DeviceProperties
-			this.#properties.set(device, properties)
-		}
-
-		if (tag[0] === 'd') {
-			const property = message as DeviceProperty
-			property.type = tag.includes('Switch') ? 'SWITCH' : tag.includes('Number') ? 'NUMBER' : tag.includes('Text') ? 'TEXT' : tag.includes('BLOB') ? 'BLOB' : 'LIGHT'
-			properties[message.name] = property
-			this.added(device, property)
-			return true
-		} else if (message === properties[message.name]) {
-			// Alpaca always send the same message (object)
-			this.updated(device, message as DeviceProperty)
-		} else {
-			const property = properties[message.name]
-
-			if (property === undefined) return false
-
-			let updated = false
-
-			// Skip BLOB type
-			if (property.type[0] !== 'B') {
-				if (message.state && message.state !== property.state) {
-					property.state = message.state
-					updated = true
-				}
-
-				const { elements } = message
-
-				for (const key in elements) {
-					const element = property.elements[key]
-
-					if (element) {
-						const value = elements[key].value
-
-						if (value !== element.value) {
-							element.value = value as ValueType
-							updated = true
-						}
-					}
-				}
-
-				if (updated) {
-					this.updated(device, property)
-				}
-			}
-
-			return updated
-		}
-
-		return false
-	}
-
-	// Removes one named property (or all of a device's properties when no name is given) and notifies.
-	delProperty(client: Client, message: DelProperty) {
-		const device = this.deviceProvider.get(client, message.device)
-
-		if (device === undefined) return false
-
-		const properties = this.get(device)
-
-		if (properties === undefined) return false
-
-		const { name } = message
-
-		if (name) {
-			const property = properties[name]
-
-			if (property) {
-				delete properties[name]
-				if (Object.keys(properties).length === 0) this.#properties.delete(device)
-				this.removed(device, property)
-				return true
-			}
-		} else {
-			// TODO: should notify for all properties being removed?
-			// for (const [_, property] of Object.entries(properties)) this.removed(device, property)
-			this.#properties.delete(device)
-			return true
-		}
-
-		return false
-	}
-
-	// Drops all properties belonging to a disconnected client.
-	close(client: Client, server: boolean) {
-		for (const device of this.#properties.keys()) {
-			if (device[CLIENT] === client) {
-				this.#properties.delete(device)
-			}
-		}
-	}
-}
-
 // Base class for per-type device managers. As an IndiClientHandler it ingests the property stream, owns
 // the device objects of its type, exposes them as a DeviceProvider, and re-emits typed lifecycle events
 // to DeviceHandlers. Subclasses implement the per-type vector handling that maps properties to fields.
@@ -203,10 +47,22 @@ export abstract class DeviceManager<D extends Device> implements IndiClientHandl
 	readonly #clients = new Map<string, Client>()
 	readonly #devices = new Map<string, D>()
 	readonly #handlers = new Set<DeviceHandler<D>>()
-	// Per-device raw property view.
-	readonly properties = new DevicePropertyManager(this)
+	// Raw property vectors of the physical devices behind the managed ones; see the constructor.
+	readonly properties: IndiPropertyRegistry
+	// Whether this manager feeds its own private registry rather than reading a shared one.
+	readonly #ownsProperties: boolean
 	// Track writable properties for each device.
 	readonly #writableProperties = new WeakMap<Device, Set<string>>()
+
+	// Creates the manager over a property registry shared with the other managers of the same clients,
+	// which the caller must register as a handler of those clients before the managers, so a manager
+	// handling one vector reads the others already merged. Without one, the manager keeps a private
+	// registry fed only with the vectors of the devices it manages, from its own vector, delProperty, and
+	// close callbacks.
+	constructor(properties?: IndiPropertyRegistry) {
+		this.properties = properties ?? new IndiPropertyRegistry()
+		this.#ownsProperties = properties === undefined
+	}
 
 	protected hasWritableProperty(device: Device, name: string) {
 		return this.#writableProperties.get(device)?.has(name) === true
@@ -351,23 +207,21 @@ export abstract class DeviceManager<D extends Device> implements IndiClientHandl
 		}
 	}
 
-	// Removes the device when an unnamed delProperty arrives (whole-device deletion); always forwards to
-	// the property manager.
+	// Removes the device when an unnamed delProperty arrives (whole-device deletion); forwards the deletion
+	// of a managed device to a private property registry.
 	delProperty(client: Client, message: DelProperty) {
-		this.properties.delProperty(client, message)
+		const device = this.get(client, message.device)
 
-		if (!message.name) {
-			const device = this.get(client, message.device)
-
-			if (device !== undefined) {
-				this.remove(device)
-			}
-		}
+		if (device !== undefined && this.#ownsProperties) this.properties.delProperty(client, message)
+		if (device !== undefined && !message.name) this.remove(device)
 	}
 
-	// Forwards every vector to the property manager; subclasses override to additionally apply fields.
+	// Forwards the vectors of managed devices to a private property registry; subclasses override to
+	// additionally apply fields, or to forward only the vectors their type needs.
 	vector(client: Client, message: DefVector | SetVector, tag: string) {
-		this.properties.vector(client, message, tag)
+		if (this.#ownsProperties && this.get(client, message.device) !== undefined) {
+			this.properties.vector(client, message, tag as `def${VectorType}Vector` | `set${VectorType}Vector`)
+		}
 	}
 
 	// Applies the CONNECTION switch to the device's `connected` flag, asking for properties on connect.
@@ -437,7 +291,7 @@ export abstract class DeviceManager<D extends Device> implements IndiClientHandl
 
 	// Drops all devices/properties of a disconnected client.
 	close(client: Client, server: boolean) {
-		this.properties.close(client, server)
+		if (this.#ownsProperties) this.properties.close(client, server)
 		const devices = this.list(client)
 		for (const device of devices) this.remove(device)
 		this.#clients.delete(client.id)
@@ -545,7 +399,7 @@ export function makeDevice<D extends Device>(model: D, client: Client, name: str
 	const device = structuredClone<D>(model) as Writable<D>
 
 	device.id = id || makeDeviceId(client, device.type, name)
-	device.hardwareId = Bun.MD5.hash(`${client.id}:${name}`, 'hex')
+	device.hardwareId = makeHardwareId(client, name)
 	device.name = name
 	device[CLIENT] = client
 	device.driver = { executable: driver?.DRIVER_EXEC?.value ?? '', version: driver?.DRIVER_VERSION?.value ?? '' }
