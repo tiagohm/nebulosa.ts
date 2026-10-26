@@ -423,26 +423,46 @@ function ringPointComparatorByX(a: EclipseGeoPoint, b: EclipseGeoPoint) {
 	return a.x - b.x
 }
 
+// Latitude (radians) where a pole-enclosing boundary crosses the +-PI seam, interpolated linearly in longitude
+// between its rightmost and leftmost points across the seam, as splitGeoLineAtAntimeridian places the crossing of
+// the open curve, so the fill meets the drawn line exactly at the map edges.
+//   left, right: the boundary points of smallest and largest longitude, in (-PI, PI].
+function seamLatitude(left: EclipseGeoPoint, right: EclipseGeoPoint): Angle {
+	const span = left.x + TAU - right.x
+	return span > 0 ? right.y + ((left.y - right.y) * (PI - right.x)) / span : right.y
+}
+
 // Fill polygon for a POLE-ENCLOSING cap. The boundary is single-valued in longitude (each meridian crosses it
-// once), so the points are sorted into a left-to-right profile and closed along a map pole edge: the enclosed
-// pole for the 'aboveHorizon' cap, the opposite pole for its 'belowHorizon' complement. The result is one
-// simple polygon.
+// once), so the points are sorted into a left-to-right profile, extended to both map edges at the latitude where
+// the boundary crosses the seam, and closed along a map pole edge: the enclosed pole for the 'aboveHorizon' cap,
+// the opposite pole for its 'belowHorizon' complement. The result is one simple polygon. Without the seam points
+// the profile would join its outermost points straight to the pole corners, leaving an unfilled wedge on each
+// side of the seam that a wrapping map shows as a gap.
 function polarCapFillPath(ring: EclipseGeoBranch, declination: Angle, projection: CylindricalProjection, region: LunarEclipseFillRegion, precision: number, options: ProjectionOptions) {
 	const capPoleLat = declination >= 0 ? PIOVERTWO : -PIOVERTWO
 	const edgeLat = region === 'aboveHorizon' ? capPoleLat : -capPoleLat
 
 	// Sort the boundary into a left-to-right profile, dropping the duplicated closing vertex.
 	const sorted = ring.slice(0, ring.length - 1).sort(ringPointComparatorByX)
+	const rightmost = sorted.at(-1)
+	if (!rightmost) return ''
+
+	// The profile starts and ends on the map edges, where the boundary crosses the seam.
+	const seamLat = seamLatitude(sorted[0], rightmost)
 	const polygon: Point[] = []
+	const leftSeam = projection.project(-PI, seamLat, undefined, options)
+	if (leftSeam) polygon.push(leftSeam)
 
 	for (const point of sorted) {
 		const projected = projection.project(point.x, point.y, undefined, options)
 		if (projected) polygon.push(projected)
 	}
 
+	const rightSeam = projection.project(PI, seamLat, undefined, options)
+	if (rightSeam) polygon.push(rightSeam)
 	if (polygon.length < 2) return ''
 
-	// Close along the pole edge: from the rightmost boundary point to the +PI corner, across to the -PI corner.
+	// Close along the pole edge: from the right seam point to the +PI corner, across to the -PI corner.
 	const right = projection.project(PI, edgeLat, undefined, options)
 	const left = projection.project(-PI, edgeLat, undefined, options)
 	if (right) polygon.push(right)

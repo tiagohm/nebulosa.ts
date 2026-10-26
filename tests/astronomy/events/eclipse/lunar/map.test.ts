@@ -443,6 +443,42 @@ describe('fill region polygons', () => {
 		expect(pointInPath(enclosedPole.x, enclosedPole.y, above)).toBe(true)
 	})
 
+	// The MAX cap of the 2026-03-03 total eclipse encloses the north pole and its boundary crosses the seam near
+	// -82 deg, far south of it. The fill must run along both map edges down to where the open curve crosses the seam: joining the
+	// outermost boundary points straight to the pole corners left an unfilled wedge on each side of the seam, a
+	// gap where a wrapping map joins its copies.
+	test('a pole-enclosing fill reaches both map edges where the curve crosses the seam', () => {
+		const eclipse = nearestLunarEclipse(timeYMDHMS(2026, 3, 1), true)
+		const geo = computeLunarEclipseMapGeometry(eclipse, sunMoonPosition)
+		const line = lunarEclipseMapToSvgPaths(geo, projection, { precision: 6 }).moonRiseSet.MAX
+		const above = lunarEclipseMapToSvgPaths(geo, projection, { fill: true, fillRegion: 'aboveHorizon', precision: 6 }).moonRiseSet.MAX
+		const max = geo.events.find((e) => e.kind === 'MAX')!
+		expect(max.declination).toBeGreaterThan(0)
+
+		// Where the open curve meets the map edges.
+		const ends = line.split('M').flatMap((part) => {
+			const points = parsePolygon(`M${part}`)
+			return points.length > 0 ? [points[0], points.at(-1)!] : []
+		})
+		const seamY = ends.find((point) => point.x === 0)!.y
+		expect(ends.find((point) => point.x === 720)!.y).toBeCloseTo(seamY, 6)
+
+		// The fill starts on the left edge and ends on the right edge at that latitude, then closes along the pole.
+		const polygon = parsePolygon(above)
+		expect(polygon[0].x).toBe(0)
+		expect(polygon[0].y).toBeCloseTo(seamY, 6)
+		expect(polygon.at(-3)!.x).toBe(720)
+		expect(polygon.at(-3)!.y).toBeCloseTo(seamY, 6)
+
+		// Points inside the cap next to the seam on both sides, a degree north of the curve, are filled (the map is 2
+		// pixels per degree, latitude +90 deg at y = 0).
+		const seamLatitude = (180 - seamY) / 2
+		for (const longitude of [-179.9, 179.9]) {
+			const point = projection.project(deg(longitude), deg(seamLatitude + 1))!
+			expect(pointInPath(point.x, point.y, above)).toBe(true)
+		}
+	})
+
 	// Same requirement, but with the central meridian supplied through options.projectionOptions (the documented
 	// call-time channel) on a projection built at meridian 0. The fill must resolve the central meridian the same
 	// way the open curves and sublunar points do, so the shadow follows them; the bug left the fill at the
