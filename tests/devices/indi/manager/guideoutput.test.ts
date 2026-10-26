@@ -235,3 +235,43 @@ test('reports the connection of the guide output whichever manager applies the s
 	])
 	expect([mount.connected, guideOutput.connected]).toEqual([false, false])
 })
+
+test('reads and writes the guide rates of a driver with the iOptron element names', () => {
+	const { recordingClient, numberCommands } = createRecordingClient()
+	const mountManager = new MountManager()
+	const mount = structuredClone(DEFAULT_MOUNT)
+	mount.id = Bun.randomUUIDv7()
+	mount.name = 'iOptronV3'
+	Object.defineProperty(mount, CLIENT, { value: recordingClient })
+	mountManager.add(mount)
+
+	const manager = new GuideOutputManager(mountManager)
+	// As published by the iOptronV3 driver, in fractions of the sidereal rate.
+	const guideRate: DefNumberVector = {
+		device: mount.name,
+		name: 'GUIDE_RATE',
+		permission: 'rw',
+		state: 'Ok',
+		elements: {
+			RA_GUIDE_RATE: defNumber('RA_GUIDE_RATE', 0.5, 0.01, 0.9, 0.1),
+			DE_GUIDE_RATE: defNumber('DE_GUIDE_RATE', 0.4, 0.1, 0.99, 0.1),
+		},
+	}
+
+	manager.numberVector(recordingClient, guideRate, 'defNumberVector')
+	manager.vector(recordingClient, guideRate, 'defNumberVector')
+
+	const guideOutput = manager.get(recordingClient, mount.name)!
+	expect(guideOutput.canSetGuideRate).toBeTrue()
+	expect(guideOutput.guideRate).toEqual({ rightAscension: 0.5, declination: 0.4 })
+
+	manager.numberVector(recordingClient, { device: mount.name, name: 'GUIDE_RATE', state: 'Ok', elements: { RA_GUIDE_RATE: { name: 'RA_GUIDE_RATE', value: 0.3 }, DE_GUIDE_RATE: { name: 'DE_GUIDE_RATE', value: 0.2 } } }, 'setNumberVector')
+	expect(mount.guideRate).toEqual({ rightAscension: 0.3, declination: 0.2 })
+
+	manager.guideRate(guideOutput, 0.7, 0.6)
+	manager.guideRate(mount, 0.8, 0.9)
+	expect(numberCommands.map(({ name, elements }) => ({ name, elements }))).toEqual([
+		{ name: 'GUIDE_RATE', elements: { RA_GUIDE_RATE: 0.7, DE_GUIDE_RATE: 0.6 } },
+		{ name: 'GUIDE_RATE', elements: { RA_GUIDE_RATE: 0.8, DE_GUIDE_RATE: 0.9 } },
+	])
+})

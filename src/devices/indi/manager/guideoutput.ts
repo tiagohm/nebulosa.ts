@@ -47,9 +47,12 @@ export class GuideOutputManager extends DeviceManager<GuideOutput> {
 		else if (direction === 'EAST') this.pulseEast(device, duration, client)
 	}
 
+	// Sets the guide rates (fractions of the sidereal rate) with the element names the driver defined for
+	// GUIDE_RATE. No-op without the capability.
 	guideRate(device: GuideOutput, rightAscension: number, declination: number, client = device[CLIENT]!) {
 		if (device.canSetGuideRate) {
-			client.sendNumber({ device: device.name, name: 'GUIDE_RATE', elements: { GUIDE_RATE_WE: rightAscension, GUIDE_RATE_NS: declination } })
+			const [ra, dec] = this.properties.get(device)?.GUIDE_RATE?.elementNames.includes(IOPTRON_GUIDE_RATE_ELEMENTS[0]) ? IOPTRON_GUIDE_RATE_ELEMENTS : STANDARD_GUIDE_RATE_ELEMENTS
+			client.sendNumber({ device: device.name, name: 'GUIDE_RATE', elements: { [ra]: rightAscension, [dec]: declination } })
 		}
 	}
 
@@ -146,8 +149,9 @@ export class GuideOutputManager extends DeviceManager<GuideOutput> {
 						}
 					}
 
-					let updated = handleNumberValue(device.guideRate, 'rightAscension', message.elements.GUIDE_RATE_WE?.value)
-					updated = handleNumberValue(device.guideRate, 'declination', message.elements.GUIDE_RATE_NS?.value) || updated
+					const { elements } = message
+					let updated = handleNumberValue(device.guideRate, 'rightAscension', (elements.GUIDE_RATE_WE ?? elements.RA_GUIDE_RATE)?.value)
+					updated = handleNumberValue(device.guideRate, 'declination', (elements.GUIDE_RATE_NS ?? elements.DE_GUIDE_RATE)?.value) || updated
 
 					if (updated) {
 						this.updated(device, 'guideRate', message.state)
@@ -204,3 +208,10 @@ export class GuideOutputManager extends DeviceManager<GuideOutput> {
 		}
 	}
 }
+
+// Right ascension and declination elements of the standard INDI GUIDE_RATE vector.
+const STANDARD_GUIDE_RATE_ELEMENTS = ['GUIDE_RATE_WE', 'GUIDE_RATE_NS'] as const
+
+// Right ascension and declination elements of the GUIDE_RATE vector of the iOptron drivers (such as
+// iOptronV3), which publish the same fractions of the sidereal rate under other names.
+const IOPTRON_GUIDE_RATE_ELEMENTS = ['RA_GUIDE_RATE', 'DE_GUIDE_RATE'] as const
