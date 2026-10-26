@@ -1839,3 +1839,72 @@ test('Besselian mu fitting keeps its rate through Greenwich angle zero', () => {
 	expect(elements.mu[2]).toBeCloseTo(0, 12)
 	expect(elements.mu[3]).toBeCloseTo(0, 12)
 })
+
+describe('limits crossing the antimeridian', () => {
+	// Default-option geometry, as a map consumer computes it, from the eclipse following a date.
+	function defaultGeometryFor(year: number, month: number, day: number) {
+		const eclipse = nearestSolarEclipse(timeYMD(year, month, day), true)
+		const elements = computePolynomialBesselianElements(eclipse.maximalTime, sunMoonPosition)
+		return { elements, geometry: computeSolarEclipseMapGeometry(eclipse, elements) }
+	}
+
+	// The scan restarts at -PI, so the short piece of a limit past the seam was dropped as a copy of the long piece,
+	// cutting the limit at +-180 deg and snapping the contacts aligned to its end there.
+	test('2023-04-20 keeps U3, U4, and S2 past the antimeridian', () => {
+		const { elements, geometry } = defaultGeometryFor(2023, 4, 1)
+		const { U3, U4, S2 } = geometry.points
+
+		// EclipseWise (https://www.eclipsewise.com/solar/SEprime/2001-2100/SE2023Apr20Hprime.html): U3 02 54.5 N,
+		// 178 47.1 W; U4 02 57.0 N, 178 49.7 W; S2 43 25.5 S, 175 00.5 W.
+		expectNearNasa(U3, 2.908, -178.785, 10)
+		expectNearNasa(U4, 2.95, -178.828, 10)
+		expectNearNasa(S2, -43.425, -175.008, 10)
+
+		// External umbral contacts and partial limit ends lie on the sunrise/sunset curve.
+		for (const point of [U4, S2]) expect(Math.abs(solarAltitudeAtPoint(elements, point!))).toBeLessThan(deg(0.1))
+		for (const curve of [geometry.lines.umbraNorth, geometry.lines.umbraSouth, geometry.lines.penumbraSouth]) expect(curve.flat().some((point) => point.x < deg(-178))).toBe(true)
+	})
+
+	test('2024-10-02 keeps the southern partial limit ends apart', () => {
+		const { geometry } = defaultGeometryFor(2024, 9, 25)
+
+		// EclipseWise (https://www.eclipsewise.com/solar/SEprime/2001-2100/SE2024Oct02Aprime.html): S1 38 28.2 S,
+		// 174 07.8 E; S2 82 28.3 S, 123 01.1 E.
+		expectNearNasa(geometry.points.S1, -38.47, 174.13, 10)
+		expectNearNasa(geometry.points.S2, -82.472, 123.018, 10)
+	})
+
+	test('no named point is snapped to the antimeridian', () => {
+		const CASES = [
+			[2001, 12, 1],
+			[2005, 4, 1],
+			[2023, 4, 1],
+			[2025, 9, 1],
+			[2056, 1, 1],
+			[2088, 4, 1],
+		] as const
+
+		for (const [year, month, day] of CASES) {
+			const { elements, geometry } = defaultGeometryFor(year, month, day)
+
+			for (const [kind, point] of Object.entries(geometry.points)) {
+				if (!point) continue
+				expect(Math.abs(Math.abs(point.x) - PI), `${year}-${month} ${kind}`).toBeGreaterThan(1e-6)
+				if (['P1', 'P4', 'C1', 'C2', 'N1', 'N2', 'S1', 'S2'].includes(kind)) expect(Math.abs(solarAltitudeAtPoint(elements, point)), `${year}-${month} ${kind}`).toBeLessThan(deg(0.5))
+			}
+		}
+	})
+
+	// Near the poles the meridians converge and limits fold next to the seam, where a branch leaving the seam is a
+	// copy or the other arc of the fold; those crossings are left to the reconnection passes.
+	test('high-latitude seam crossings keep their folds', () => {
+		const annular = defaultGeometryFor(2021, 6, 1).geometry.lines.umbraNorth
+		expect(annular).toHaveLength(1)
+		expect(catalogBranchRetraces(annular[0], deg(0.3), deg(5))).toBe(false)
+
+		// The 2079-05-01 southern totality limit folds back at 79.78 deg N, 175.68 deg E, next to the seam.
+		const fold = { x: deg(175.68), y: deg(79.78) }
+		const total = defaultGeometryFor(2079, 4, 20).geometry.lines.umbraSouth.flat()
+		expect(Math.min(...total.map((point) => sphericalSeparation(point.x, point.y, fold.x, fold.y)))).toBeLessThan(deg(0.2))
+	})
+})

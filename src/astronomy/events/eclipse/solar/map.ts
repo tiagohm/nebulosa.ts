@@ -1872,6 +1872,10 @@ function deduplicateBranches(branches: EclipseGeoCurve, maxAngularStep: Angle) {
 		let found = false
 
 		for (let i = 0; i < kept.length; i++) {
+			// A continuation across the seam is not a copy of the branch it continues, however short it is: it is
+			// left for reconnectBranchCusps to join, unless another kept branch (an earlier copy of it) covers it.
+			if (continuesAcrossSeam(kept[i], branch, tolerance)) continue
+
 			if (branchCoveredBy(branch, kept[i], tolerance, maxOverhang)) {
 				found = true
 				break
@@ -1882,6 +1886,54 @@ function deduplicateBranches(branches: EclipseGeoCurve, maxAngularStep: Angle) {
 	}
 
 	return kept
+}
+
+// Latitude (radians) above which a limit crossing the antimeridian is left to the other assembly passes. Toward
+// the poles the meridians converge and limits fold back in longitude next to the seam, so a branch leaving the
+// seam there is often a copy of host over the pole or the other arc of a fold, and keeping it makes
+// reconnectBranchCusps stitch the wrong arcs (the 2021-06-10 northern annularity limit and the 2079-05-01
+// southern totality limit, both crossing at 84.3 deg, or the 2024-04-08 northern partial limit at 89.3 deg). The
+// seam crossings it fixes lie below it (up to 78 deg for the 2088-04-21 N2 cusp).
+const SEAM_CONTINUATION_MAX_LATITUDE = 80 * DEG2RAD
+
+// Whether a point lies on the antimeridian, where the longitude scans start and end (x = -PI or +PI).
+function onAntimeridian(point: EclipseGeoPoint) {
+	return Math.abs(point.x) >= PI - 1e-12
+}
+
+// Whether branch continues host across the antimeridian. The longitude scans restart at -PI, so a limit crossing
+// the antimeridian is traced as a branch ending at +PI and another starting at -PI at the same place, joined later
+// by reconnectBranchCusps. When the second is short, branchCoveredBy would take it for a copy of the first (its
+// only vertex on host is the shared seam vertex, and the rest fits within the tolerated end overhang) and drop it,
+// cutting the limit at the seam and leaving the contacts aligned to that cut end (e.g. U3, U4, and S2 of the
+// 2023-04-20 hybrid eclipse) snapped to +-180 deg. branch continues host when one of its ends is host's end vertex
+// on the other side of the antimeridian, it leaves host there instead of running back along it, and none of its
+// vertices lies on host's body away from the seam (an arc that crosses the seam after a polar fold and retraces
+// host is a copy).
+// tolerance: angular distance (radians) within which a vertex lies on host, as in deduplicateBranches.
+function continuesAcrossSeam(host: EclipseGeoBranch, branch: EclipseGeoBranch, tolerance: Angle) {
+	if (host.length < 2 || branch.length < 2) return false
+
+	for (const hostEnd of BRANCH_ENDPOINTS) {
+		const end = hostEnd === 0 ? host[0] : host.at(-1)!
+		if (!onAntimeridian(end) || Math.abs(end.y) >= SEAM_CONTINUATION_MAX_LATITUDE) continue
+
+		const inner = hostEnd === 0 ? host[1] : host.at(-2)!
+		const first = branch[0]
+		const last = branch.at(-1)!
+		const touchesAtFirst = onAntimeridian(first) && first.x * end.x < 0 && angularDistance(first, end) <= CURVE_SPATIAL_EPSILON
+		const touchesAtLast = !touchesAtFirst && onAntimeridian(last) && last.x * end.x < 0 && angularDistance(last, end) <= CURVE_SPATIAL_EPSILON
+		if (!touchesAtFirst && !touchesAtLast) continue
+
+		// Vertices of branch past the seam vertex, ordered away from host.
+		const away = touchesAtFirst ? branch.slice(1) : branch.slice(0, -1).toReversed()
+		if (angularDistance(away[0], inner) <= angularDistance(end, inner)) continue
+		if (away.some((point) => host.some((vertex) => angularDistance(vertex, end) > 2 * tolerance && angularDistance(point, vertex) <= tolerance))) continue
+
+		return true
+	}
+
+	return false
 }
 
 // Returns the seed's open branch, starting a new one when it has none because a curve branch begins or reappears.
