@@ -2,6 +2,7 @@ import type { Client } from './device'
 // oxfmt-ignore
 import type { DefBlob, DefBlobVector, DefLight, DefLightVector, DefNumber, DefNumberVector, DefSwitch, DefSwitchVector, DefText, DefTextVector, DefVector, DelProperty, EnableBlob, GetProperties, Message, NewNumberVector, NewSwitchVector, NewTextVector, OneBlob, OneLight, OneNumber, OneSwitch, OneText, PropertyState, SetBlobVector, SetLightVector, SetNumberVector, SetSwitchVector, SetTextVector, SetVector, SwitchRule, VectorType } from './types'
 import { SimpleXmlParser, type XmlNode } from '../../io/xml'
+import { parseIndiNumber } from './number'
 
 // INDI protocol client over a TCP socket: parses the streamed XML messages into typed property vectors,
 // dispatches them to a handler, and serializes outgoing getProperties/enableBLOB/newXXX commands.
@@ -635,24 +636,4 @@ const TEXT_DECODER = new TextDecoder()
 
 function nodeText(node: XmlNode) {
 	return TEXT_DECODER.decode(node.text).trim()
-}
-
-// Parses an INDI numberValue as a decimal or sexagesimal scalar without applying an angle unit
-// conversion. Missing minute or second components are zero; a leading sign applies to the whole value.
-function parseIndiNumber(value: string) {
-	const numeric = Number(value)
-	if (!Number.isNaN(numeric)) return numeric
-
-	const fields = (value.includes(':') || value.includes(';') ? value.split(/[:;]/) : value.split(/\s+/)).map((field) => field.trim())
-	if (fields.length > 3 || fields[0] === '') return Number.NaN
-
-	const first = fields[0]
-	const sign = first.startsWith('-') ? -1 : 1
-	const degrees = Math.abs(Number(first))
-	const minutes = fields.length > 1 && fields[1] !== '' ? Number(fields[1]) : 0
-	const seconds = fields.length > 2 && fields[2] !== '' ? Number(fields[2]) : 0
-
-	if (fields.slice(1).some((field) => field.startsWith('+') || field.startsWith('-')) || Number.isNaN(degrees) || Number.isNaN(minutes) || Number.isNaN(seconds)) return Number.NaN
-
-	return sign * (degrees + minutes / 60 + seconds / 3600)
 }
