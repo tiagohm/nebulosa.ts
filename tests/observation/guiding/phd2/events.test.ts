@@ -64,12 +64,16 @@ describe('translation', () => {
 			raSteps: 4,
 			decSteps: 2,
 			clearingSteps: 1,
+			decReturnSteps: 0,
 			clearingDistancePx: 1,
 			raNetDistancePx: 12,
 			decNetDistancePx: 5,
 			pendingPulse: { ra: { duration: 0 }, dec: { direction: 'NORTH', duration: 500 } },
 		} as unknown as GuidingCalibrationDiagnostics
 		expect(phd2EventsOf({ type: 'calibrationStep', timestamp: AT, guideOutput: 'Mount', diagnostics })[0]).toMatchObject({ Event: 'Calibrating', Mount: 'Mount', dir: 'north', dist: 5, dx: 3, dy: 4, pos: [103, 54], step: 7, State: 'decForwardMeasure' })
+		// The DEC return reports the distance left to the calibration origin and counts its steps.
+		const returning = { ...diagnostics, phase: 'decReturnMeasure', decReturnSteps: 2, pendingPulse: { ra: { duration: 0 }, dec: { direction: 'SOUTH', duration: 300 } } } as GuidingCalibrationDiagnostics
+		expect(phd2EventsOf({ type: 'calibrationStep', timestamp: AT, guideOutput: 'Mount', diagnostics: returning })[0]).toMatchObject({ dir: 'south', dist: 1, step: 9, State: 'decReturnMeasure' })
 	})
 
 	test('gives a guide step PHD2 default directions and the limit flags only when limited', () => {

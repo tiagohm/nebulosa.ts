@@ -12,12 +12,30 @@ import { starTrackingOf } from './tracker.star'
 // (image-to-axis) 2×2 calibration matrices used by the Guider. It handles RA forward travel, an optional
 // clearing move back toward the origin that keeps pulsing until the measurement is close enough, crosses the
 // origin, or hits `maxClearingSteps` (with longer pulses first when `fastClearing`, PHD2's fast recenter of its east
-// leg), DEC backlash absorption, and rejects frames that are noisy,
-// edge-clipped, or show impossible jumps. Positions/distances are pixels; pulse durations are
+// leg), DEC backlash absorption, an optional DEC return toward the origin once both axes are solved (PHD2's south
+// leg and nudges), and rejects frames that are noisy, edge-clipped, or show impossible jumps. Positions/distances are pixels; pulse durations are
 // milliseconds; angles are radians.
 
 // Phase of the calibration state machine.
-export type GuidingCalibrationPhase = 'idle' | 'precheck' | 'acquireLock' | 'raForwardPulse' | 'raForwardMeasure' | 'raForwardComplete' | 'raClearPulse' | 'raClearMeasure' | 'decForwardPulse' | 'decForwardMeasure' | 'decBacklashClearing' | 'decForwardComplete' | 'solving' | 'validating' | 'completed' | 'failed'
+export type GuidingCalibrationPhase =
+	| 'idle'
+	| 'precheck'
+	| 'acquireLock'
+	| 'raForwardPulse'
+	| 'raForwardMeasure'
+	| 'raForwardComplete'
+	| 'raClearPulse'
+	| 'raClearMeasure'
+	| 'decForwardPulse'
+	| 'decForwardMeasure'
+	| 'decBacklashClearing'
+	| 'decForwardComplete'
+	| 'solving'
+	| 'validating'
+	| 'decReturnPulse'
+	| 'decReturnMeasure'
+	| 'completed'
+	| 'failed'
 
 // Reason a calibration run aborted.
 export type GuidingCalibrationFailureCode =
@@ -100,6 +118,21 @@ export interface GuidingCalibrationConfig {
 	readonly maxClearingMovePx: number
 	// Longest fast clearing pulse, in milliseconds (PHD2 uses the RA maximum pulse of the guider); > 0.
 	readonly maxClearingPulse: number
+	// Whether, once both axes are solved and validated, the target is brought back toward the calibration origin along
+	// DEC, as PHD2's south leg: the DEC pulse time that moved it (the backlash excluded) is sent back opposite
+	// `decDirection`, in pulses sized like the fast clearing ones (at least `decPulse`, at most `maxDecReturnPulse`) when
+	// `fastClearing`, else in `decPulse` steps, then up to `maxDecNudges` shorter nudges toward the origin. The return
+	// never fails a calibration whose solution is valid, but a lost or edge-clipped target still fails it.
+	readonly decReturnEnabled: boolean
+	// Longest fast DEC return pulse, in milliseconds (PHD2 uses the DEC maximum pulse of the guider); > 0.
+	readonly maxDecReturnPulse: number
+	// Most nudges after the DEC return pulses (PHD2's MAX_NUDGES, 3); >= 0. A nudge is sent only while the target is
+	// farther than `decNudgeTolerancePx` from the origin, closer than where the return started, and off the origin
+	// mostly along DEC (within 40° of the reverse of the DEC axis); it moves the target by the DEC part of that offset, at
+	// most `maxClearingMovePx`, in a pulse of at most `decPulse`.
+	readonly maxDecNudges: number
+	// Distance from the origin below which no nudge is sent, in pixels (PHD2's NUDGE_TOLERANCE, 2); >= 0.
+	readonly decNudgeTolerancePx: number
 	// Minimum RA/DEC axis separation angle to accept the solve, in radians.
 	readonly minAxisSeparation: Angle
 	// Minimum acceptable normalized image-motion matrix determinant, dimensionless.
@@ -211,7 +244,9 @@ export interface GuidingCalibrationResult {
 	readonly decStartY: number
 	// Number of clearing steps performed.
 	readonly clearingSteps: number
-	// Non-fatal warnings raised during the solve.
+	// Number of DEC return pulses performed, nudges included; 0 without a DEC return.
+	readonly decReturnSteps: number
+	// Non-fatal warnings raised during the solve and the DEC return.
 	readonly warnings: readonly string[]
 }
 
@@ -280,11 +315,13 @@ export interface GuidingCalibrationDiagnostics {
 	readonly decSteps: number
 	// Clearing steps taken.
 	readonly clearingSteps: number
+	// DEC return pulses taken, nudges included.
+	readonly decReturnSteps: number
 	// Net RA travel, in pixels.
 	readonly raNetDistancePx: number
 	// Net DEC travel, in pixels.
 	readonly decNetDistancePx: number
-	// Distance from origin during/after clearing, in pixels.
+	// Distance from origin during/after clearing and the DEC return, in pixels.
 	readonly clearingDistancePx: number
 	// Consecutive bad frames.
 	readonly badFrames: number
@@ -308,6 +345,8 @@ export interface GuidingCalibrationDiagnostics {
 	readonly decSamples: readonly GuidingCalibrationSample[]
 	// Recorded clearing samples.
 	readonly clearingSamples: readonly GuidingCalibrationSample[]
+	// Recorded DEC return samples, against the calibration origin.
+	readonly decReturnSamples: readonly GuidingCalibrationSample[]
 }
 
 // Outcome of one processFrame call: phase, optional pulse to execute, terminal result, and diagnostics.
@@ -346,6 +385,13 @@ interface GuidingCalibratorState {
 	// RA pulse time still to send back with fast clearing pulses, in milliseconds, and the length of one.
 	clearingRemainingMs: number
 	clearingPulseMs: number
+	// DEC return pulses and nudges taken, the DEC pulse time still to send back in return pulses and the length of one,
+	// in milliseconds, and the distance from the origin where the return started, in pixels.
+	decReturnSteps: number
+	decReturnNudges: number
+	decReturnRemainingMs: number
+	decReturnPulseMs: number
+	decReturnStartDistance: number
 	settleFramesRemaining: number
 	pendingPulseAxis?: 'ra' | 'dec'
 	pendingPulseDirection?: GuideDirectionRA | GuideDirectionDEC
@@ -353,8 +399,11 @@ interface GuidingCalibratorState {
 	raSamples: GuidingCalibrationSample[]
 	decSamples: GuidingCalibrationSample[]
 	clearingSamples: GuidingCalibrationSample[]
+	decReturnSamples: GuidingCalibrationSample[]
 	raSolution?: GuidingCalibrationAxisSolution
 	decSolution?: GuidingCalibrationAxisSolution
+	// Validated solution waiting for the DEC return to end before it becomes the result.
+	solved?: GuidingCalibrationResult
 	result?: GuidingCalibrationResult
 	failure?: GuidingCalibrationFailure
 	badFrames: number
@@ -372,8 +421,9 @@ interface GuidingCalibrationConfigIssue {
 }
 
 // Default calibration tuning: ~650 ms pulses, west/north legs, RA clearing enabled with PHD2's fast recenter (a 32 px
-// maximum move, half the guider client's default search square, and the guider's 2000 ms RA maximum pulse), 12 px jump
-// limit matching the guider, 12° minimum axis separation.
+// maximum move, half the guider client's default search square, and the guider's 2000 ms RA maximum pulse), a DEC
+// return as PHD2's (pulses of at most the guider's 2500 ms DEC maximum, 3 nudges, 2 px tolerance), 12 px jump limit
+// matching the guider, 12° minimum axis separation.
 export const DEFAULT_GUIDING_CALIBRATOR_CONFIG: Readonly<GuidingCalibrationConfig> = {
 	raPulse: 650,
 	decPulse: 650,
@@ -396,6 +446,10 @@ export const DEFAULT_GUIDING_CALIBRATOR_CONFIG: Readonly<GuidingCalibrationConfi
 	fastClearing: true,
 	maxClearingMovePx: 32,
 	maxClearingPulse: 2000,
+	decReturnEnabled: true,
+	maxDecReturnPulse: 2500,
+	maxDecNudges: 3,
+	decNudgeTolerancePx: 2,
 	minAxisSeparation: 12 * DEG2RAD,
 	minDeterminant: 1e-6,
 	edgeMarginPx: 12,
@@ -416,6 +470,7 @@ const EMPTY_DIAGNOSTICS: Readonly<GuidingCalibrationDiagnostics> = {
 	raSteps: 0,
 	decSteps: 0,
 	clearingSteps: 0,
+	decReturnSteps: 0,
 	raNetDistancePx: 0,
 	decNetDistancePx: 0,
 	clearingDistancePx: 0,
@@ -428,6 +483,7 @@ const EMPTY_DIAGNOSTICS: Readonly<GuidingCalibrationDiagnostics> = {
 	raSamples: [],
 	decSamples: [],
 	clearingSamples: [],
+	decReturnSamples: [],
 }
 
 // Pristine internal state cloned on construction and reset.
@@ -449,6 +505,11 @@ const EMPTY_GUIDING_CALIBRATOR_STATE: Readonly<GuidingCalibratorState> = {
 	plannedClearingSteps: 0,
 	clearingRemainingMs: 0,
 	clearingPulseMs: 0,
+	decReturnSteps: 0,
+	decReturnNudges: 0,
+	decReturnRemainingMs: 0,
+	decReturnPulseMs: 0,
+	decReturnStartDistance: 0,
 	settleFramesRemaining: 0,
 	pendingPulseAxis: undefined,
 	pendingPulseDirection: undefined,
@@ -456,11 +517,13 @@ const EMPTY_GUIDING_CALIBRATOR_STATE: Readonly<GuidingCalibratorState> = {
 	raSamples: [],
 	decSamples: [],
 	clearingSamples: [],
+	decReturnSamples: [],
 	// Explicit undefined so reset()'s Object.assign clears these optional fields. Without the keys present,
 	// a stale solution or a stale completed/failure result would survive reset and be surfaced by
 	// #makeStepResult on every step of the next calibration run.
 	raSolution: undefined,
 	decSolution: undefined,
+	solved: undefined,
 	result: undefined,
 	failure: undefined,
 	badFrames: 0,
@@ -525,6 +588,8 @@ export class GuidingCalibrator {
 			case 'decForwardPulse':
 			case 'decBacklashClearing':
 				return this.#handleDecMeasurement(frame, point, tracking)
+			case 'decReturnPulse':
+				return this.#handleDecReturnMeasurement(frame, point, tracking)
 			default:
 				return this.#fail('bad_frame', `unexpected calibration phase ${this.state.phase}`, frame, ['invalid_phase'], tracking)
 		}
@@ -556,6 +621,7 @@ export class GuidingCalibrator {
 			decNoMotionSteps: this.state.decNoMotionSteps,
 			clearingSteps: this.state.clearingSteps,
 			plannedClearingSteps: this.state.plannedClearingSteps,
+			decReturnSteps: this.state.decReturnSteps,
 			decMotionDetected: this.state.decMotionDetected,
 			backlash: this.state.decBacklashMs,
 		}
@@ -675,7 +741,7 @@ export class GuidingCalibrator {
 			if (this.config.fastClearing) {
 				// As PHD2's east leg: the whole forward pulse time goes back, in pulses as long as the motion limits allow.
 				this.state.clearingRemainingMs = this.state.raSteps * this.config.raPulse
-				this.state.clearingPulseMs = fastClearingPulse(this.state.raSolution.ratePxPerMs, this.config)
+				this.state.clearingPulseMs = fastClearingPulse(this.state.raSolution.ratePxPerMs, this.config.raPulse, this.config.maxClearingPulse, this.config)
 				this.state.plannedClearingSteps = Math.trunc(clamp(Math.ceil(this.state.clearingRemainingMs / this.state.clearingPulseMs), 1, this.config.maxClearingSteps))
 			} else {
 				this.state.plannedClearingSteps = Math.trunc(clamp(Math.round(this.state.raSamples.length * this.config.clearingMoveFraction), 1, this.config.maxClearingSteps))
@@ -834,7 +900,7 @@ export class GuidingCalibrator {
 			warnings.push('ra_clearing_finished_near_threshold')
 		}
 
-		this.state.result = {
+		const result: GuidingCalibrationResult = {
 			ra: { ...raSolution, direction: this.config.raDirection },
 			dec: { ...decSolution, direction: this.config.decDirection },
 			imageMotion: [m00, m01, m10, m11],
@@ -846,10 +912,75 @@ export class GuidingCalibrator {
 			decStartX: this.state.decStartX,
 			decStartY: this.state.decStartY,
 			clearingSteps: this.state.clearingSteps,
+			decReturnSteps: 0,
 			warnings,
 		}
 
 		this.state.warnings = warnings.slice()
+		if (!this.config.decReturnEnabled) return this.#complete(result, frame, filtered)
+
+		// As PHD2's south leg, which starts once the north leg has solved the axes: the result waits for the return.
+		this.state.solved = result
+		this.state.decReturnRemainingMs = decSolution.totalPulse
+		this.state.decReturnPulseMs = this.config.fastClearing ? fastClearingPulse(decSolution.ratePxPerMs, this.config.decPulse, this.config.maxDecReturnPulse, this.config) : this.config.decPulse
+		this.state.decReturnStartDistance = Math.hypot(this.state.currentX - this.state.startX, this.state.currentY - this.state.startY)
+		return this.#queuePulse('decReturnPulse', 'dec', oppositeDEC(this.config.decDirection), this.#nextDecReturnPulse(), frame, ['dec_return_started'], filtered)
+	}
+
+	// Records one DEC return sample and sends the next return pulse or nudge, or completes the calibration.
+	#handleDecReturnMeasurement(frame: GuideFrame, point: Point, filtered: GuideTrackerResult) {
+		this.#transitionTo('decReturnMeasure')
+		const solved = this.state.solved
+		if (solved === undefined) return this.#fail('bad_frame', 'DEC return without a solved calibration', frame, ['invalid_phase'], filtered)
+
+		const sample = this.#recordSample(this.state.decReturnSteps + 1, this.state.pendingPulseMs, oppositeDEC(this.config.decDirection), point, this.state.startX, this.state.startY)
+		this.state.decReturnSteps++
+		this.state.decReturnSamples.push(sample)
+		this.#finishMeasurement(point)
+		this.#updateDiagnostics(frame, filtered, ['dec_return_measured'])
+
+		if (this.state.decReturnRemainingMs > 0) {
+			return this.#queuePulse('decReturnPulse', 'dec', oppositeDEC(this.config.decDirection), this.#nextDecReturnPulse(), frame, ['dec_return_continue'], filtered)
+		}
+
+		const nudge = this.#decNudgePulse(point, solved.dec)
+		if (nudge > 0) {
+			this.state.decReturnNudges++
+			return this.#queuePulse('decReturnPulse', 'dec', oppositeDEC(this.config.decDirection), nudge, frame, ['dec_return_nudge'], filtered)
+		}
+
+		const warnings = solved.warnings.slice()
+		if (Math.hypot(point.x - this.state.startX, point.y - this.state.startY) > this.config.maxClearingOffsetPx) warnings.push('dec_return_short')
+		this.state.warnings = warnings.slice()
+		return this.#complete({ ...solved, decReturnSteps: this.state.decReturnSteps, warnings }, frame, filtered)
+	}
+
+	// Returns the duration of the next DEC return pulse, in milliseconds: the return pulse length, the last one only the
+	// remainder of the DEC pulse time to send back.
+	#nextDecReturnPulse() {
+		const duration = Math.min(this.state.decReturnPulseMs, this.state.decReturnRemainingMs)
+		this.state.decReturnRemainingMs -= duration
+		return duration
+	}
+
+	// Returns the duration of a nudge toward the origin after the DEC return pulses, in milliseconds, or 0 when no nudge is
+	// due (see maxDecNudges): the pulse that moves the target at the solved DEC rate by its offset from the origin along
+	// the DEC axis, at most maxClearingMovePx, capped at decPulse, as PHD2's south nudges.
+	#decNudgePulse(point: Point, dec: GuidingCalibrationAxisSolution) {
+		if (this.state.decReturnNudges >= this.config.maxDecNudges) return 0
+		const dx = point.x - this.state.startX
+		const dy = point.y - this.state.startY
+		const distance = Math.hypot(dx, dy)
+		if (distance <= this.config.decNudgeTolerancePx || distance >= this.state.decReturnStartDistance) return 0
+		// Offset still along the forward DEC direction, which a pulse opposite decDirection takes back.
+		const along = dx * dec.unitX + dy * dec.unitY
+		if (along < DEC_NUDGE_MIN_COSINE * distance) return 0
+		return Math.max(1, Math.min(Math.floor(Math.min(along, this.config.maxClearingMovePx) / dec.ratePxPerMs), this.config.decPulse))
+	}
+
+	// Publishes a validated result and ends the calibration.
+	#complete(result: GuidingCalibrationResult, frame: GuideFrame, filtered: GuideTrackerResult) {
+		this.state.result = result
 		this.#transitionTo('completed')
 		this.#updateDiagnostics(frame, filtered, ['completed'])
 
@@ -971,6 +1102,7 @@ export class GuidingCalibrator {
 			raSteps: this.state.raSteps,
 			decSteps: this.state.decSteps,
 			clearingSteps: this.state.clearingSteps,
+			decReturnSteps: this.state.decReturnSteps,
 			raNetDistancePx: raNet,
 			decNetDistancePx: decNet,
 			clearingDistancePx: clearingDistance,
@@ -984,6 +1116,7 @@ export class GuidingCalibrator {
 			raSamples: this.state.raSamples.slice(),
 			decSamples: this.state.decSamples.slice(),
 			clearingSamples: this.state.clearingSamples.slice(),
+			decReturnSamples: this.state.decReturnSamples.slice(),
 			tracking: filtered,
 		}
 	}
@@ -1027,6 +1160,9 @@ function validateGuidingCalibratorConfig(config: GuidingCalibrationConfig) {
 	if (config.maxClearingOffsetPx < 0) issues.push({ key: 'maxClearingOffsetPx', reason: 'must be >= 0' })
 	if (!(config.maxClearingMovePx > 0)) issues.push({ key: 'maxClearingMovePx', reason: 'must be > 0' })
 	if (!(config.maxClearingPulse > 0)) issues.push({ key: 'maxClearingPulse', reason: 'must be > 0' })
+	if (!(config.maxDecReturnPulse > 0)) issues.push({ key: 'maxDecReturnPulse', reason: 'must be > 0' })
+	if (!(config.maxDecNudges >= 0)) issues.push({ key: 'maxDecNudges', reason: 'must be >= 0' })
+	if (!(config.decNudgeTolerancePx >= 0)) issues.push({ key: 'decNudgeTolerancePx', reason: 'must be >= 0' })
 	if (config.minAxisSeparation <= 0 || config.minAxisSeparation >= PIOVERTWO) issues.push({ key: 'minAxisSeparation', reason: 'must be within (0, pi/2)' })
 	if (config.minDeterminant <= 0) issues.push({ key: 'minDeterminant', reason: 'must be > 0' })
 	if (config.edgeMarginPx < 0) issues.push({ key: 'edgeMarginPx', reason: 'must be >= 0' })
@@ -1040,12 +1176,17 @@ function validateGuidingCalibratorConfig(config: GuidingCalibrationConfig) {
 // rate does not take the target past the frame jump limit or out of the search box.
 const FAST_CLEARING_MARGIN = 0.8
 
-// Returns the length of a fast clearing pulse, in milliseconds, for the solved RA rate in pixels per millisecond: the
-// pulse that moves the target by FAST_CLEARING_MARGIN of the smaller of maxClearingMovePx and maxFrameJumpPx, rounded
-// down to a whole millisecond and clamped to [raPulse, maxClearingPulse], with raPulse winning, as in PHD2.
-function fastClearingPulse(ratePxPerMs: number, config: GuidingCalibrationConfig) {
+// Smallest cosine between the offset of the target from the origin and the forward DEC axis for a DEC nudge: PHD2 only
+// nudges while the way back is within 40° of the reverse of its north moves.
+const DEC_NUDGE_MIN_COSINE = Math.cos(40 * DEG2RAD)
+
+// Returns the length of a fast return pulse, in milliseconds, for the solved rate of its axis in pixels per millisecond:
+// the pulse that moves the target by FAST_CLEARING_MARGIN of the smaller of maxClearingMovePx and maxFrameJumpPx,
+// rounded down to a whole millisecond and clamped to [minPulse, maxPulse], with minPulse (the calibration pulse of the
+// axis) winning, as in PHD2.
+function fastClearingPulse(ratePxPerMs: number, minPulse: number, maxPulse: number, config: GuidingCalibrationConfig) {
 	const movePx = FAST_CLEARING_MARGIN * Math.min(config.maxClearingMovePx, config.maxFrameJumpPx)
-	return Math.max(config.raPulse, Math.min(Math.floor(movePx / ratePxPerMs), config.maxClearingPulse))
+	return Math.max(minPulse, Math.min(Math.floor(movePx / ratePxPerMs), maxPulse))
 }
 
 // Solves one axis vector from measured pulse-to-pulse displacements.
@@ -1112,7 +1253,7 @@ function isNearEdge(point: Point, width: number, height: number, margin: number)
 
 // Indicates whether the current state should expose the DEC origin in diagnostics.
 function hasDecOrigin(phase: GuidingCalibrationPhase, decSteps: number) {
-	return decSteps > 0 || phase === 'decForwardPulse' || phase === 'decBacklashClearing' || phase === 'decForwardMeasure' || phase === 'decForwardComplete' || phase === 'solving' || phase === 'validating' || phase === 'completed'
+	return decSteps > 0 || phase === 'decForwardPulse' || phase === 'decBacklashClearing' || phase === 'decForwardMeasure' || phase === 'decForwardComplete' || phase === 'solving' || phase === 'validating' || phase === 'decReturnPulse' || phase === 'decReturnMeasure' || phase === 'completed'
 }
 
 // Returns whether a reverse clearing step passed the closest approach to the calibration origin.

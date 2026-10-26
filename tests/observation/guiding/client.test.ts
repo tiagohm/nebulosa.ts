@@ -1642,6 +1642,8 @@ describe('event envelope', () => {
 		expect(makeHarness({ fastRecenter: false, calibrator: { maxClearingPulse: 3000 } }).client.maxPulseDuration()).toBe(DEFAULT_GUIDER_CONFIG.maxPulseMsDEC)
 		// By default the fast clearing pulse is the guider's RA maximum, so it never raises the longest pulse.
 		expect(makeHarness({ guider: { maxPulseMsRA: 1500, maxPulseMsDEC: 1500 } }).client.maxPulseDuration()).toBe(1500)
+		expect(makeHarness({ calibrator: { maxDecReturnPulse: 4000 } }).client.maxPulseDuration()).toBe(4000)
+		expect(makeHarness({ calibrator: { maxDecReturnPulse: 4000, decReturnEnabled: false } }).client.maxPulseDuration()).toBe(DEFAULT_GUIDER_CONFIG.maxPulseMsDEC)
 	})
 
 	test('fast recenter is on by default and toggles with a setting change', () => {
@@ -5222,6 +5224,14 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 			expect(east(fast)[0] + east(fast)[1]).toBe(west)
 			expect(slow.client.getCalibrated()).toBeTrue()
 			expect(east(slow).every((duration) => duration === 650)).toBeTrue()
+
+			// The DEC return sends the NORTH pulse time back SOUTH, the first pulse sized like the RA one, about 834 ms.
+			const total = (harness: Harness, direction: string) => harness.guideOutputManager.pulses.filter((pulse) => pulse.direction === direction).reduce((sum, pulse) => sum + pulse.duration, 0)
+			const south = fast.guideOutputManager.pulses.filter((pulse) => pulse.direction === 'SOUTH').map((pulse) => pulse.duration)
+			expect(south[0]).toBeGreaterThan(800)
+			expect(south[0]).toBeLessThan(870)
+			expect(total(fast, 'SOUTH')).toBe(total(fast, 'NORTH'))
+			expect(total(slow, 'SOUTH')).toBe(total(slow, 'NORTH'))
 		},
 		CLOSED_LOOP_TIMEOUT,
 	)

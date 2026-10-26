@@ -26,6 +26,7 @@ function makeCalibration(raRate = RA_RATE_PX_PER_MS, decRate = DEC_RATE_PX_PER_M
 		decStartX: 0,
 		decStartY: 0,
 		clearingSteps: 0,
+		decReturnSteps: 0,
 		warnings: [],
 	}
 }

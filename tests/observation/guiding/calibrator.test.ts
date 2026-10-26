@@ -42,6 +42,7 @@ interface CalibrationSimulation {
 	readonly reverseRaScale?: number
 	readonly reverseRaVector?: readonly [number, number]
 	readonly reverseRaBacklashSteps?: number
+	readonly reverseDecScale?: number
 	readonly maxFrames?: number
 }
 
@@ -62,8 +63,10 @@ const BASE_CONFIG: Partial<GuidingCalibrationConfig> = {
 	clearingMoveFraction: 1,
 	maxClearingSteps: 10,
 	maxClearingOffsetPx: 0.8,
-	// The clearing tests script one reverse motion per raPulse step; the fast pulses have tests of their own.
+	// The clearing tests script one reverse motion per raPulse step and the solve tests budget their frames for the
+	// forward legs; the fast pulses and the DEC return have tests of their own.
 	fastClearing: false,
+	decReturnEnabled: false,
 	edgeMarginPx: 10,
 	minRatePxPerMs: 1e-4,
 	maxRatePxPerMs: 1,
@@ -111,8 +114,9 @@ function runCalibration(config: Partial<GuidingCalibrationConfig>, simulation: C
 			if (sign > 0 && decBacklashRemaining > 0) {
 				decBacklashRemaining--
 			} else {
-				offsetX += simulation.decVector[0] * sign * (pulse.dec.duration / calibrator.config.decPulse)
-				offsetY += simulation.decVector[1] * sign * (pulse.dec.duration / calibrator.config.decPulse)
+				const scale = sign < 0 ? (simulation.reverseDecScale ?? 1) : 1
+				offsetX += simulation.decVector[0] * sign * scale * (pulse.dec.duration / calibrator.config.decPulse)
+				offsetY += simulation.decVector[1] * sign * scale * (pulse.dec.duration / calibrator.config.decPulse)
 			}
 		}
 
@@ -319,6 +323,50 @@ test('fast clearing pulses stop at maxClearingPulse and never go below raPulse',
 
 	const floored = runCalibration({ fastClearing: true, maxClearingPulse: 50 }, { raVector: FAST_RA_VECTOR, decVector: [-0.15, 0.75] })
 	expect(floored.step.diagnostics.clearingSamples.map((sample) => sample.pulse)).toEqual([100, 100, 100])
+})
+
+// DEC motion of -0.15, 0.75 px per 100 ms pulse: 0.765 px, a rate of 0.00765 px/ms, so a return pulse sized for 0.8 of
+// the 4 px jump limit is floor(3.2 / 0.00765) = 418 ms.
+const RETURN_DEC_VECTOR = [-0.15, 0.75] as const
+
+test('the DEC return sends the DEC pulse time back south before completing', () => {
+	// 4 DEC steps reach the 2.4 px travel: 400 ms, shorter than a 418 ms return pulse, back to the DEC start at once.
+	const simulation = runCalibration({ decReturnEnabled: true, fastClearing: true }, { raVector: FAST_RA_VECTOR, decVector: RETURN_DEC_VECTOR })
+	const completed = simulation.step.completed!
+	const samples = simulation.step.diagnostics.decReturnSamples
+	expect(simulation.phases).toContain('decReturnPulse')
+	expect(simulation.phases.indexOf('validating')).toBeLessThan(simulation.phases.indexOf('decReturnPulse'))
+	expect(samples.map((sample) => [sample.pulse, sample.pulseDirection])).toEqual([[400, 'SOUTH']])
+	expect(completed.decReturnSteps).toBe(1)
+	expect(Math.hypot(completed.decStartX - completed.startX, completed.decStartY - completed.startY)).toBeLessThan(0.8)
+	expect(samples[0].netDistance).toBeLessThan(0.8)
+	expect(completed.warnings).not.toContain('dec_return_short')
+	// The return does not change the solution.
+	expect(completed.dec.ratePxPerMs).toBeCloseTo(0.765 / 100, 3)
+})
+
+test('the DEC return nudges toward the origin when the return pulses fall short', () => {
+	// 8 DEC steps reach 6 px: 800 ms back as 418 and 382 ms, but south moves at half the rate (backlash or a slower
+	// reverse), so the target is still 3 px north and three nudges of at most decPulse follow.
+	const simulation = runCalibration({ decReturnEnabled: true, fastClearing: true, minNetDecTravelPx: 6 }, { raVector: FAST_RA_VECTOR, decVector: RETURN_DEC_VECTOR, reverseDecScale: 0.5 })
+	const completed = simulation.step.completed!
+	const pulses = simulation.step.diagnostics.decReturnSamples.map((sample) => sample.pulse)
+	expect(pulses).toEqual([418, 382, 100, 100, 100])
+	expect(completed.decReturnSteps).toBe(5)
+	expect(completed.warnings).toContain('dec_return_short')
+	expect(simulation.calibrator.currentState.decReturnSteps).toBe(5)
+})
+
+test('the DEC return stops nudging within the tolerance and steps by decPulse without fast clearing', () => {
+	const slow = runCalibration({ decReturnEnabled: true, fastClearing: false }, { raVector: FAST_RA_VECTOR, decVector: RETURN_DEC_VECTOR })
+	expect(slow.step.diagnostics.decReturnSamples.map((sample) => sample.pulse)).toEqual([100, 100, 100, 100])
+
+	// A tolerance wider than the 1.5 px left after the slow return leaves it there.
+	const tolerant = runCalibration({ decReturnEnabled: true, fastClearing: true, decNudgeTolerancePx: 2 }, { raVector: FAST_RA_VECTOR, decVector: RETURN_DEC_VECTOR, reverseDecScale: 0.5 })
+	expect(tolerant.step.diagnostics.decReturnSamples.map((sample) => sample.pulse)).toEqual([400])
+	const none = runCalibration({ decReturnEnabled: true, fastClearing: true, maxDecNudges: 0, minNetDecTravelPx: 6 }, { raVector: FAST_RA_VECTOR, decVector: RETURN_DEC_VECTOR, reverseDecScale: 0.5 })
+	expect(none.step.diagnostics.decReturnSamples.map((sample) => sample.pulse)).toEqual([418, 382])
+	expect(() => new GuidingCalibrator(calibrationConfig({ maxDecReturnPulse: 0 }))).toThrow('maxDecReturnPulse')
 })
 
 test('setFastClearing applies to the next clearing move', () => {

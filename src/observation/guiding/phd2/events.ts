@@ -185,14 +185,15 @@ function phd2CalibratingOf(guideOutput: string, diagnostics: GuidingCalibrationD
 		dy: y - (diagnostics.startY ?? y),
 		// PHD2's `pos` shape is not modeled locally, so the measured image coordinates are reported.
 		pos: [x, y] as const,
-		step: diagnostics.raSteps + diagnostics.decSteps + diagnostics.clearingSteps,
+		step: diagnostics.raSteps + diagnostics.decSteps + diagnostics.clearingSteps + diagnostics.decReturnSteps,
 		State: diagnostics.phase,
 	}
 }
 
 // Distance, in pixels, travelled in the axis phase the calibrator is in.
 function calibrationDistanceOf(diagnostics: GuidingCalibrationDiagnostics) {
-	if (diagnostics.phase === 'raClearPulse' || diagnostics.phase === 'raClearMeasure') return diagnostics.clearingDistancePx
+	// The return legs report how far the target still is from the calibration origin.
+	if (diagnostics.phase === 'raClearPulse' || diagnostics.phase === 'raClearMeasure' || diagnostics.phase === 'decReturnPulse' || diagnostics.phase === 'decReturnMeasure') return diagnostics.clearingDistancePx
 	if (diagnostics.phase === 'decForwardPulse' || diagnostics.phase === 'decBacklashClearing' || diagnostics.phase === 'decForwardMeasure' || diagnostics.phase === 'decForwardComplete') return diagnostics.decNetDistancePx
 	return diagnostics.raNetDistancePx
 }

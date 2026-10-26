@@ -138,7 +138,8 @@ export interface GuiderClientOptions {
 	// durations are milliseconds and distances are pixels; an invalid combination throws at
 	// construction. Mounts with a fast guide rate usually only need shorter raPulse/decPulse.
 	// The client sets fastClearing from fastRecenter, and by default sizes the fast clearing pulses with the search
-	// half-side (maxClearingMovePx) and the guider's RA maximum pulse (maxClearingPulse).
+	// half-side (maxClearingMovePx) and the guider's RA maximum pulse (maxClearingPulse), and the DEC return pulses with
+	// the guider's DEC maximum pulse (maxDecReturnPulse).
 	readonly calibrator?: Partial<GuidingCalibrationConfig>
 	// Controller tuning merged over DEFAULT_GUIDER_CONFIG for every guider the client builds; an invalid
 	// combination throws at construction. Thresholds (deadbands, DEC reversal and backlash) are pixels and
@@ -364,9 +365,10 @@ export class GuiderClient {
 		this.#searchRegion = clamp(options.searchRegion || DEFAULT_SEARCH_REGION, 16, 128)
 		this.#stickyLockPosition = options.stickyLockPosition === true
 		this.#fastRecenter = options.fastRecenter !== false
-		// PHD2 sizes the fast recenter of its east leg with the search half-side and the RA maximum pulse.
+		// PHD2 sizes the fast recenter of its east and south legs with the search half-side and the axis maximum pulse.
 		const maxClearingPulse = options.guider?.maxPulseMsRA ?? DEFAULT_GUIDER_CONFIG.maxPulseMsRA
-		this.#calibrator = new GuidingCalibrator({ maxClearingMovePx: this.#searchRegion / 2, maxClearingPulse, ...options.calibrator, fastClearing: this.#fastRecenter })
+		const maxDecReturnPulse = options.guider?.maxPulseMsDEC ?? DEFAULT_GUIDER_CONFIG.maxPulseMsDEC
+		this.#calibrator = new GuidingCalibrator({ maxClearingMovePx: this.#searchRegion / 2, maxClearingPulse, maxDecReturnPulse, ...options.calibrator, fastClearing: this.#fastRecenter })
 		this.#tracker = tracker
 		this.#guider = this.#makeGuider(undefined)
 		this.#dither = new DitherGenerator({ mode: options.ditherMode })
@@ -435,15 +437,16 @@ export class GuiderClient {
 	}
 
 	// Longest pulse, in milliseconds, the current configuration can emit: the guider limits of both axes, the
-	// calibration pulses of both axes, the fast clearing pulse while fast recenter is on and the guiding assistant
-	// backlash pulse, rounded like a dispatched pulse.
+	// calibration pulses of both axes, the fast clearing and DEC return pulses while fast recenter is on and the guiding
+	// assistant backlash pulse, rounded like a dispatched pulse.
 	// Only the default of an admission ceiling and the refusal of an admission rely on it.
 	maxPulseDuration() {
 		const guider = { ...DEFAULT_GUIDER_CONFIG, ...this.options.guider }
 		const calibrator = this.#calibrator.config
 		const backlashPulse = this.#guidingAssistant?.config.backlashPulse ?? DEFAULT_GUIDING_ASSISTANT_CONFIG.backlashPulse
 		const clearingPulse = calibrator.fastClearing ? calibrator.maxClearingPulse : 0
-		return Math.max(1, Math.round(Math.max(guider.maxPulseMsRA, guider.maxPulseMsDEC, calibrator.raPulse, calibrator.decPulse, clearingPulse, backlashPulse)))
+		const decReturnPulse = calibrator.fastClearing && calibrator.decReturnEnabled ? calibrator.maxDecReturnPulse : 0
+		return Math.max(1, Math.round(Math.max(guider.maxPulseMsRA, guider.maxPulseMsDEC, calibrator.raPulse, calibrator.decPulse, clearingPulse, decReturnPulse, backlashPulse)))
 	}
 
 	// Binds the active camera and guide output, enables image BLOBs, and starts listening.
