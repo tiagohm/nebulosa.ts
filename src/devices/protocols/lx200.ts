@@ -1,6 +1,6 @@
 import type { Socket, TCPSocketListener } from 'bun'
 import { daysInMonth, formatTemporal, type Temporal, type TemporalDate, temporalAdd, temporalFromDate } from '../../astronomy/time/temporal'
-import { type Angle, parseAngle, toDms, toHms } from '../../math/units/angle'
+import { type Angle, normalizePI, parseAngle, toDms, toHms } from '../../math/units/angle'
 import { type ProtocolClient, type ProtocolClientEntry, ProtocolClients } from './client'
 
 // Server implementing the Meade LX200 serial command protocol over TCP, so LX200-speaking clients (e.g.
@@ -28,8 +28,14 @@ export interface Lx200ProtocolHandler {
 	readonly clientOpen?: (server: Lx200ProtocolServer, client: ProtocolClient) => void
 	readonly rightAscension: (server: Lx200ProtocolServer) => Angle // J2000
 	readonly declination: (server: Lx200ProtocolServer) => Angle // J2000
+	// Site longitude in radians, east positive; also called with the value of :Sg# when setLongitude is absent.
 	readonly longitude: (server: Lx200ProtocolServer, longitude?: Angle) => Angle
+	// Site latitude in radians, north positive; also called with the value of :St# when setLatitude is absent.
 	readonly latitude: (server: Lx200ProtocolServer, latitude?: Angle) => Angle
+	// Applies the site longitude of :Sg#, in radians east positive within (-π, π]; returning false answers 0.
+	readonly setLongitude?: (server: Lx200ProtocolServer, longitude: Angle, client: ProtocolClient) => boolean | void
+	// Applies the site latitude of :St#, in radians north positive; returning false answers 0.
+	readonly setLatitude?: (server: Lx200ProtocolServer, latitude: Angle, client: ProtocolClient) => boolean | void
 	readonly dateTime: (server: Lx200ProtocolServer, date?: readonly [Temporal, number]) => readonly [Temporal, number]
 	readonly tracking: (server: Lx200ProtocolServer) => boolean
 	readonly parked: (server: Lx200ProtocolServer) => boolean
@@ -52,9 +58,9 @@ export interface Lx200ProtocolServerOptions {
 	handler: Lx200ProtocolHandler
 	name?: string
 	version?: string
-	// Refuses the site and clock setters (:Sg#, :St#, :SG#, :SL#, :SC#) with 0 without calling the handler, for a
-	// mount whose site and time must not be changed by clients; the getters still read the handler.
-	readOnlySite?: boolean
+	// Refuses the clock setters (:SG#, :SL#, :SC#) with 0 without calling the handler, for a mount whose time must not
+	// be changed by clients; the getters still read the handler.
+	readOnlyTime?: boolean
 }
 
 // Command assembly state of one client: the partially received command, the staged target, and the date,
@@ -237,7 +243,7 @@ export class Lx200ProtocolServer {
 	#processCommand(entry: ProtocolClientEntry<Lx200ClientState>, rawCommand: string) {
 		const { socket, state, client } = entry
 		const command = rawCommand.startsWith('#') ? rawCommand.slice(1) : rawCommand
-		const { handler, readOnlySite } = this.options
+		const { handler, readOnlyTime } = this.options
 
 		switch (command) {
 			// Get Telescope Product Name
@@ -330,21 +336,24 @@ export class Lx200ProtocolServer {
 					state.coordinates[1] = dec
 					return this.#one(socket)
 				}
-				// Site and clock setters, refused as a whole when the site is read-only
-				else if (readOnlySite && (command.startsWith(':Sg') || command.startsWith(':St') || command.startsWith(':SG') || command.startsWith(':SL') || command.startsWith(':SC'))) {
+				// Clock setters, refused as a whole when the time is read-only
+				else if (readOnlyTime && (command.startsWith(':SG') || command.startsWith(':SL') || command.startsWith(':SC'))) {
 					return this.#zero(socket)
 				}
-				// Set current site’s longitude
+				// Set current site’s longitude, west positive on the wire and east positive within (-π, π] for the handler
 				else if (command.startsWith(':Sg')) {
-					const longitude = parseAngle(command.slice(3, command.length - 1))
-					if (longitude === undefined) return this.#zero(socket)
-					handler.longitude(this, -longitude)
+					const value = parseAngle(command.slice(3, command.length - 1))
+					if (value === undefined) return this.#zero(socket)
+					const longitude = normalizePI(-value)
+					if (handler.setLongitude !== undefined) return handler.setLongitude(this, longitude, client) === false ? this.#zero(socket) : this.#one(socket)
+					handler.longitude(this, longitude)
 					return this.#one(socket)
 				}
 				// Sets the current site latitude
 				else if (command.startsWith(':St')) {
 					const latitude = parseAngle(command.slice(3, command.length - 1))
 					if (latitude === undefined) return this.#zero(socket)
+					if (handler.setLatitude !== undefined) return handler.setLatitude(this, latitude, client) === false ? this.#zero(socket) : this.#one(socket)
 					handler.latitude(this, latitude)
 					return this.#one(socket)
 				}

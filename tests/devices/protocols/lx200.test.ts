@@ -308,37 +308,81 @@ test('closes only the client that sends an oversized command', async () => {
 	}
 })
 
-test('refuses site and clock setters without calling the handler when the site is read-only', async () => {
+test('refuses clock setters without calling the handler when the time is read-only', async () => {
 	const writes: string[] = []
 
 	await withLx200Server(
 		async (client) => {
-			const response = readUntil(client, (value) => value === '00000')
+			const response = readUntil(client, (value) => value === '000')
 
-			client.write(':Sg070*30#:St+12*15#:SG+03.0#:SL02:06:07#:SC04/24/26#', 'ascii')
+			client.write(':SG+03.0#:SL02:06:07#:SC04/24/26#', 'ascii')
 
-			expect(await response).toBe('00000')
+			expect(await response).toBe('000')
 		},
 		makeHandler({
-			longitude: (_, longitude) => {
-				if (longitude !== undefined) writes.push('longitude')
-				return 0
-			},
-			latitude: (_, latitude) => {
-				if (latitude !== undefined) writes.push('latitude')
-				return 0
-			},
 			dateTime: (_, date) => {
 				if (date !== undefined) writes.push('dateTime')
 				return [temporalFromDate(2026, 1, 1), 0] as const
 			},
 		}),
-		{ readOnlySite: true },
+		{ readOnlyTime: true },
 	)
 
 	expect(writes).toEqual([])
 })
 
+test('applies the site through the setters with the client, answering their refusal', async () => {
+	const applied: [string, number, string][] = []
+	let accept = true
+
+	await withLx200Server(
+		async (client) => {
+			const accepted = readUntil(client, (value) => value === '11')
+			client.write(':St-23*30#:Sg046*38#', 'ascii')
+			expect(await accepted).toBe('11')
+
+			accept = false
+			const refused = readUntil(client, (value) => value === '00')
+			client.write(':St+10*00#:Sg010*00#', 'ascii')
+			expect(await refused).toBe('00')
+		},
+		makeHandler({
+			longitude: (_, longitude) => {
+				if (longitude !== undefined) throw new Error('the setter must be used')
+				return 0
+			},
+			setLongitude: (_, longitude, client) => {
+				applied.push(['longitude', longitude, client.id])
+				return accept
+			},
+			setLatitude: (_, latitude, client) => {
+				applied.push(['latitude', latitude, client.id])
+				return accept
+			},
+		}),
+	)
+
+	expect(applied.map(([kind]) => kind)).toEqual(['latitude', 'longitude', 'latitude', 'longitude'])
+	expect(applied[0][1]).toBeCloseTo(dms(-23, 30), 12)
+	expect(applied[1][1]).toBeCloseTo(dms(-46, 38), 12)
+	expect(new Set(applied.map(([, , id]) => id)).size).toBe(1)
+})
+
+test('wraps a west-positive longitude beyond 180 degrees to east positive', async () => {
+	const longitudes: number[] = []
+
+	await withLx200Server(
+		async (client) => {
+			const response = readUntil(client, (value) => value === '11')
+			client.write(':Sg313*22#:Sg180*00#', 'ascii')
+			expect(await response).toBe('11')
+		},
+		makeHandler({ setLongitude: (_, longitude) => void longitudes.push(longitude) }),
+	)
+
+	expect(longitudes[0]).toBeCloseTo(dms(46, 38), 12)
+	expect(longitudes[1]).toBeCloseTo(dms(180), 12)
+})
 test('reports a refused or unsupported sync as failed', async () => {
 	for (const handler of [makeHandler({ sync: () => false }), makeHandler()]) {
 		await withLx200Server(async (client) => {
