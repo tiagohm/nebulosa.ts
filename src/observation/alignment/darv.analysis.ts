@@ -6,9 +6,9 @@ import type { Point } from '../../math/numerical/geometry'
 import { robustLinearLeastSquares } from '../../math/numerical/least.squares'
 import { medianOf } from '../../math/numerical/statistics'
 import type { Angle } from '../../math/units/angle'
-import type { DarvExposureMode } from './polaralignment.darv'
-import { type DarvPolarErrorComponentResult, estimateDarvPolarErrorComponent } from './polaralignment.darv.solve'
-import { type DarvImageTransform, DarvMatrixTransform } from './polaralignment.darv.transform'
+import type { DarvExposureMode } from './darv'
+import { type DarvPolarErrorComponentResult, estimateDarvPolarErrorComponent } from './darv.solve'
+import { type DarvImageTransform, DarvMatrixTransform } from './darv.transform'
 
 // Image-based DARV reduction using generic robust streak fits and bounded, DARV-specific pairing.
 // Image positions are zero-based pixel centers (+X right, +Y down). Durations are SI seconds;

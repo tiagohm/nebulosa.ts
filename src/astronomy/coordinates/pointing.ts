@@ -84,8 +84,8 @@ export function isIdentityEquatorialPointingModel(model: EquatorialPointingModel
 //   Δδ = ID + MA·sin H + ME·cos H
 //
 // The declination fed to the sec δ / tan δ terms is clamped to ±MAX_POINTING_DECLINATION, so the
-// result stays finite at the poles. When `o` is provided it receives the result and is returned.
-export function equatorialPointingError(hourAngle: Angle, declination: Angle, model: EquatorialPointingModel, o?: [Angle, Angle]): [Angle, Angle] {
+// result stays finite at the poles. When `out` is provided it receives the result and is returned.
+export function equatorialPointingError(hourAngle: Angle, declination: Angle, model: EquatorialPointingModel, out?: [Angle, Angle]): [Angle, Angle] {
 	const cosHourAngle = Math.cos(hourAngle)
 	const sinHourAngle = Math.sin(hourAngle)
 
@@ -97,10 +97,10 @@ export function equatorialPointingError(hourAngle: Angle, declination: Angle, mo
 	const deltaHourAngle = model.indexHourAngle + model.coneError * secDeclination + model.axisNonPerpendicularity * tanDeclination - model.polarAzimuthError * cosHourAngle * tanDeclination + model.polarAltitudeError * sinHourAngle * tanDeclination
 	const deltaDeclination = model.indexDeclination + model.polarAzimuthError * sinHourAngle + model.polarAltitudeError * cosHourAngle
 
-	if (o) {
-		o[0] = deltaHourAngle
-		o[1] = deltaDeclination
-		return o
+	if (out) {
+		out[0] = deltaHourAngle
+		out[1] = deltaDeclination
+		return out
 	}
 
 	return [deltaHourAngle, deltaDeclination]
@@ -141,9 +141,9 @@ function tubeFlexureSkyOffset(hourAngle: Angle, declination: Angle, latitude: An
 // clamped to ±MAX_POINTING_DECLINATION so the hour-angle pair stays finite. Applying that pair as a
 // turn about the polar axis still drops the east-west droop at the pole itself, where rotating in H
 // does not move the optical axis; `applyTubeFlexureError` keeps that component as a great-circle
-// offset. A zero flexure returns exactly `[0, 0]`. When `o` is provided it receives the result and is
+// offset. A zero flexure returns exactly `[0, 0]`. When `out` is provided it receives the result and is
 // returned.
-export function tubeFlexureError(hourAngle: Angle, declination: Angle, latitude: Angle, flexure: Angle, o?: [Angle, Angle]): [Angle, Angle] {
+export function tubeFlexureError(hourAngle: Angle, declination: Angle, latitude: Angle, flexure: Angle, out?: [Angle, Angle]): [Angle, Angle] {
 	let deltaHourAngle = 0
 	let deltaDeclination = 0
 
@@ -156,10 +156,10 @@ export function tubeFlexureError(hourAngle: Angle, declination: Angle, latitude:
 		deltaDeclination = north
 	}
 
-	if (o) {
-		o[0] = deltaHourAngle
-		o[1] = deltaDeclination
-		return o
+	if (out) {
+		out[0] = deltaHourAngle
+		out[1] = deltaDeclination
+		return out
 	}
 
 	return [deltaHourAngle, deltaDeclination]
@@ -172,10 +172,10 @@ export function tubeFlexureError(hourAngle: Angle, declination: Angle, latitude:
 // all radians. Since `H = LST − RA`, a positive hour-angle error corresponds to a negative right
 // ascension error, hence `RA − ΔH`. The returned right ascension is normalized to [0, TAU); the
 // declination is left unwrapped so callers can detect and handle a crossing of the pole themselves.
-// When `o` is provided it receives the result and is returned.
-export function applyEquatorialPointingError(rightAscension: Angle, declination: Angle, lst: Angle, model: EquatorialPointingModel, o?: [Angle, Angle]): readonly [Angle, Angle] {
+// When `out` is provided it receives the result and is returned.
+export function applyEquatorialPointingError(rightAscension: Angle, declination: Angle, lst: Angle, model: EquatorialPointingModel, out?: [Angle, Angle]): readonly [Angle, Angle] {
 	const hourAngle = lst - rightAscension
-	const error = equatorialPointingError(hourAngle, declination, model, o)
+	const error = equatorialPointingError(hourAngle, declination, model, out)
 
 	if (Math.abs(declination) > MAX_POINTING_DECLINATION) {
 		return applyPolarPointingError(rightAscension, declination, hourAngle, model, error)
@@ -194,16 +194,16 @@ export function applyEquatorialPointingError(rightAscension: Angle, declination:
 // convention as `applyEquatorialPointingError` away from the poles. Within MAX_POINTING_DECLINATION
 // of a pole, a hour-angle turn no longer moves the optical axis, so the east-west droop is applied
 // as a great-circle offset instead. A zero flexure returns the input with right ascension normalized
-// to [0, TAU). When `o` is provided it receives the result and is returned.
-export function applyTubeFlexureError(rightAscension: Angle, declination: Angle, lst: Angle, latitude: Angle, flexure: Angle, o?: [Angle, Angle]): readonly [Angle, Angle] {
+// to [0, TAU). When `out` is provided it receives the result and is returned.
+export function applyTubeFlexureError(rightAscension: Angle, declination: Angle, lst: Angle, latitude: Angle, flexure: Angle, out?: [Angle, Angle]): readonly [Angle, Angle] {
 	const hourAngle = lst - rightAscension
 
 	if (Math.abs(declination) > MAX_POINTING_DECLINATION) {
 		const [east, north] = tubeFlexureSkyOffset(hourAngle, declination, latitude, flexure)
-		return applySkyOffset(rightAscension, declination, east, north, o ?? [0, 0])
+		return applySkyOffset(rightAscension, declination, east, north, out ?? [0, 0])
 	}
 
-	const error = tubeFlexureError(hourAngle, declination, latitude, flexure, o)
+	const error = tubeFlexureError(hourAngle, declination, latitude, flexure, out)
 	error[0] = normalizeAngle(rightAscension - error[0])
 	error[1] += declination
 	return error

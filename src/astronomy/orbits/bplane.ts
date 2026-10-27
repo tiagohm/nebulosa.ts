@@ -1,5 +1,5 @@
 import { GM_EARTH } from '../../core/constants'
-import { type Vec3, vecCross, vecDivScalar, vecDot, vecLength, vecMinus, vecMulScalar, vecPlus } from '../../math/linear-algebra/vec3'
+import { type Vec3, vecCross, vecDivScalar, vecDot, vecLength, vecMinus, vecMulScalar, vecPlus, vecX, vecY, vecZ, vecZero } from '../../math/linear-algebra/vec3'
 
 // B-plane (target-plane) reduction of a planetary close approach. Near a flyby the small body's motion
 // relative to the planet is, for a few hours, a two-body hyperbola; the B-plane is the plane through the
@@ -59,7 +59,7 @@ const RADIAL_TOLERANCE = 1e-8
 // pole (normalized); a fallback reference axis is used when the pole is parallel to S; R = S x T.
 function targetPlaneAxes(sHat: Vec3, pole: Vec3): [Vec3, Vec3] {
 	let tHat = vecCross(sHat, pole)
-	if (vecLength(tHat) < POLE_PARALLEL_TOLERANCE) tHat = vecCross(sHat, Math.abs(sHat[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0])
+	if (vecLength(tHat) < POLE_PARALLEL_TOLERANCE) tHat = vecCross(sHat, Math.abs(sHat[0]) < 0.9 ? vecX() : vecY())
 	tHat = vecDivScalar(tHat, vecLength(tHat))
 	return [tHat, vecCross(sHat, tHat)]
 }
@@ -75,7 +75,7 @@ function targetPlaneAxes(sHat: Vec3, pole: Vec3): [Vec3, Vec3] {
 // distance.
 export function closeApproachBPlane(relativePosition: Vec3, relativeVelocity: Vec3, options?: BPlaneOptions): BPlane {
 	const mu = options?.mu ?? GM_EARTH
-	const pole = options?.pole ?? [0, 0, 1]
+	const pole = options?.pole ?? vecZ()
 
 	const r = vecLength(relativePosition)
 	const vSquared = vecDot(relativeVelocity, relativeVelocity)
@@ -99,7 +99,7 @@ export function closeApproachBPlane(relativePosition: Vec3, relativeVelocity: Ve
 	// itself. Handle it explicitly so the orbit normal is never divided by a zero h.
 	if (h < RADIAL_TOLERANCE * r * Math.sqrt(vSquared)) {
 		const [tHat, rHat] = targetPlaneAxes(eHat, pole)
-		return { impactParameter: 0, bt: 0, br: 0, vInfinity, periapsisDistance: 0, sHat: eHat, tHat, rHat, bVector: [0, 0, 0] }
+		return { impactParameter: 0, bt: 0, br: 0, vInfinity, periapsisDistance: 0, sHat: eHat, tHat, rHat, bVector: vecZero() }
 	}
 
 	const periapsisDistance = semiMajorAxis * (1 - e) // > 0 since a < 0 and e > 1

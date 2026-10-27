@@ -5,7 +5,7 @@ import { moon } from '../../../src/astronomy/ephemeris/models/analytical/elpmpp0
 import { earth, mars } from '../../../src/astronomy/ephemeris/models/analytical/vsop87e'
 import { composeEphemerisPaths, customEphemerisEndpoint, ephemerisPath, naifEphemerisEndpoint, relativeEphemerisPath, reverseEphemerisPath, sameEphemerisEndpoint, SOLAR_SYSTEM_BARYCENTER } from '../../../src/astronomy/ephemeris/path'
 import { Timescale, timeShift, timeSubtract, timeYMDHMS } from '../../../src/astronomy/time/time'
-import { vecXAxis, vecYAxis, vecZero, type MutVec3 } from '../../../src/math/linear-algebra/vec3'
+import { type MutVec3, vecX, vecY, vecZ, vecZero } from '../../../src/math/linear-algebra/vec3'
 import { mulberry32 } from '../../../src/math/numerical/random'
 
 const TIME = timeYMDHMS(2020, 1, 1, 0, 0, 0, Timescale.TDB)
@@ -91,18 +91,9 @@ test('relative paths subtract time-varying provider-local singletons without mut
 		const time = timeShift(TIME, offset)
 		const state = path.stateAt(time)
 		expect(state).toBe(output)
-		expect(state).toEqual([
-			[2 + offset, 0, 0],
-			[1, 0, 0],
-		])
-		expect(originScratch).toEqual([
-			[3 + offset, 0, 0],
-			[1, 0, 0],
-		])
-		expect(targetScratch).toEqual([
-			[5 + 2 * offset, 0, 0],
-			[2, 0, 0],
-		])
+		expect(state).toEqual([[2 + offset, 0, 0], vecX()])
+		expect(originScratch).toEqual([[3 + offset, 0, 0], vecX()])
+		expect(targetScratch).toEqual([[5 + 2 * offset, 0, 0], vecX(2)])
 		for (const vector of state) for (const borrowed of [...originScratch, ...targetScratch]) expect(vector).not.toBe(borrowed)
 	}
 	expect(origin.stateAt(TIME)).toBe(origin.stateAt(timeShift(TIME, 1)))
@@ -119,17 +110,11 @@ test('endpoint identity uses kind and id, not display name', () => {
 })
 
 test('invalid composition and relative centers fail before sampling', () => {
-	const earth = ephemerisPath(SOLAR_SYSTEM_BARYCENTER, EARTH, () => [vecXAxis(), vecYAxis()])
-	const moon = ephemerisPath(EARTH, MOON, () => [
-		[0, 2, 0],
-		[0, 0, 3],
-	])
+	const earth = ephemerisPath(SOLAR_SYSTEM_BARYCENTER, EARTH, () => [vecX(), vecY()])
+	const moon = ephemerisPath(EARTH, MOON, () => [vecY(2), vecZ(3)])
 	expect(() => composeEphemerisPaths(moon, earth)).toThrow('first target does not match second center')
 	expect(() => relativeEphemerisPath(moon, earth)).toThrow('centers do not match')
-	expect(relativeEphemerisPath(composeEphemerisPaths(earth, moon), earth).stateAt(TIME)).toEqual([
-		[0, 2, 0],
-		[0, 0, 3],
-	])
+	expect(relativeEphemerisPath(composeEphemerisPaths(earth, moon), earth).stateAt(TIME)).toEqual([vecY(2), vecZ(3)])
 })
 
 test('VSOP relative Earth-to-Mars and ELP barycentric Moon agree with low-level states', () => {
@@ -187,11 +172,11 @@ test('mismatched endpoint kind is rejected before either provider is sampled', (
 	let samples = 0
 	const first = ephemerisPath(SOLAR_SYSTEM_BARYCENTER, EARTH, () => {
 		samples++
-		return [vecXAxis(), vecZero()]
+		return [vecX(), vecZero()]
 	})
 	const second = ephemerisPath(customEphemerisEndpoint(String(Naif.EARTH), 'Earth'), MOON, () => {
 		samples++
-		return [vecYAxis(), vecZero()]
+		return [vecY(), vecZero()]
 	})
 	expect(sameEphemerisEndpoint(first.target, second.center)).toBe(false)
 	expect(() => composeEphemerisPaths(first, second)).toThrow('first target does not match second center')

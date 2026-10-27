@@ -4,7 +4,7 @@ import { gibbs, type GibbsWarning } from '../../../../src/astronomy/orbits/deter
 import { Timescale, timeYMDHMS } from '../../../../src/astronomy/time/time'
 import { AU_KM, DEG2RAD, GM_SUN_PITJEVA_2005, GM_SUN_PITJEVA_2005_KM3_S2, PI, PIOVERTWO } from '../../../../src/core/constants'
 import { matIdentity } from '../../../../src/math/linear-algebra/mat3'
-import { type MutVec3, type Vec3, vecDistance, vecLength } from '../../../../src/math/linear-algebra/vec3'
+import { type MutVec3, type Vec3, vecDistance, vecLength, vecX, vecY, vecZero } from '../../../../src/math/linear-algebra/vec3'
 
 const EPOCH = timeYMDHMS(2026, 1, 1, 0, 0, 0, Timescale.TT)
 const IDENTITY_ROTATION = matIdentity()
@@ -87,7 +87,7 @@ test('keeps km and second units consistent when mu uses km cubed per second squa
 })
 
 test('rejects non-coplanar vectors by default and can expose bad diagnostics', () => {
-	const r1: Vec3 = [1, 0, 0]
+	const r1: Vec3 = vecX()
 	const r2 = circularPosition(5 * DEG2RAD)
 	const r3: Vec3 = [Math.cos(10 * DEG2RAD), Math.sin(10 * DEG2RAD), 0.01]
 
@@ -131,14 +131,14 @@ test('recovers the middle velocity for an elliptical half-orbit through periapsi
 })
 
 test('rejects collinear and degenerate vectors', () => {
-	expect(() => gibbs([1, 0, 0], [2, 0, 0], [3, 0, 0], 1)).toThrow('NEAR_COLINEAR_POSITIONS')
-	expect(() => gibbs([0, 0, 0], [1, 0, 0], [0, 1, 0], 1)).toThrow('INVALID_POSITION_NORM')
+	expect(() => gibbs(vecX(), vecX(2), vecX(3), 1)).toThrow('NEAR_COLINEAR_POSITIONS')
+	expect(() => gibbs(vecZero(), vecX(), vecY(), 1)).toThrow('INVALID_POSITION_NORM')
 })
 
 test('rejects invalid numeric inputs', () => {
-	expect(() => gibbs([Number.NaN, 0, 0], [1, 0, 0], [0, 1, 0], 1)).toThrow('INVALID_POSITION_NORM')
-	expect(() => gibbs([1, 0, 0], [0, 1, 0], [-1, 0, 0], 0)).toThrow('INVALID_GRAVITATIONAL_PARAMETER')
-	expect(() => gibbs([1, 0, 0], [Number.POSITIVE_INFINITY, 0, 0], [0, 1, 0], 1)).toThrow('INVALID_POSITION_NORM')
+	expect(() => gibbs([Number.NaN, 0, 0], vecX(), vecY(), 1)).toThrow('INVALID_POSITION_NORM')
+	expect(() => gibbs(vecX(), vecY(), vecX(-1), 0)).toThrow('INVALID_GRAVITATIONAL_PARAMETER')
+	expect(() => gibbs(vecX(), [Number.POSITIVE_INFINITY, 0, 0], vecY(), 1)).toThrow('INVALID_POSITION_NORM')
 })
 
 test('does not mutate input vectors', () => {

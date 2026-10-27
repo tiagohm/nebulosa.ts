@@ -8,6 +8,7 @@ import { Timescale, timeYMDHMS, tt } from '../../../../src/astronomy/time/time'
 import { DAYMIN, DEG2RAD, TAU } from '../../../../src/core/constants'
 import { fileHandleSource } from '../../../../src/io/file'
 import { readLines } from '../../../../src/io/io'
+import { vecX } from '../../../../src/math/linear-algebra/vec3'
 import { toKilometer } from '../../../../src/math/units/distance'
 import { toKilometerPerSecond } from '../../../../src/math/units/velocity'
 
@@ -559,7 +560,7 @@ test('OMM AFSPC and improved modes retain gravity and match WGS-72 at epoch', ()
 })
 
 test('TEME to ITRF by GMST matches reference rotation', () => {
-	const itrf = temeToItrfByGmst([6400, 0, 0], 10)
+	const itrf = temeToItrfByGmst(vecX(6400), 10)
 	expectVector(itrf, [-5370.057786089295, 3481.7351096919665, 0], 9)
 })
 

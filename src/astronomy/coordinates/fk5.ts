@@ -21,16 +21,16 @@ export function fk5(ra: Angle, dec: Angle, distance: Distance = ONE_KILOPARSEC):
 }
 
 // Precess the FK5 cartesian coordinate from equinox to other.
-export function precessFk5(p: CartesianCoordinate, from: Time, to: Time, o?: MutVec3): CartesianCoordinate {
-	return matMulVec(precessionMatrixCapitaine(from, to), p, o)
+export function precessFk5(p: CartesianCoordinate, from: Time, to: Time, out?: MutVec3): CartesianCoordinate {
+	return matMulVec(precessionMatrixCapitaine(from, to), p, out)
 }
 
 // Precess the FK5 cartesian coordinate from given equinox to J2000.
-export function precessFk5ToJ2000(p: CartesianCoordinate, equinox: Time, o?: MutVec3): CartesianCoordinate {
-	return precessFk5(p, equinox, J2000, o)
+export function precessFk5ToJ2000(p: CartesianCoordinate, equinox: Time, out?: MutVec3): CartesianCoordinate {
+	return precessFk5(p, equinox, J2000, out)
 }
 
 // Precess the FK5 cartesian coordinate from J2000 to given equinox.
-export function precessFk5FromJ2000(p: CartesianCoordinate, equinox: Time, o?: MutVec3): CartesianCoordinate {
-	return precessFk5(p, J2000, equinox, o)
+export function precessFk5FromJ2000(p: CartesianCoordinate, equinox: Time, out?: MutVec3): CartesianCoordinate {
+	return precessFk5(p, J2000, equinox, out)
 }

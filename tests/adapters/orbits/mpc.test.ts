@@ -7,7 +7,7 @@ import { fitOrbit } from '../../../src/astronomy/orbits/fit'
 import { Timescale, timeShift, timeSubtract, timeYMDHMS } from '../../../src/astronomy/time/time'
 import { ASEC2RAD, ECLIPTIC_J2000_MATRIX } from '../../../src/core/constants'
 import { matIdentity, matMulVec, matTranspose } from '../../../src/math/linear-algebra/mat3'
-import { vecLength } from '../../../src/math/linear-algebra/vec3'
+import { vecLength, vecX } from '../../../src/math/linear-algebra/vec3'
 import { deg, toDeg } from '../../../src/math/units/angle'
 import { kilometer, meter } from '../../../src/math/units/distance'
 import { isNetworkTestSkipped } from '../../util'
@@ -750,7 +750,7 @@ describe('orbit fit adapter', () => {
 
 	test('rmsRA of 1 arcsec is raErr without an extra cos(dec)', () => {
 		const observation = syntheticOptical(0)
-		const fitted = observationToOrbitFitObservation(observation, [1, 0, 0])
+		const fitted = observationToOrbitFitObservation(observation, vecX())
 		expect(fitted.raErr).toBe(ASEC2RAD)
 		expect(fitted.decErr).toBe(ASEC2RAD)
 	})
@@ -758,7 +758,7 @@ describe('orbit fit adapter', () => {
 	test('non-optical and unresolved observers are rejected, not dropped', () => {
 		const optical = syntheticOptical(0)
 		const radar: MPCObservation = { type: 'radar', time: EPOCH, station: '251' }
-		const result = observationsToOrbitFit([optical, radar], (time, observation) => (observation.station === '500' ? [1, 0, 0] : undefined))
+		const result = observationsToOrbitFit([optical, radar], (time, observation) => (observation.station === '500' ? vecX() : undefined))
 		expect(result.observations).toHaveLength(1)
 		expect(result.rejected).toEqual([radar])
 		expect(observationDesignation(optical)).toBeUndefined()

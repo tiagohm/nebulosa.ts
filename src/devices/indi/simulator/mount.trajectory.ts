@@ -77,39 +77,39 @@ export function boresightHistorySpan(history: BoresightHistory): readonly [numbe
 	return [history.times[physicalIndex(history, 0)], history.times[physicalIndex(history, history.count - 1)]]
 }
 
-// Interpolates the boresight at `time`, writing `[rightAscension, declination]` into `o` and returning
+// Interpolates the boresight at `time`, writing `[rightAscension, declination]` into `out` and returning
 // it, or undefined when the history is empty.
 //
 // Times outside the retained span are clamped to its ends rather than extrapolated: beyond the window
 // the simulator genuinely does not know, and holding the nearest known direction understates the
 // motion instead of inventing it. Right ascension is interpolated along the shorter arc, so a sample
 // pair straddling zero behaves.
-export function sampleBoresightAt(history: BoresightHistory, time: number, o: [Angle, Angle]): [Angle, Angle] | undefined {
-	return sampleBoresightAtSide(history, time, true, o)
+export function sampleBoresightAt(history: BoresightHistory, time: number, out: [Angle, Angle]): [Angle, Angle] | undefined {
+	return sampleBoresightAtSide(history, time, true, out)
 }
 
 // Interpolates at `time`, choosing the state after an equal-timestamp jump when `rightSide` is true
-// and the state before it otherwise. The returned tuple aliases `o`; an empty history returns
+// and the state before it otherwise. The returned tuple aliases `out`; an empty history returns
 // undefined. This endpoint choice gives an exposure the new state at its opening instant and the old
 // state at its closing instant, so a zero-duration configuration jump contributes no fictitious trail.
-function sampleBoresightAtSide(history: BoresightHistory, time: number, rightSide: boolean, o: [Angle, Angle]): [Angle, Angle] | undefined {
+function sampleBoresightAtSide(history: BoresightHistory, time: number, rightSide: boolean, out: [Angle, Angle]): [Angle, Angle] | undefined {
 	if (history.count === 0) return undefined
 
 	const last = history.count - 1
 	const first = physicalIndex(history, 0)
 
 	if (time < history.times[first] || (time === history.times[first] && !rightSide)) {
-		o[0] = history.rightAscensions[first]
-		o[1] = history.declinations[first]
-		return o
+		out[0] = history.rightAscensions[first]
+		out[1] = history.declinations[first]
+		return out
 	}
 
 	const newest = physicalIndex(history, last)
 
 	if (time > history.times[newest] || (time === history.times[newest] && rightSide)) {
-		o[0] = history.rightAscensions[newest]
-		o[1] = history.declinations[newest]
-		return o
+		out[0] = history.rightAscensions[newest]
+		out[1] = history.declinations[newest]
+		return out
 	}
 
 	// The boundary is the first sample after `time` on the right side and the first sample at or after it
@@ -127,9 +127,9 @@ function sampleBoresightAtSide(history: BoresightHistory, time: number, rightSid
 	if (!rightSide && low < history.count) {
 		const at = physicalIndex(history, low)
 		if (history.times[at] === time) {
-			o[0] = history.rightAscensions[at]
-			o[1] = history.declinations[at]
-			return o
+			out[0] = history.rightAscensions[at]
+			out[1] = history.declinations[at]
+			return out
 		}
 	}
 
@@ -138,9 +138,9 @@ function sampleBoresightAtSide(history: BoresightHistory, time: number, rightSid
 	const span = history.times[b] - history.times[a]
 	const fraction = (time - history.times[a]) / span
 
-	o[0] = normalizeAngle(history.rightAscensions[a] + normalizePI(history.rightAscensions[b] - history.rightAscensions[a]) * fraction)
-	o[1] = history.declinations[a] + (history.declinations[b] - history.declinations[a]) * fraction
-	return o
+	out[0] = normalizeAngle(history.rightAscensions[a] + normalizePI(history.rightAscensions[b] - history.rightAscensions[a]) * fraction)
+	out[1] = history.declinations[a] + (history.declinations[b] - history.declinations[a]) * fraction
+	return out
 }
 
 // Length of the path the boresight swept across `[startTime, endTime]`, radians on the sky.

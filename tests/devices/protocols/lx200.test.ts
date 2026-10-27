@@ -4,6 +4,7 @@ import { temporalFromDate } from '../../../src/astronomy/time/temporal'
 import type { ProtocolClient } from '../../../src/devices/protocols/client'
 import { Lx200ProtocolServer, type Lx200ProtocolHandler, type MoveDirection, type SlewRate } from '../../../src/devices/protocols/lx200'
 import { dms, hms } from '../../../src/math/units/angle'
+import { connectPaused } from '../../util/socket'
 
 test('responds to the single-byte LX200 ACK request', async () => {
 	await withLx200Server(async (client) => {
@@ -706,3 +707,35 @@ function readUntil(client: Socket, predicate: (value: string) => boolean) {
 		client.once('error', onError)
 	})
 }
+
+test('queues responses a client that stops reading did not take and sends them whole once it drains', async () => {
+	let seconds = 0
+	const server = new Lx200ProtocolServer({ handler: makeHandler({ rightAscension: () => hms(0, 0, seconds++ % 60) }) })
+	server.start('127.0.0.1', 0)
+	using client = await connectPaused(server.port)
+
+	try {
+		// 800000 coordinate responses (7.2 MB) overflow the loopback buffers while the client does not read.
+		const count = 800000
+		const commands = Buffer.from(':GR#'.repeat(count), 'ascii')
+		let offset = 0
+
+		while (offset < commands.byteLength) {
+			offset += Math.max(0, client.write(commands.subarray(offset)))
+			await Bun.sleep(1)
+		}
+
+		const received = await client.resume(count * 9)
+
+		expect(received.byteLength).toBe(count * 9)
+
+		// The connection seeded the staged target with the first right ascension, so responses start at 1 s.
+		for (let i = 0; i < count; i++) {
+			const expected = `00:00:${String((i + 1) % 60).padStart(2, '0')}#`
+			const response = received.toString('ascii', i * 9, i * 9 + 9)
+			if (response !== expected) expect(`${i}: ${response}`).toBe(`${i}: ${expected}`)
+		}
+	} finally {
+		server.stop()
+	}
+})

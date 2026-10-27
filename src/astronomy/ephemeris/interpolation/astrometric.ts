@@ -1,4 +1,4 @@
-import type { MutVec3 } from '../../../math/linear-algebra/vec3'
+import { type MutVec3, vecZero } from '../../../math/linear-algebra/vec3'
 import { type NumberArray, clamp } from '../../../math/numerical/math'
 import { normalizeAngle, type Angle } from '../../../math/units/angle'
 import { eraS2c } from '../../coordinates/erfa/erfa'
@@ -125,7 +125,7 @@ export class AstrometricInterpolator {
 	private readonly interpolation: AstrometricInterpolationMethod
 	private readonly cubicTension: number
 	// Reusable output buffer for the interpolated Cartesian vector, avoiding per-query allocation.
-	private readonly scratch: MutVec3 = [0, 0, 0]
+	private readonly scratch: MutVec3 = vecZero()
 
 	// width and height are positive integers whose product equals raGrid.length; stepX and stepY are
 	// the positive pixel spacing of the sample grid.
@@ -148,7 +148,7 @@ export class AstrometricInterpolator {
 		this.yGrid = new Float64Array(length)
 		this.zGrid = new Float64Array(length)
 
-		const vector: MutVec3 = [0, 0, 0]
+		const vector = vecZero()
 
 		for (let i = 0; i < length; i++) {
 			eraS2c(validateGridValue('astrometric RA grid', raGrid[i], i), validateGridValue('astrometric Dec grid', decGrid[i], i), vector)

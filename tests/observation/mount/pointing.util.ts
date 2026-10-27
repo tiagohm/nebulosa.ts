@@ -2,7 +2,7 @@ import { eraC2s, eraS2c } from '../../../src/astronomy/coordinates/erfa/erfa'
 import { localSiderealTime } from '../../../src/astronomy/observer/location'
 import type { Time } from '../../../src/astronomy/time/time'
 import { ASEC2RAD, PI } from '../../../src/core/constants'
-import { type Vec3, vecDot, vecNormalizeMut, vecRotateByRodrigues } from '../../../src/math/linear-algebra/vec3'
+import { type Vec3, vecDot, vecNormalizeMut, vecRotateByRodrigues, vecX, vecY, vecZ } from '../../../src/math/linear-algebra/vec3'
 import { sphericalUnprojectTangentPlane } from '../../../src/math/numerical/geometry'
 import { predictLinearLeastSquares } from '../../../src/math/numerical/least.squares'
 import { clamp, lerp, type NumberArray } from '../../../src/math/numerical/math'
@@ -136,13 +136,13 @@ export function generateMechanicalPointingSamples(terms: Readonly<Record<SemiPhy
 // east point on the equator, and `z` along the ideal polar axis. Returns a unit vector in that frame.
 export function simulateMechanicalDirection(hourAngle: Angle, declination: Angle, latitude: Angle, terms: Readonly<Record<SemiPhysicalTermName, Angle>>) {
 	// Collimation tilts the optical axis off the declination axis by a constant cross-axis angle.
-	let v = vecRotateByRodrigues([1, 0, 0], [0, 0, 1], -terms.CH)
+	let v = vecRotateByRodrigues(vecX(), vecZ(), -terms.CH)
 	// Declination axis rotation, offset by the declination index error.
-	v = vecRotateByRodrigues(v, [0, 1, 0], -(declination + terms.ID))
+	v = vecRotateByRodrigues(v, vecY(), -(declination + terms.ID))
 	// Declination axis not perpendicular to the polar axis.
-	v = vecRotateByRodrigues(v, [1, 0, 0], terms.NP)
+	v = vecRotateByRodrigues(v, vecX(), terms.NP)
 	// Hour angle axis rotation, offset by the hour-angle index error.
-	v = vecRotateByRodrigues(v, [0, 0, 1], -(hourAngle + terms.IH))
+	v = vecRotateByRodrigues(v, vecZ(), -(hourAngle + terms.IH))
 
 	// Polar axis misalignment as a single small rotation about `-(MA x + ME y)`.
 	const misalignment = Math.hypot(terms.MA, terms.ME)

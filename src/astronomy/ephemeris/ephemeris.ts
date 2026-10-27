@@ -1,4 +1,5 @@
 import { TAU } from '../../core/constants'
+import { vecZero } from '../../math/linear-algebra/vec3'
 import type { NumberArray } from '../../math/numerical/math'
 import { type Angle, normalizeAngle } from '../../math/units/angle'
 import type { Distance } from '../../math/units/distance'
@@ -79,8 +80,8 @@ export function ellipticToRectangular(a: Distance, n: Angle, elem: Readonly<Numb
 	const rtq = 1 - elem_4q - elem_4q
 	const rdg = 2 * elem[5] * elem[4]
 
-	const p = out?.[0] ?? [0, 0, 0]
-	const v = out?.[1] ?? [0, 0, 0]
+	const p = out?.[0] ?? vecZero()
+	const v = out?.[1] ?? vecZero()
 
 	p[0] = x1 * rtp + y1 * rdg
 	p[1] = x1 * rdg + y1 * rtq

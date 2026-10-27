@@ -637,8 +637,8 @@ export function levenbergMarquardt(x: Readonly<NumberArray>, y: Readonly<NumberA
 		J[i] = new Float64Array(n)
 	}
 
-	const predict = (params: NumberArray, o: NumberArray) => {
-		for (let i = 0; i < o.length; i++) o[i] = model(x[i], params)
+	const predict = (params: NumberArray, out: NumberArray) => {
+		for (let i = 0; i < out.length; i++) out[i] = model(x[i], params)
 	}
 
 	// Residuals and the Jacobian depend only on the parameters, so they are rebuilt on acceptance (and

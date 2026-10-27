@@ -1,6 +1,6 @@
 import type { Angle } from '../units/angle'
 import { matIdentity, matMul, matMulVec, matRodriguesRotation, matTranspose, type Mat3 } from './mat3'
-import { type MutVec3, vecLength, vecMinus, vecNegate, vecPlus, vecZero, type Vec3 } from './vec3'
+import { type MutVec3, type Vec3, vecLength, vecMinus, vecNegate, vecPlus, vecZero } from './vec3'
 
 // Active three-dimensional rigid transforms represented by a rotation and translation. Transforms
 // map points between frames in the same distance unit; directions are rotated without translation.
@@ -56,7 +56,7 @@ export function rigidRotationAroundAxis(pivot: Vec3, axis: Vec3, angle: Angle): 
 	if (vecLength(axis) === 0) throw new RangeError('axis must be non-zero')
 
 	const rotation = matRodriguesRotation(axis, angle)
-	const translation: MutVec3 = [0, 0, 0]
+	const translation = vecZero()
 	vecMinus(pivot, matMulVec(rotation, pivot, translation), translation)
 	return { rotation, translation }
 }

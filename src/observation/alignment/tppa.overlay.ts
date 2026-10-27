@@ -6,11 +6,11 @@ import { eraC2s, eraS2c } from '../../astronomy/coordinates/erfa/erfa'
 import type { GeographicPosition } from '../../astronomy/observer/location'
 import type { Time } from '../../astronomy/time/time'
 import { ASEC2RAD, PI, PIOVERTWO, TAU } from '../../core/constants'
-import { type MutVec3, type Vec3, vecAngleUnit, vecCross, vecDot, vecLength, vecNormalize, vecRotateByRodrigues } from '../../math/linear-algebra/vec3'
+import { type MutVec3, type Vec3, vecAngleUnit, vecCross, vecDot, vecLength, vecNormalize, vecRotateByRodrigues, vecZero } from '../../math/linear-algebra/vec3'
 import { type Point, sphericalTangentBasis } from '../../math/numerical/geometry'
 import { type Angle, normalizeAngle, normalizePI } from '../../math/units/angle'
-import { mountAdjustmentAxes, solveAzAltAdjustment, type ThreePointPolarAlignmentResult } from './polaralignment'
-import { applyInverseMountAdjustment, applyMountAdjustment, celestialPoleVector, decomposePolarErrorGeodesic } from './polaralignment.util'
+import { applyInverseMountAdjustment, applyMountAdjustment, celestialPoleVector, decomposePolarErrorGeodesic, mountAdjustmentAxes, solveAzAltAdjustment } from './polaralignment'
+import type { ThreePointPolarAlignmentResult } from './tppa'
 
 // Geometry-only visual guidance for three-point polar alignment. The module solves the remaining
 // two-axis mount correction in inertial 3D, maps a persistent celestial reference through the full
@@ -481,7 +481,7 @@ function solveCorrection(currentPole: Vec3, targetPole: Vec3, upAxis: Vec3, east
 	}
 	let azimuth = clampCorrection(seed.azimuth)
 	let altitude = clampCorrection(seed.altitude)
-	const workspace: CorrectionWorkspace = { afterAzimuth: [0, 0, 0], altitudeAxis: [0, 0, 0], predicted: [0, 0, 0] }
+	const workspace: CorrectionWorkspace = { afterAzimuth: vecZero(), altitudeAxis: vecZero(), predicted: vecZero() }
 	const current: CorrectionResidual = { r0: 0, r1: 0, angle: 0, cost: 0 }
 	const plusAzimuth: CorrectionResidual = { r0: 0, r1: 0, angle: 0, cost: 0 }
 	const minusAzimuth: CorrectionResidual = { r0: 0, r1: 0, angle: 0, cost: 0 }
@@ -648,7 +648,7 @@ function buildContours(
 		const cosTolerance = Math.cos(tolerance)
 		const sinTolerance = Math.sin(tolerance)
 		const points: Point[] = []
-		const residualPole: MutVec3 = [0, 0, 0]
+		const residualPole = vecZero()
 		let seed: CorrectionSeed = { azimuth: centralCorrection.azimuth, altitude: centralCorrection.altitude }
 		let illConditioned = false
 		let omitted = false

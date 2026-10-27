@@ -1,5 +1,5 @@
 import { ASEC2RAD, AU_KM, DAYSEC, DEG2RAD, PI, PIOVERFOUR, PIOVERTWO, TAU } from '../../core/constants'
-import type { Vec3 } from '../../math/linear-algebra/vec3'
+import { type Vec3, vecZero } from '../../math/linear-algebra/vec3'
 import type { Point } from '../../math/numerical/geometry'
 import { floorDiv, modf, pmod, type NumberArray } from '../../math/numerical/math'
 import { brentMinimize } from '../../math/numerical/optimization'
@@ -3263,17 +3263,17 @@ export namespace PlanetElements {
 
 	// Returns mean orbital elements for a planet
 	// Results are referenced to mean dynamical ecliptic and equinox of date.
-	export function mean(p: keyof typeof CMEAN, jde: number, o?: Elements): Elements {
+	export function mean(p: keyof typeof CMEAN, jde: number, out?: Elements): Elements {
 		const T = Base.j2000Century(jde)
 		const c = CMEAN[p]
-		o ??= {} as Elements
-		o.L = normalizeAngle(Base.horner(T, c.L) * DEG2RAD)
-		o.a = Base.horner(T, c.a)
-		o.e = Base.horner(T, c.e)
-		o.i = Base.horner(T, c.i) * DEG2RAD
-		o.omega = c.omega !== undefined ? Base.horner(T, c.omega) * DEG2RAD : 0
-		o.w = Base.horner(T, c.w) * DEG2RAD
-		return o
+		out ??= {} as Elements
+		out.L = normalizeAngle(Base.horner(T, c.L) * DEG2RAD)
+		out.a = Base.horner(T, c.a)
+		out.e = Base.horner(T, c.e)
+		out.i = Base.horner(T, c.i) * DEG2RAD
+		out.omega = c.omega !== undefined ? Base.horner(T, c.omega) * DEG2RAD : 0
+		out.w = Base.horner(T, c.w) * DEG2RAD
+		return out
 	}
 
 	// Returns mean inclination for a planet at a date.
@@ -4618,15 +4618,7 @@ export namespace JupiterMoons {
 	// Returns E5 positions at jde (TT) in Jupiter equatorial radii, with the same axes and order as
 	// positions(). Includes light time, differential light time and perspective; allocates a tuple
 	// unless pos is supplied, in which case replaces its four vectors and returns pos itself.
-	export function e5(
-		jde: number,
-		pos: MutPositions = [
-			[0, 0, 0],
-			[0, 0, 0],
-			[0, 0, 0],
-			[0, 0, 0],
-		],
-	): MutPositions {
+	export function e5(jde: number, pos: MutPositions = [vecZero(), vecZero(), vecZero(), vecZero()]): MutPositions {
 		// variables assigned in following block
 		let lambda0 = 0
 		let beta0 = 0
@@ -5198,16 +5190,7 @@ export namespace SaturnMoons {
 			C[j] = c * cBeta0 - b * sBeta0
 		}
 
-		const pos: [Vec3, Vec3, Vec3, Vec3, Vec3, Vec3, Vec3, Vec3] = [
-			[0, 0, 0],
-			[0, 0, 0],
-			[0, 0, 0],
-			[0, 0, 0],
-			[0, 0, 0],
-			[0, 0, 0],
-			[0, 0, 0],
-			[0, 0, 0],
-		]
+		const pos: [Vec3, Vec3, Vec3, Vec3, Vec3, Vec3, Vec3, Vec3] = [vecZero(), vecZero(), vecZero(), vecZero(), vecZero(), vecZero(), vecZero(), vecZero()]
 		const D = atan2(A[0], C[0])
 		const [sD, cD] = Base.sincos(D)
 

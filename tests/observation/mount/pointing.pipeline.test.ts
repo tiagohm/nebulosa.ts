@@ -6,6 +6,7 @@ import { localSiderealTime } from '../../../src/astronomy/observer/location'
 import { timeYMDHMS, tt } from '../../../src/astronomy/time/time'
 import { ASEC2RAD, PIOVERTWO } from '../../../src/core/constants'
 import { matMulVec, matRodriguesRotation } from '../../../src/math/linear-algebra/mat3'
+import { vecX, vecZ } from '../../../src/math/linear-algebra/vec3'
 import { sphericalUnprojectTangentPlane } from '../../../src/math/numerical/geometry'
 import { type Angle, arcmin, deg, hour, normalizePI } from '../../../src/math/units/angle'
 import { applyDirectionAlignment, fitDirectionAlignment } from '../../../src/observation/mount/alignment'
@@ -39,7 +40,7 @@ const TERMS: Readonly<Record<SemiPhysicalTermName, Angle>> = {
 function buildChain(withModel: boolean, errorRepresentation: PointingErrorRepresentation = 'vectorTangent'): MountPointingChain {
 	const rotation = matRodriguesRotation([0.2, -0.5, 1], deg(3))
 	const alignment = fitDirectionAlignment([
-		{ mount: [1, 0, 0], world: matMulVecLocal(rotation, [1, 0, 0]) },
+		{ mount: vecX(), world: matMulVecLocal(rotation, vecX()) },
 		{ mount: [0, 0.4, 1], world: matMulVecLocal(rotation, [0, 0.4, 1]) },
 	])
 	const samples = generateMechanicalPointingSamples(TERMS, { count: 120, seed: 131, time: TIME, latitude: LATITUDE, longitude: LONGITUDE })
@@ -161,8 +162,8 @@ test('the kinematic chain reproduces the horizontal direction the alignment was 
 	const chain: MountPointingChain = {
 		geometry: createIdealAltAzGeometry(),
 		alignment: fitDirectionAlignment([
-			{ mount: [1, 0, 0], world: [1, 0, 0] },
-			{ mount: [0, 0, 1], world: [0, 0, 1] },
+			{ mount: vecX(), world: vecX() },
+			{ mount: vecZ(), world: vecZ() },
 		]),
 	}
 	const desired = { rightAscension: hour(1.5), declination: deg(-5), ...CONTEXT }

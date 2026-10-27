@@ -1,5 +1,6 @@
 import type { Socket, TCPSocketListener } from 'bun'
 import { daysInMonth, formatTemporal, type Temporal, type TemporalDate, temporalAdd, temporalFromDate } from '../../astronomy/time/temporal'
+import { SocketWriteQueue } from '../../io/socket'
 import { type Angle, normalizePI, parseAngle, toDms, toHms } from '../../math/units/angle'
 import { type ProtocolClient, type ProtocolClientEntry, ProtocolClients } from './client'
 
@@ -8,6 +9,8 @@ import { type ProtocolClient, type ProtocolClientEntry, ProtocolClients } from '
 // handler, and writes the protocol's ASCII responses. Coordinates exchanged with the handler are J2000.
 // Several clients may connect at once; each has its own staged target and clock, so one client never
 // completes a command another one is assembling, and actions are reported with the client that sent them.
+// Responses the socket does not take at once are queued until it drains; a client that stops reading for more
+// than the queue bound is disconnected.
 // http://www.company7.com/library/meade/LX200CommandSet.pdf
 // https://soundstepper.sourceforge.net/LX200_Compatible_Commands.html
 // https://www.cloudynights.com/topic/72166-lx-200-gps-serial-commands/
@@ -76,6 +79,8 @@ interface Lx200ClientState {
 	utcOffset: number
 	// Number of clock setters received since the clock was last committed.
 	utcStep: number
+	// Responses not yet taken by the socket.
+	readonly output: SocketWriteQueue
 }
 
 // Single-byte protocol responses (ACK 'G', success '1', failure '0') and the alignment-query request byte.
@@ -127,10 +132,13 @@ export class Lx200ProtocolServer {
 					const entry = clients.get(socket)
 					if (entry) this.#processData(clients, entry, data)
 				},
+				drain: (socket) => {
+					clients.get(socket)?.state.output.drain(socket)
+				},
 				open: (socket) => {
 					console.info('connection open')
 					const { handler } = this.options
-					const entry = clients.add(socket, { command: '', coordinates: [handler.rightAscension(this), handler.declination(this)], utc: [2025, 1, 1, 0, 0, 0, 0], utcOffset: 0, utcStep: 0 })
+					const entry = clients.add(socket, { command: '', coordinates: [handler.rightAscension(this), handler.declination(this)], utc: [2025, 1, 1, 0, 0, 0, 0], utcOffset: 0, utcStep: 0, output: new SocketWriteQueue() })
 					handler.connect?.(this)
 					handler.clientOpen?.(this, entry.client)
 				},
@@ -399,21 +407,31 @@ export class Lx200ProtocolServer {
 
 	// Writes the alignment-query ACK byte ('G' = German equatorial).
 	#ack(socket: Socket<unknown>) {
-		socket.write(ACK)
+		this.#write(socket, ACK)
 	}
 
 	// Writes the success ('1') / failure ('0') status byte.
 	#one(socket: Socket<unknown>) {
-		socket.write(ONE)
+		this.#write(socket, ONE)
 	}
 
 	#zero(socket: Socket<unknown>) {
-		socket.write(ZERO)
+		this.#write(socket, ZERO)
 	}
 
 	// Writes an ASCII text response.
 	#text(socket: Socket<unknown>, value: string) {
-		socket.write(Buffer.from(value, 'ascii'))
+		this.#write(socket, Buffer.from(value, 'ascii'))
+	}
+
+	// Writes a response after the queued ones, ending the connection of a client that stopped reading for more
+	// than the queue bound.
+	#write(socket: Socket<unknown>, data: Buffer) {
+		const clients = this.#clients
+		const entry = clients.get(socket)
+		if (entry === undefined || entry.state.output.write(socket, data)) return
+		console.warn('output queue full')
+		this.#drop(clients, entry)
 	}
 
 	// Commits the staged date/time to the handler once all three of the date/time/offset set-commands have

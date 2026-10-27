@@ -103,10 +103,10 @@ export interface EraAstrom {
 function eraAstrom(astrom?: Partial<EraAstrom>): EraAstrom {
 	return {
 		pmt: 0,
-		eb: [0, 0, 0],
-		eh: [0, 0, 0],
+		eb: vecZero(),
+		eh: vecZero(),
 		em: 0,
-		v: [0, 0, 0],
+		v: vecZero(),
 		bm1: 0,
 		bpn: [0, 0, 0, 0, 0, 0, 0, 0, 0],
 		along: 0,
@@ -148,7 +148,7 @@ export function eraC2s(x: Distance, y: Distance, z: Distance): [Angle, Angle] {
 
 // Spherical coordinates to Cartesian coordinates.
 export function eraS2c(theta: Angle, phi: Angle, out?: MutVec3): MutVec3 {
-	out ??= [0, 0, 0]
+	out ??= vecZero()
 	const cp = Math.cos(phi)
 	out[0] = Math.cos(theta) * cp
 	out[1] = Math.sin(theta) * cp
@@ -467,7 +467,7 @@ export function eraFk45z(r1950: Angle, d1950: Angle, bepoch: number): [Angle, An
 	const position = eraS2c(r1950, d1950)
 	const eTermsAtEpoch = vecPlus(eTerms, vecMulScalar(eTermsRate, (bepoch - 1950) / properMotionFactor))
 	const correctedPosition = vecMinus(position, vecMinus(eTermsAtEpoch, vecMulScalar(position, vecDot(position, eTermsAtEpoch))))
-	const pv = fkCatalogTransform([correctedPosition, [0, 0, 0]], FK4_FK5.forward)
+	const pv = fkCatalogTransform([correctedPosition, vecZero()], FK4_FK5.forward)
 	const [djm0, djm] = eraEpb2jd(bepoch)
 	vecPlus(pv[0], vecMulScalar(pv[1], (eraEpj(djm0, djm) - 2000) / properMotionFactor), pv[0])
 	const rd = eraC2s(...pv[0])
@@ -2131,9 +2131,9 @@ export function eraPv2s(p: Vec3, v: Vec3): [Angle, Angle, Angle, number, number,
 }
 
 // P-vector plus scaled p-vector: a + s*b.
-export function eraPpsp(a: Vec3, s: number, b: Vec3, o?: MutVec3) {
-	const sb = vecMulScalar(b, s, o)
-	return vecPlus(a, sb, o ?? sb)
+export function eraPpsp(a: Vec3, s: number, b: Vec3, out?: MutVec3) {
+	const sb = vecMulScalar(b, s, out)
+	return vecPlus(a, sb, out ?? sb)
 }
 
 // Angular separation between two sets of spherical coordinates.
@@ -2187,13 +2187,13 @@ export function eraPmpx(rc: Angle, dc: Angle, pr: Angle, pd: Angle, px: Angle, r
 }
 
 // Apply aberration to transform natural direction into proper direction.
-export function eraAb(pnat: Vec3, v: Vec3, s: number, bm1: number, o?: MutVec3) {
+export function eraAb(pnat: Vec3, v: Vec3, s: number, bm1: number, out?: MutVec3) {
 	const pdv = vecDot(pnat, v)
 	const w1 = 1 + pdv / (1 + bm1)
 	const w2 = SCHWARZSCHILD_RADIUS_OF_THE_SUN / s
 	let r2 = 0
 
-	const p = o ?? [0, 0, 0]
+	const p = out ?? vecZero()
 
 	for (let i = 0; i < 3; i++) {
 		const w = pnat[i] * bm1 + w1 * v[i] + w2 * (v[i] - pdv * pnat[i])
@@ -2215,8 +2215,8 @@ export interface LdBody {
 // For a star, apply light deflection by multiple solar-system bodies,
 // as part of transforming coordinate direction into natural direction.
 export function eraLdn(b: readonly LdBody[], ob: Vec3, sc: Vec3) {
-	const v: MutVec3 = [0, 0, 0]
-	const ev: MutVec3 = [0, 0, 0]
+	const v = vecZero()
+	const ev = vecZero()
 
 	// Star direction prior to deflection.
 	const sn = vecClone(sc)
@@ -2245,7 +2245,7 @@ export function eraLdn(b: readonly LdBody[], ob: Vec3, sc: Vec3) {
 
 // Apply light deflection by a solar-system body, as part of
 // transforming coordinate direction into natural direction.
-export function eraLd(bm: number, p: Vec3, q: Vec3, e: Vec3, em: number, dlim: number, o?: MutVec3) {
+export function eraLd(bm: number, p: Vec3, q: Vec3, e: Vec3, em: number, dlim: number, out?: MutVec3) {
 	// q . (q + e).
 	const qpe = vecPlus(q, e)
 	const qdqpe = vecDot(q, qpe)
@@ -2257,16 +2257,16 @@ export function eraLd(bm: number, p: Vec3, q: Vec3, e: Vec3, em: number, dlim: n
 	vecCross(p, vecCross(e, q, qpe), qpe)
 
 	// Apply the deflection.
-	return vecPlus(p, vecMulScalar(qpe, w, qpe), o ?? qpe)
+	return vecPlus(p, vecMulScalar(qpe, w, qpe), out ?? qpe)
 }
 
 // Deflection of starlight by the Sun.
-export function eraLdSun(p: Vec3, e: Vec3, em: number, o?: MutVec3) {
+export function eraLdSun(p: Vec3, e: Vec3, em: number, out?: MutVec3) {
 	// Deflection limiter (smaller for distant observers).
 	const em2 = Math.max(1, em * em)
 
 	// Apply the deflection.
-	return eraLd(1, p, p, e, em, 1e-6 / em2, o)
+	return eraLd(1, p, p, e, em, 1e-6 / em2, out)
 }
 
 // Form the celestial to terrestrial matrix given the date, the UT1 and
@@ -2346,35 +2346,35 @@ export function eraC2i06a(tt1: number, tt2: number) {
 }
 
 // Form the celestial to intermediate-frame-of-date matrix given the CIP X,Y and the CIO locator s.
-export function eraC2ixys(x: Angle, y: Angle, s: Angle, o?: MutMat3) {
+export function eraC2ixys(x: Angle, y: Angle, s: Angle, out?: MutMat3) {
 	// Obtain the spherical angles E and d.
 	const r2 = x * x + y * y
 	const e = r2 > 0 ? Math.atan2(y, x) : 0
 	const d = Math.atan(Math.sqrt(r2 / (1 - r2)))
 
 	// Form the matrix.
-	return matRotZ(-(e + s), matRotY(d, matRotZ(e, matIdentity(o))))
+	return matRotZ(-(e + s), matRotY(d, matRotZ(e, matIdentity(out))))
 }
 
 // Form the celestial-to-intermediate matrix from CIP X,Y coordinates.
-export function eraC2ixy(date1: number, date2: number, x: Angle, y: Angle, o?: MutMat3): MutMat3 {
+export function eraC2ixy(date1: number, date2: number, x: Angle, y: Angle, out?: MutMat3): MutMat3 {
 	// Compute s and then the matrix.
-	return eraC2ixys(x, y, eraS00(date1, date2, x, y), o)
+	return eraC2ixys(x, y, eraS00(date1, date2, x, y), out)
 }
 
 // Form the celestial-to-intermediate matrix from a bias-precession-nutation matrix.
-export function eraC2ibpn(date1: number, date2: number, rbpn: Mat3, o?: MutMat3): MutMat3 {
+export function eraC2ibpn(date1: number, date2: number, rbpn: Mat3, out?: MutMat3): MutMat3 {
 	// Extract the X,Y coordinates and form the IAU 2000 matrix.
 	const [x, y] = eraBpn2xy(rbpn)
-	return eraC2ixy(date1, date2, x, y, o)
+	return eraC2ixy(date1, date2, x, y, out)
 }
 
 // Assemble the celestial to terrestrial matrix from CIO-based
 // components (the celestial-to-intermediate matrix, the Earth Rotation
 // Angle and the polar motion matrix).
-export function eraC2tcio(rc2i: Mat3, era: Angle, rpom: Mat3, o?: MutMat3) {
-	o = o ? matCopy(rc2i, o) : matClone(rc2i)
-	return matMul(rpom, matRotZ(era, o), o)
+export function eraC2tcio(rc2i: Mat3, era: Angle, rpom: Mat3, out?: MutMat3) {
+	out = out ? matCopy(rc2i, out) : matClone(rc2i)
+	return matMul(rpom, matRotZ(era, out), out)
 }
 
 // For a terrestrial observer, prepare star-independent astrometry
@@ -2415,10 +2415,7 @@ export function eraApci(tdb1: number, tdb2: number, ebpv: PositionAndVelocity, e
 	return astrom
 }
 
-const ZERO_PV = [
-	[0, 0, 0],
-	[0, 0, 0],
-] as const
+const ZERO_PV = [vecZero(), vecZero()] as const
 
 // For a geocentric observer, prepare star-independent astrometry
 // parameters for transformations between ICRS and GCRS coordinates.
@@ -2980,11 +2977,11 @@ export function eraAticq(ri: Angle, di: Angle, astrom: EraAstrom) {
 	const ppr = matTransposeMulVec(astrom.bpn, pi)
 
 	// Aberration, giving GCRS natural direction.
-	const d: MutVec3 = [0, 0, 0]
-	const before: MutVec3 = [0, 0, 0]
-	const after: MutVec3 = [0, 0, 0]
-	const pnat: MutVec3 = [0, 0, 0]
-	const pco: MutVec3 = [0, 0, 0]
+	const d = vecZero()
+	const before = vecZero()
+	const after = vecZero()
+	const pnat = vecZero()
+	const pco = vecZero()
 
 	for (let j = 0; j < 2; j++) {
 		let r2 = 0
@@ -3167,11 +3164,11 @@ export function eraAticqn(ri: Angle, di: Angle, astrom: EraAstrom, bodies: LdBod
 	const ppr = matTransposeMulVec(astrom.bpn, pi)
 
 	// Undo aberration by fixed-point iteration.
-	const d: MutVec3 = [0, 0, 0]
-	const before: MutVec3 = [0, 0, 0]
-	const after: MutVec3 = [0, 0, 0]
-	const pnat: MutVec3 = [0, 0, 0]
-	const pco: MutVec3 = [0, 0, 0]
+	const d = vecZero()
+	const before = vecZero()
+	const after = vecZero()
+	const pnat = vecZero()
+	const pco = vecZero()
 
 	for (let j = 0; j < 2; j++) {
 		let r2 = 0
@@ -3345,7 +3342,7 @@ export function eraTpsts(xi: Angle, eta: Angle, a0: Angle, b0: Angle): [Angle, A
 }
 
 // In the tangent-plane projection, solve for a star's direction cosines.
-export function eraTpstv(xi: Angle, eta: Angle, v0: Vec3, o?: MutVec3): MutVec3 {
+export function eraTpstv(xi: Angle, eta: Angle, v0: Vec3, out?: MutVec3): MutVec3 {
 	// Tangent point.
 	let x = v0[0]
 	const y = v0[1]
@@ -3366,7 +3363,7 @@ export function eraTpstv(xi: Angle, eta: Angle, v0: Vec3, o?: MutVec3): MutVec3 
 	const oy = (y + (xi * x - eta * y * z) / r) / f
 	const oz = (z + eta * r) / f
 
-	if (o) return vecFill(o, ox, oy, oz)
+	if (out) return vecFill(out, ox, oy, oz)
 	return [ox, oy, oz]
 }
 
@@ -3504,12 +3501,12 @@ export function eraPrec76(date01: number, date02: number, date11: number, date12
 }
 
 // IAU 1976 precession matrix from J2000.0 to the given date.
-export function eraPmat76(date1: number, date2: number, o?: MutMat3): MutMat3 {
+export function eraPmat76(date1: number, date2: number, out?: MutMat3): MutMat3 {
 	// Precession Euler angles, J2000.0 to specified date.
 	const [zeta, z, theta] = eraPrec76(J2000, 0, date1, date2)
 
 	// Form the rotation matrix.
-	return matRotZ(-z, matRotY(theta, matRotZ(-zeta, matIdentity(o))))
+	return matRotZ(-z, matRotY(theta, matRotZ(-zeta, matIdentity(out))))
 }
 
 // Precession-nutation matrix using IAU 1976 precession and IAU 1980 nutation.

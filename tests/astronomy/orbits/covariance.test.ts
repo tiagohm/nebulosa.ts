@@ -6,7 +6,7 @@ import { Timescale, type Time, timeShift, timeYMDHMS } from '../../../src/astron
 import { GM_SUN_PITJEVA_2005, PIOVERTWO } from '../../../src/core/constants'
 import { matIdentity } from '../../../src/math/linear-algebra/mat3'
 import { Matrix } from '../../../src/math/linear-algebra/matrix'
-import type { Vec3 } from '../../../src/math/linear-algebra/vec3'
+import { type Vec3, vecZero } from '../../../src/math/linear-algebra/vec3'
 import { deg, toArcsec } from '../../../src/math/units/angle'
 
 // A sample main-belt asteroid state in the identity (ICRF equatorial) frame, so the state frame and the
@@ -136,7 +136,7 @@ test('the uncertainty ellipse rejects a zero-range direction', () => {
 	// return NaN axes.
 	const covariance = new Matrix(6, 6)
 	for (let k = 0; k < 3; k++) covariance.set(k, k, 1e-6 * 1e-6)
-	expect(() => ephemerisUncertaintyEllipse(covariance, [0, 0, 0])).toThrow()
+	expect(() => ephemerisUncertaintyEllipse(covariance, vecZero())).toThrow()
 })
 
 test('the ellipse matches the sky-plane scatter of the propagated covariance', () => {

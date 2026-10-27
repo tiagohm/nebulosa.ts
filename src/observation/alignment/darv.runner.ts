@@ -4,9 +4,8 @@ import { failedOperationResult, type OperationContext, type OperationResult, typ
 import type { CameraCapturer, CameraCaptureHandle } from '../capture/capture'
 import type { CameraFrameEvent } from '../capture/types'
 import { type CenteringCaptureOptions, type CenteringClock, centeringCaptureRequest } from '../mount/centering'
-import { DEFAULT_DARV_LEADING_MARGIN, darvExposureTime } from './polaralignment.darv'
-import type { PolarAlignmentDirection } from './polaralignment.geometry'
-import { polarAlignmentMountRefusal } from './polaralignment.runner'
+import { DEFAULT_DARV_LEADING_MARGIN, darvExposureTime } from './darv'
+import { type PolarAlignmentDirection, polarAlignmentMountRefusal, polarAlignmentTimedMotion } from './polaralignment'
 
 // One DARV (Drift Alignment by Robert Vice) measurement, reusable outside the application: the
 // runner applies a slew-rate preset, opens one exposure long enough for the whole sequence, and while
@@ -35,7 +34,7 @@ export interface DarvRunOptions {
 	readonly legDuration: number
 	// Camera settings of the frame.
 	readonly capture: DarvCaptureOptions
-	// Stationary wait before the outbound motion; finite ≥ 0. Default `DEFAULT_DARV_LEADING_MARGIN` (polaralignment.darv).
+	// Stationary wait before the outbound motion; finite ≥ 0. Default `DEFAULT_DARV_LEADING_MARGIN` (`darv`).
 	readonly leadingMargin?: number
 	// Budget of the turn; finite ≥ 0. Default `DEFAULT_DARV_TURNAROUND_MARGIN`.
 	readonly turnaroundMargin?: number
@@ -146,14 +145,14 @@ async function measurement(context: OperationContext, mount: Mount, camera: Came
 		if (!lead.ok) return lead
 
 		const reverse = options.direction === 'WEST' ? 'EAST' : 'WEST'
-		const outbound = await leg(context, mountCommander, mount, options.direction, options.legDuration, clock, (at) => listener?.({ type: 'phase', phase: 'outbound', at }))
+		const outbound = await polarAlignmentTimedMotion(context, mountCommander, mount, options.direction, options.legDuration, clock, (at) => listener?.({ type: 'phase', phase: 'outbound', at }))
 		if (!outbound.ok) return outbound
 
 		const changed = trackingLost(mount)
 		if (changed) return changed
 
 		listener?.({ type: 'phase', phase: 'reversing', at: outbound.value.stoppedAt })
-		const inbound = await leg(context, mountCommander, mount, reverse, options.legDuration, clock, (at) => listener?.({ type: 'phase', phase: 'inbound', at }))
+		const inbound = await polarAlignmentTimedMotion(context, mountCommander, mount, reverse, options.legDuration, clock, (at) => listener?.({ type: 'phase', phase: 'inbound', at }))
 		if (!inbound.ok) return inbound
 
 		const lost = trackingLost(mount)
@@ -185,40 +184,6 @@ async function measurement(context: OperationContext, mount: Mount, camera: Came
 	} finally {
 		if (!completed) await abortCapture(capture)
 	}
-}
-
-// Instants of one motion, in monotonic milliseconds.
-interface DarvLegInstants {
-	// The motion was started.
-	readonly startedAt: number
-	// The stop was sent.
-	readonly stoppedAt: number
-	// The mount was reported quiescent after the stop.
-	readonly settledAt: number
-}
-
-// Moves the mount in `direction` for `duration` seconds, then stops it and waits until it is
-// quiescent; the stop is sent even when the wait is cancelled. `onStarted` receives the monotonic
-// instant the motion started. Resolves the instants of the motion or the first failure.
-async function leg(context: OperationContext, mountCommander: MountCommander, mount: Mount, direction: PolarAlignmentDirection, duration: number, clock: CenteringClock, onStarted: (at: number) => void): Promise<OperationResult<DarvLegInstants>> {
-	const started = await mountCommander.startManualMove(context, mount, direction)
-	if (!started.ok) return started
-	const startedAt = clock.monotonicNow()
-	onStarted(startedAt)
-
-	let waited: OperationResult<void> = failedOperationResult('unexpectedState', 'the motion wait did not settle')
-	let stoppedAt = startedAt
-
-	try {
-		waited = await clock.delay(duration * 1000, context.signal)
-	} finally {
-		stoppedAt = clock.monotonicNow()
-		const stopped = await started.value.stop()
-		if (waited.ok) waited = stopped
-	}
-
-	if (!waited.ok) return waited
-	return successfulOperationResult({ startedAt, stoppedAt, settledAt: clock.monotonicNow() })
 }
 
 // Failure of a mount that left the state a DARV frame assumes (connected and tracking), or undefined.

@@ -13,19 +13,19 @@ import { type Angle, toDeg } from '../../math/units/angle'
 import type { CameraCapturer } from '../capture/capture'
 import type { CameraCaptureListener } from '../capture/reporter'
 import { type CenteringCaptureOptions, type CenteringClock, centeringCaptureRequest, exposureMidpoint, solveResult } from '../mount/centering'
-import { ThreePointPolarAlignment, type ThreePointPolarAlignmentInput, type ThreePointPolarAlignmentResult } from './polaralignment'
+import { type PolarAlignmentDirection, polarAlignmentMountRefusal, polarAlignmentTimedMotion } from './polaralignment'
+import { ThreePointPolarAlignment, type ThreePointPolarAlignmentInput, type ThreePointPolarAlignmentResult } from './tppa'
 import {
 	classifyPolarAlignmentCandidate,
 	DEFAULT_POLAR_ALIGNMENT_GEOMETRY_LIMITS,
 	type PolarAlignmentCandidateClassification,
-	type PolarAlignmentDirection,
 	type PolarAlignmentGeometryLimits,
 	type PolarAlignmentGeometryQuality,
 	polarAlignmentDisplacement,
 	polarAlignmentEarthFixedVector,
 	polarAlignmentGeometryQuality,
 	polarAlignmentPolarDistance,
-} from './polaralignment.geometry'
+} from './tppa.geometry'
 
 // Automatic acquisition and refinement of a three-point polar alignment, reusable outside the
 // application: the runner rotates the mount in RA with timed manual motions at a chosen slew-rate
@@ -303,7 +303,7 @@ async function acquisitionLoop(context: OperationContext, mount: Mount, camera: 
 			const duration = rate === undefined ? probe : motionDuration(limits.targetRotation - moved, rate, options)
 			listener?.({ type: 'move', point, direction: options.direction, duration })
 
-			const motion = await timedMotion(context, mountCommander, mount, options.direction, duration, clock)
+			const motion = await polarAlignmentTimedMotion(context, mountCommander, mount, options.direction, duration, clock)
 			if (!motion.ok) return motion
 
 			const changed = poseChanged(mount, pierSide)
@@ -456,44 +456,10 @@ async function captureAndSolve(
 	}
 }
 
-// Moves the mount in `direction` for `duration` seconds, then stops it and waits until it is
-// quiescent; the stop is sent even when the wait is cancelled. Resolves the first failure.
-async function timedMotion(context: OperationContext, mountCommander: MountCommander, mount: Mount, direction: PolarAlignmentDirection, duration: number, clock: CenteringClock): Promise<OperationResult<void>> {
-	const started = await mountCommander.startManualMove(context, mount, direction)
-	if (!started.ok) return started
-
-	let waited: OperationResult<void> = failedOperationResult('unexpectedState', 'the motion wait did not settle')
-
-	try {
-		waited = await clock.delay(duration * 1000, context.signal)
-	} finally {
-		const stopped = await started.value.stop()
-		if (waited.ok) waited = stopped
-	}
-
-	return waited
-}
-
 // Duration of the next motion, in seconds: the remaining rotation over the observed rate (radians
 // per second, > 0), bounded by the minimum and the longest motion.
 function motionDuration(remaining: Angle, rate: number, options: Pick<ThreePointPolarAlignmentAcquisitionOptions, 'maximumMotion'>) {
 	return Math.max(MINIMUM_MOTION, Math.min(options.maximumMotion, remaining / rate))
-}
-
-// Reason the mount cannot run the timed RA motions of a polar alignment (three-point or DARV) at
-// `slewRate`, 'disconnected', or undefined when it can: a connected, unparked equatorial mount that
-// tracks at the sidereal rate (when it reports track modes), can move west-east and abort, and
-// announces the preset.
-export function polarAlignmentMountRefusal(mount: Mount, slewRate: string) {
-	if (!mount.connected) return 'disconnected'
-	if (mount.mountType === 'ALTAZ') return `mount ${mount.name} is not equatorial`
-	if (!mount.canMove || !mount.canMoveWE) return `mount ${mount.name} cannot move west-east`
-	if (!mount.canAbort) return `mount ${mount.name} cannot abort a motion`
-	if (mount.parked || mount.parking) return `mount ${mount.name} is parked`
-	if (!mount.tracking) return `mount ${mount.name} is not tracking`
-	if (mount.trackModes.length > 0 && mount.trackMode !== 'SIDEREAL') return `mount ${mount.name} is not tracking at the sidereal rate`
-	if (!mount.slewRates.some((e) => e.name === slewRate)) return `mount ${mount.name} has no slew rate ${slewRate}`
-	return undefined
 }
 
 // Reason the mount left the state the alignment model assumes (tracking on, same pier side), or

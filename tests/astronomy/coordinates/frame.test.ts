@@ -6,7 +6,7 @@ import { CIRS, cirs, ECLIPTIC, ecliptic, ECLIPTIC_B1950, eclipticB1950, ECLIPTIC
 import { type Time, type TimeProviders, Timescale, timeJulianYear, timeShift, timeYMDHMS } from '../../../src/astronomy/time/time'
 import { ANGVEL_PER_DAY, DAYSEC, EARTH_DRDT_TIMES_RT_MATRIX } from '../../../src/core/constants'
 import { type Mat3, matMinus, matMul, matMulScalar, matMulTranspose, matMulVec, matRotX, matRotZ } from '../../../src/math/linear-algebra/mat3'
-import { type MutVec3, type Vec3, vecDot, vecMinus, vecMulScalar, vecXAxis, vecZero } from '../../../src/math/linear-algebra/vec3'
+import { type MutVec3, type Vec3, vecDot, vecMinus, vecMulScalar, vecX, vecZero } from '../../../src/math/linear-algebra/vec3'
 import { formatAZ, normalizeAngle, parseAngle } from '../../../src/math/units/angle'
 
 test('frame transforms accept deeply readonly states without mutating their input', () => {
@@ -275,7 +275,7 @@ test('frameAt and frameToBase write into an output parameter', () => {
 		[0.4, -0.6, 0.3],
 		[1e-4, 2e-4, -3e-4],
 	]
-	const outVec: MutVec3 = [0, 0, 0]
+	const outVec = vecZero()
 	const fresh = frameAt(XYZ, ITRS, TIME)
 	const written = frameAt(XYZ, ITRS, TIME, outVec)
 	expect(written).toBe(outVec)
@@ -374,14 +374,14 @@ test('ITRS_INSTANTANEOUS matches ITRS closely but uses the exact drift term', ()
 test('TIRS applies the earth-rotation velocity term', () => {
 	// TIRS is Earth-fixed apart from polar motion, so a crust-fixed ITRS rest
 	// state must have near-zero TIRS velocity (only polar-motion rate remains).
-	const itrsRest: PositionAndVelocity = [vecXAxis(), vecZero()]
+	const itrsRest: PositionAndVelocity = [vecX(), vecZero()]
 	const gcrs = frameToFrame(itrsRest, ITRS, ICRS, TIME)
 	const tirsFromItrs = frameToFrame(gcrs, ICRS, TIRS, TIME)
 	// Without W the TIRS speed would be ~ω|r|; polar-motion residual is ~1e-6 relative.
 	expect(Math.hypot(...tirsFromItrs[1])).toBeLessThan(1e-3 * ANGVEL_PER_DAY)
 
 	// A GCRS rest state in TIRS is the rotating-frame drag W · p.
-	const gcrsRest: PositionAndVelocity = [vecXAxis(), vecZero()]
+	const gcrsRest: PositionAndVelocity = [vecX(), vecZero()]
 	const tirsFromGcrs = frameAt(gcrsRest, TIRS, TIME)
 	expect(tirsFromGcrs[1][0]).toBeCloseTo(ANGVEL_PER_DAY * tirsFromGcrs[0][1], 12)
 	expect(tirsFromGcrs[1][1]).toBeCloseTo(-ANGVEL_PER_DAY * tirsFromGcrs[0][0], 12)
@@ -437,7 +437,7 @@ test('mean and true ecliptic of date differ only by nutation', () => {
 const CELESTIAL_RATE_FRAMES = [TRUE_EQUATOR_AND_EQUINOX_OF_DATE, MEAN_EQUATOR_AND_EQUINOX_OF_DATE, ECLIPTIC, MEAN_ECLIPTIC_OF_DATE, CIRS] as const
 
 const STATIONARY: Vec3 = [0.8, -0.4, 0.3]
-const STATIONARY_REST: PositionAndVelocity = [[...STATIONARY], [0, 0, 0]]
+const STATIONARY_REST: PositionAndVelocity = [[...STATIONARY], vecZero()]
 const CELESTIAL_DRIFT_STEP = 60 / DAYSEC
 
 // tests/setup.ts caches PNM/nutation by rounded Julian day, which makes a 60 s

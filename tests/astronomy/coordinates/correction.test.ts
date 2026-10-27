@@ -13,7 +13,7 @@ import { exposureInterval } from '../../../src/astronomy/time/exposure'
 import { type Time, tdb, Timescale, timeNormalize, timeSubtract, timeYMDHMS } from '../../../src/astronomy/time/time'
 import { DAYSEC, PI, SCHWARZSCHILD_RADIUS_OF_THE_SUN, SPEED_OF_LIGHT_AU_DAY, SUN_RADIUS_AU } from '../../../src/core/constants'
 import { fileHandleSource } from '../../../src/io/file'
-import { vecAngle, vecClone, vecCross, vecDot, vecLength, vecMinus, vecMulScalar, vecNegate, vecNormalize, vecRotateByRodrigues, vecZero } from '../../../src/math/linear-algebra/vec3'
+import { vecAngle, vecClone, vecCross, vecDot, vecLength, vecMinus, vecMulScalar, vecNegate, vecNormalize, vecRotateByRodrigues, vecX, vecY, vecZ, vecZero } from '../../../src/math/linear-algebra/vec3'
 import { deg, hour, toArcsec, toDeg } from '../../../src/math/units/angle'
 import { meter } from '../../../src/math/units/distance'
 import { toKilometerPerSecond } from '../../../src/math/units/velocity'
@@ -305,7 +305,7 @@ test('solar Shapiro delay follows the logarithmic elongation law and is clamped 
 	expect(scale * 1e6).toBeCloseTo(9.851, 4)
 
 	// Perpendicular to the Sun direction: |s| + s · n = |s|.
-	const perpendicular = vecNormalize(vecCross(toSun, [0, 0, 1]))
+	const perpendicular = vecNormalize(vecCross(toSun, vecZ()))
 	const side = barycentricJulianDate(time, perpendicular, LA_SILLA_PATH, { sun: EPV00_SUN })
 	expect(side.model.shapiro).toBe(true)
 	expect(toDeg(side.quality.sunElongation)).toBeCloseTo(90, 9)
@@ -347,21 +347,15 @@ test('solar Shapiro delay follows the logarithmic elongation law and is clamped 
 // 1° term -86.6 µs, so the omitted term is budgeted by a bound over every Sun within 0.011 AU of the SSB.
 test('solar Shapiro correction matches PINT and its omission is bounded for a Sun off the barycenter', () => {
 	const time = timeYMDHMS(2024, 3, 10, 0, 0, 0, Timescale.TDB)
-	const observer = ephemerisPath(SOLAR_SYSTEM_BARYCENTER, customEphemerisEndpoint('probe'), () => [
-		[1, 0, 0],
-		[0, 0, 0],
-	])
-	const sun = ephemerisPath(SOLAR_SYSTEM_BARYCENTER, naifEphemerisEndpoint(Naif.SUN), () => [
-		[0, 0.01, 0],
-		[0, 0, 0],
-	])
+	const observer = ephemerisPath(SOLAR_SYSTEM_BARYCENTER, customEphemerisEndpoint('probe'), () => [vecX(), vecZero()])
+	const sun = ephemerisPath(SOLAR_SYSTEM_BARYCENTER, naifEphemerisEndpoint(Naif.SUN), () => [vecY(0.01), vecZero()])
 	const cases = [
 		// Quadrature to the SSB, 90.57° from the Sun: bound 2GM☉/c³ · -ln(1 - 0.022).
-		[[0, 1, 0], 9.850817719638852e-8, 2.1914e-7],
+		[vecY(), 9.850817719638852e-8, 2.1914e-7],
 		// 1° from the SSB toward the Sun side, 1.57° from the Sun: bound floored at the limb of a Sun at 1.011 AU.
 		[[-Math.cos(deg(1)), Math.sin(deg(1)), 0], 1.0334873124294841e-4, 1.12751e-4],
 		// Opposition: bound 2GM☉/c³ · ln(2 + 0.022).
-		[[1, 0, 0], -6.828426591774754e-6, 6.936e-6],
+		[vecX(), -6.828426591774754e-6, 6.936e-6],
 	] as const
 
 	for (const [n, pintDelay, bound] of cases) {

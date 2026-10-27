@@ -5,6 +5,7 @@ import { mpcorb, mpcorbComet } from '../../../src/astronomy/orbits/mpcorb'
 import { Timescale, time, timeYMDHMS } from '../../../src/astronomy/time/time'
 import { GM_SUN_PITJEVA_2005, PI, PIOVERFOUR, PIOVERTWO, TAU } from '../../../src/core/constants'
 import { matIdentity } from '../../../src/math/linear-algebra/mat3'
+import { vecX, vecY, vecZ } from '../../../src/math/linear-algebra/vec3'
 import { deg } from '../../../src/math/units/angle'
 
 const t = timeYMDHMS(2025, 4, 21, 12, 0, 0, Timescale.TT)
@@ -262,7 +263,7 @@ test('near-parabolic hyperbolic mean anomaly construction converges', () => {
 })
 
 test('eccentricity vector and node angles handle circular and inclined states', () => {
-	const circular = eccentricityVector([1, 0, 0], [0, 1, 0], 1)
+	const circular = eccentricityVector(vecX(), vecY(), 1)
 	expect(circular[0]).toBeCloseTo(0, 15)
 	expect(circular[1]).toBeCloseTo(0, 15)
 	expect(circular[2]).toBeCloseTo(0, 15)
@@ -271,5 +272,5 @@ test('eccentricity vector and node angles handle circular and inclined states', 
 	const i = inclination(h)
 	expect(i).toBeCloseTo(Math.atan2(Math.SQRT2, 1), 15)
 	expect(longitudeOfAscendingNode(h, i)).toBeCloseTo(PIOVERFOUR, 15)
-	expect(longitudeOfAscendingNode([0, 0, 1], 0)).toBe(0)
+	expect(longitudeOfAscendingNode(vecZ(), 0)).toBe(0)
 })

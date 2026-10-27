@@ -8,7 +8,7 @@ import { airmassKastenYoung } from '../../../src/astronomy/formulas'
 import { Ellipsoid, geodeticLocation } from '../../../src/astronomy/observer/location'
 import { type Time, Timescale, timeShift, timeSubtract, timeYMDHMS } from '../../../src/astronomy/time/time'
 import { PIOVERTWO } from '../../../src/core/constants'
-import { type MutVec3, vecMinus, vecXAxis, vecYAxis } from '../../../src/math/linear-algebra/vec3'
+import { type MutVec3, vecMinus, vecX, vecY, vecZero } from '../../../src/math/linear-algebra/vec3'
 import { deg, hms } from '../../../src/math/units/angle'
 import { kilometer } from '../../../src/math/units/distance'
 
@@ -42,11 +42,11 @@ test('an altitude limit agrees with rise and set, and airmass uses the same alti
 test('solar avoidance requires a source and keeps a single snapshot per provider', () => {
 	const end = timeShift(DAY, 1)
 	expect(() => visibilityWindows(() => SIRIUS, SITE, DAY, end, { minimumSunSeparation: deg(30) })).toThrow('sun direction is required')
-	const TARGET = vecXAxis()
+	const TARGET = vecX()
 	const target = () => TARGET
-	const SOLAR = vecYAxis()
+	const SOLAR = vecY()
 	const solar = () => SOLAR
-	const MOON = vecYAxis()
+	const MOON = vecY()
 	const lunar = () => MOON
 	expect(visibilityWindows(target, SITE, DAY, end, { minimumSunSeparation: deg(80), minimumMoonSeparation: deg(80) }, { sunAt: solar, moonAt: lunar })).toHaveLength(1)
 	expect(visibilityWindows(target, SITE, DAY, end, { minimumSunSeparation: deg(100) }, { sunAt: solar })).toEqual([])
@@ -61,8 +61,8 @@ test('solar altitude and lunar separation add and remove stretches', () => {
 	expect(secondsBetween(solar[0].end, dusk.rise)).toBeLessThan(2)
 	const same = () => SIRIUS
 	expect(visibilityWindows(same, SITE, DAY, end, { minimumMoonSeparation: deg(10) }, { moonAt: same })).toEqual([])
-	const perpendicular: PositionOverTime = () => vecYAxis()
-	expect(visibilityWindows(() => vecXAxis(), SITE, DAY, end, { minimumMoonSeparation: deg(10) }, { moonAt: perpendicular })).toHaveLength(1)
+	const perpendicular: PositionOverTime = () => vecY()
+	expect(visibilityWindows(() => vecX(), SITE, DAY, end, { minimumMoonSeparation: deg(10) }, { moonAt: perpendicular })).toHaveLength(1)
 	expect(() => visibilityWindows(same, SITE, DAY, end, { maximumSunAltitude: 0 })).toThrow('sun direction is required')
 	expect(visibilityWindows(same, SITE, DAY, end, { maximumAirmass: 0.5 })).toEqual([])
 })
@@ -72,11 +72,11 @@ test('combined target constraints evaluate the target provider once per epoch', 
 	let moonCalls = 0
 	const target: PositionOverTime = () => {
 		targetCalls++
-		return vecXAxis()
+		return vecX()
 	}
 	const moon: PositionOverTime = () => {
 		moonCalls++
-		return vecYAxis()
+		return vecY()
 	}
 	const windows = visibilityWindows(target, SITE, DAY, timeShift(DAY, 0.01), { minimumAltitude: -PIOVERTWO, minimumMoonSeparation: 0 }, { moonAt: moon, step: 0.005 })
 	expect(windows).toHaveLength(1)
@@ -85,9 +85,9 @@ test('combined target constraints evaluate the target provider once per epoch', 
 })
 
 test('independent constraints find a hidden overlap with provider-local singletons', () => {
-	const targetScratch: MutVec3 = [0, 0, 0]
-	const sunScratch: MutVec3 = [0, 0, 0]
-	const moonScratch: MutVec3 = [0, 0, 0]
+	const targetScratch = vecZero()
+	const sunScratch = vecZero()
+	const moonScratch = vecZero()
 	let targetCalls = 0
 	let sunCalls = 0
 	let moonCalls = 0
@@ -127,7 +127,7 @@ test('independent constraints find a hidden overlap with provider-local singleto
 	expect(targetScratch).not.toBe(sunScratch)
 	expect(targetScratch).not.toBe(moonScratch)
 	expect(sunScratch).not.toBe(moonScratch)
-	expect(targetScratch).toEqual([1, 0, 0])
+	expect(targetScratch).toEqual(vecX())
 	expect(sunScratch).toEqual([Math.cos(0.8), Math.sin(0.8), 0])
 	expect(moonScratch).toEqual([Math.cos(0.4), Math.sin(0.4), 0])
 })

@@ -4,7 +4,7 @@ import { normalizeStarCatalogQuery, type StarCatalogQuery } from '../../../../sr
 import { STELLARIUM_ICOSAHEDRON_CORNERS, STELLARIUM_ICOSAHEDRON_TRIANGLES, type StellariumCapClassifier, stellariumBoxesClassifier, stellariumConeClassifier, stellariumLocalZoneCount, type StellariumZoneCover, stellariumZoneCover, stellariumZoneForPoint, stellariumZoneTriangle } from '../../../../src/catalogs/stars/stellarium/geodesic'
 import { eraS2c } from '../../../../src/astronomy/coordinates/erfa/erfa'
 import { TAU, PI, PIOVERTWO } from '../../../../src/core/constants'
-import { type MutVec3, type Vec3, vecAngleUnit, vecCross, vecDot, vecLength, vecNormalize } from '../../../../src/math/linear-algebra/vec3'
+import { type MutVec3, type Vec3, vecAngleUnit, vecCross, vecDot, vecLength, vecNormalize, vecX, vecZ } from '../../../../src/math/linear-algebra/vec3'
 import { mulberry32 } from '../../../../src/math/numerical/random'
 import { arcsec, deg } from '../../../../src/math/units/angle'
 
@@ -37,7 +37,7 @@ function pointInCone(axis: Vec3, radius: number, random: () => number): MutVec3 
 	const z = 1 - random() * (1 - cosR)
 	const phi = TAU * random()
 	const r = Math.sqrt(Math.max(0, 1 - z * z))
-	const helper: Vec3 = Math.abs(axis[2]) < 0.9 ? [0, 0, 1] : [1, 0, 0]
+	const helper: Vec3 = Math.abs(axis[2]) < 0.9 ? vecZ() : vecX()
 	const u = vecNormalize(vecCross(axis, helper))
 	const w = vecCross(axis, u)
 	return [0, 1, 2].map((i) => axis[i] * z + r * (u[i] * Math.cos(phi) + w[i] * Math.sin(phi))) as MutVec3
@@ -138,7 +138,7 @@ describe('grid', () => {
 		const edge = vecNormalize([c0[0] + c1[0], c0[1] + c1[1], c0[2] + c1[2]])
 		const zone = stellariumZoneForPoint(edge, 7)
 		expect(outsideDistance(stellariumZoneTriangle(7, zone), edge)).toBeLessThan(1e-12)
-		expect(stellariumZoneForPoint([0, 0, 1], 8)).toBe(stellariumZoneForPoint([0, 0, 2], 8))
+		expect(stellariumZoneForPoint(vecZ(), 8)).toBe(stellariumZoneForPoint(vecZ(2), 8))
 	})
 })
 
@@ -187,7 +187,7 @@ describe('cover', () => {
 	})
 
 	test('a full-sky cone is a single inside run per level', () => {
-		const cover = stellariumZoneCover(stellariumConeClassifier([1, 0, 0], PI), [0, 2, 5])
+		const cover = stellariumZoneCover(stellariumConeClassifier(vecX(), PI), [0, 2, 5])
 		expect(cover.ranges.get(5)).toEqual([{ start: 0, end: stellariumLocalZoneCount(5), inside: true }])
 		expect(cover.ranges.get(0)).toEqual([{ start: 0, end: 20, inside: true }])
 		expect(cover.visited).toBe(20)
@@ -220,7 +220,7 @@ describe('cover', () => {
 	})
 
 	test('an empty level list selects nothing', () => {
-		expect(stellariumZoneCover(stellariumConeClassifier([1, 0, 0], 1), []).ranges.size).toBe(0)
+		expect(stellariumZoneCover(stellariumConeClassifier(vecX(), 1), []).ranges.size).toBe(0)
 	})
 
 	function expectRegionComplete(query: StarCatalogQuery, levels: readonly number[], seed: number) {
@@ -291,9 +291,9 @@ describe('cover', () => {
 		expect(classify(eraS2c(deg(15), deg(15)), deg(10))).toBe('border')
 		expect(classify(eraS2c(deg(200), deg(15)), deg(1))).toBe('outside')
 		expect(classify(eraS2c(deg(15), deg(60)), deg(1))).toBe('outside')
-		expect(classify([0, 0, 1], deg(1))).toBe('outside')
+		expect(classify(vecZ(), deg(1))).toBe('outside')
 		// A cap touching the pole spans every RA.
-		expect(stellariumBoxesClassifier([{ minRA: deg(10), maxRA: deg(20), minDEC: deg(80), maxDEC: deg(90) }])([0, 0, 1], deg(1))).toBe('border')
-		expect(stellariumBoxesClassifier([{ minRA: 0, maxRA: TAU, minDEC: deg(80), maxDEC: deg(90) }])([0, 0, 1], deg(1))).toBe('inside')
+		expect(stellariumBoxesClassifier([{ minRA: deg(10), maxRA: deg(20), minDEC: deg(80), maxDEC: deg(90) }])(vecZ(), deg(1))).toBe('border')
+		expect(stellariumBoxesClassifier([{ minRA: 0, maxRA: TAU, minDEC: deg(80), maxDEC: deg(90) }])(vecZ(), deg(1))).toBe('inside')
 	})
 })

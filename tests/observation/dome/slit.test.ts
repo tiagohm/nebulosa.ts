@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test'
 import { enuVectorToHorizontal, horizontalToEnuVector } from '../../../src/astronomy/coordinates/frame.local'
 import { PI, PIOVERTWO } from '../../../src/core/constants'
 import { matMulVec, matRodriguesRotation } from '../../../src/math/linear-algebra/mat3'
+import { vecX, vecY, vecZero } from '../../../src/math/linear-algebra/vec3'
 import { deg } from '../../../src/math/units/angle'
 import { domeAzimuthError, intersectRaySphere, isDomeMoveRequired, mountPoseToOpticalRay, solveDomeSlit, solveDomeSlitFromMount } from '../../../src/observation/dome/slit'
 import { applyDirectionAlignment, fitMountAlignment } from '../../../src/observation/mount/alignment'
@@ -15,41 +16,41 @@ function expectVectorClose(actual: readonly number[], expected: readonly number[
 }
 
 test('inside rays exit the sphere and retain metric distance after normalization', () => {
-	const intersection = intersectRaySphere({ origin: [0, 0, 0], direction: [2, 0, 0] }, [0, 0, 0], 5)!
+	const intersection = intersectRaySphere({ origin: vecZero(), direction: vecX(2) }, vecZero(), 5)!
 	expect(intersection.distance).toBeCloseTo(5, 12)
-	expectVectorClose(intersection.point, [5, 0, 0])
-	const slit = solveDomeSlit({ origin: [0, 0, 0], direction: [2, 0, 0] }, { center: [0, 0, 0], radius: 5 })!
+	expectVectorClose(intersection.point, vecX(5))
+	const slit = solveDomeSlit({ origin: vecZero(), direction: vecX(2) }, { center: vecZero(), radius: 5 })!
 	expect(slit.azimuth).toBeCloseTo(PIOVERTWO, 12)
 	expect(slit.altitude).toBeCloseTo(0, 12)
 })
 
 test('outside entering rays choose the near root rather than the opposite exit', () => {
-	const intersection = intersectRaySphere({ origin: [-10, 0, 0], direction: [1, 0, 0] }, [0, 0, 0], 5)!
+	const intersection = intersectRaySphere({ origin: vecX(-10), direction: vecX() }, vecZero(), 5)!
 	expect(intersection.distance).toBeCloseTo(5, 12)
-	expectVectorClose(intersection.point, [-5, 0, 0])
-	expect(intersectRaySphere({ origin: [-10, 0, 0], direction: [-1, 0, 0] }, [0, 0, 0], 5)).toBeUndefined()
+	expectVectorClose(intersection.point, vecX(-5))
+	expect(intersectRaySphere({ origin: vecX(-10), direction: vecX(-1) }, vecZero(), 5)).toBeUndefined()
 })
 
 test('near-surface entering rays preserve the nearest strictly positive root', () => {
-	const intersection = intersectRaySphere({ origin: [5 + 5e-14, 0, 0], direction: [-1, 0, 0] }, [0, 0, 0], 5)!
+	const intersection = intersectRaySphere({ origin: [5 + 5e-14, 0, 0], direction: vecX(-1) }, vecZero(), 5)!
 
 	expect(intersection.distance).toBeGreaterThan(0)
 	expect(intersection.distance).toBeLessThan(1e-12)
-	expectVectorClose(intersection.point, [5, 0, 0])
+	expectVectorClose(intersection.point, vecX(5))
 })
 
 test('tangent, surface, and invalid rays follow strict forward semantics', () => {
-	const tangent = intersectRaySphere({ origin: [-10, 5, 0], direction: [1, 0, 0] }, [0, 0, 0], 5)!
-	expectVectorClose(tangent.point, [0, 5, 0])
+	const tangent = intersectRaySphere({ origin: [-10, 5, 0], direction: vecX() }, vecZero(), 5)!
+	expectVectorClose(tangent.point, vecY(5))
 	expect(tangent.distance).toBeCloseTo(10, 12)
-	expect(intersectRaySphere({ origin: [5, 0, 0], direction: [1, 0, 0] }, [0, 0, 0], 5)).toBeUndefined()
-	expectVectorClose(intersectRaySphere({ origin: [5, 0, 0], direction: [-1, 0, 0] }, [0, 0, 0], 5)!.point, [-5, 0, 0])
-	expect(() => intersectRaySphere({ origin: [0, 0, 0], direction: [0, 0, 0] }, [0, 0, 0], 5)).toThrow()
-	expect(intersectRaySphere({ origin: [0, 0, 0], direction: [1, 0, 0] }, [0, 0, 0], 0)).toBeUndefined()
+	expect(intersectRaySphere({ origin: vecX(5), direction: vecX() }, vecZero(), 5)).toBeUndefined()
+	expectVectorClose(intersectRaySphere({ origin: vecX(5), direction: vecX(-1) }, vecZero(), 5)!.point, vecX(-5))
+	expect(() => intersectRaySphere({ origin: vecZero(), direction: vecZero() }, vecZero(), 5)).toThrow()
+	expect(intersectRaySphere({ origin: vecZero(), direction: vecX() }, vecZero(), 0)).toBeUndefined()
 })
 
 test('command offset, reversed direction, and north-wrap errors are explicit', () => {
-	const slit = solveDomeSlit({ origin: [0, 0, 0], direction: [1, 0, 0] }, { center: [0, 0, 0], radius: 5, azimuthOffset: deg(10), azimuthDirection: -1 })!
+	const slit = solveDomeSlit({ origin: vecZero(), direction: vecX() }, { center: vecZero(), radius: 5, azimuthOffset: deg(10), azimuthDirection: -1 })!
 	expect(slit.commandAzimuth).toBeCloseTo(deg(280), 12)
 	expect(domeAzimuthError(deg(359), deg(1))).toBeCloseTo(deg(2), 12)
 	expect(domeAzimuthError(deg(1), deg(359))).toBeCloseTo(deg(-2), 12)
@@ -70,7 +71,7 @@ test('inverse to forward to physical ray preserves offsets and hits the dome sph
 	expect(encoders.converged).toBeTrue()
 	const pose = mountPoseFromEncoders(geometry, encoders)
 	const ray = mountPoseToOpticalRay(pose)
-	const dome = { center: [0, 0, 0] as const, radius: 5 }
+	const dome = { center: vecZero(), radius: 5 }
 	const slit = solveDomeSlit(ray, dome)!
 	const direct = solveDomeSlitFromMount(geometry, encoders, dome)!
 
@@ -101,7 +102,7 @@ test('recovered alignment is materialized once in the end-to-end dome solution',
 	const requestedHorizontal = { azimuth: deg(140), altitude: deg(38) }
 	const target = horizontalToEnuVector(requestedHorizontal.azimuth, requestedHorizontal.altitude)
 	const encoders = solveMountEncoders(aligned, target, { initial: { primary: deg(130), secondary: deg(35) }, tolerance: 1e-11 })
-	const slit = solveDomeSlitFromMount(aligned, encoders, { center: [0, 0, 0], radius: 4 })!
+	const slit = solveDomeSlitFromMount(aligned, encoders, { center: vecZero(), radius: 4 })!
 
 	expect(encoders.converged).toBeTrue()
 	expectVectorClose(mountDirectionFromEncoders(aligned, encoders), target, 10)

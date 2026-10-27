@@ -16,7 +16,7 @@ import { Timescale, time, timeShift, timeYMDHMS, toJulianDay, type Time } from '
 import { DAYSEC, J2000, PI, PIOVERTWO, TAU } from '../../../src/core/constants'
 import { fileHandleSource } from '../../../src/io/file'
 import { type Mat3, matIdentity, matMinus, matMulScalar, matMulTranspose, matRotX, matRotZ } from '../../../src/math/linear-algebra/mat3'
-import { type MutVec3, vecCross, vecLength, vecPlus } from '../../../src/math/linear-algebra/vec3'
+import { type MutVec3, vecCross, vecLength, vecPlus, vecX, vecY, vecZ, vecZero } from '../../../src/math/linear-algebra/vec3'
 import { deg, normalizeAngle, toDeg } from '../../../src/math/units/angle'
 import { downloadPerTag } from '../../download'
 import { expectNumberArrayToBeCloseTo } from '../../util'
@@ -115,16 +115,16 @@ test('bodyShape copies a tuple and a {x,y,z} radii record', () => {
 
 test('identity frame and a sphere map planetocentric coordinates to Cartesian', () => {
 	const equator = bodySurfaceLocation(0, 0, 0, UNIT_SPHERE, ICRS)
-	expectNumberArrayToBeCloseTo(equator.bodyFixed, [1, 0, 0], 15)
+	expectNumberArrayToBeCloseTo(equator.bodyFixed, vecX(), 15)
 
 	const east = bodySurfaceLocation(PIOVERTWO, 0, 0, UNIT_SPHERE, ICRS)
-	expectNumberArrayToBeCloseTo(east.bodyFixed, [0, 1, 0], 15)
+	expectNumberArrayToBeCloseTo(east.bodyFixed, vecY(), 15)
 
 	const north = bodySurfaceLocation(0, PIOVERTWO, 0, UNIT_SPHERE, ICRS)
-	expectNumberArrayToBeCloseTo(north.bodyFixed, [0, 0, 1], 15)
+	expectNumberArrayToBeCloseTo(north.bodyFixed, vecZ(), 15)
 
 	const south = bodySurfaceLocation(0, -PIOVERTWO, 0, UNIT_SPHERE, ICRS)
-	expectNumberArrayToBeCloseTo(south.bodyFixed, [0, 0, -1], 15)
+	expectNumberArrayToBeCloseTo(south.bodyFixed, vecZ(-1), 15)
 })
 
 test('sphere Cartesian radius is radius plus elevation', () => {
@@ -134,14 +134,14 @@ test('sphere Cartesian radius is radius plus elevation', () => {
 
 test('tri-axial ellipsoid satisfies the implicit surface equation', () => {
 	const equatorX = bodySurfaceLocation(0, 0, 0, TRIAXIAL, ICRS)
-	expectNumberArrayToBeCloseTo(equatorX.bodyFixed, [3, 0, 0], 15)
+	expectNumberArrayToBeCloseTo(equatorX.bodyFixed, vecX(3), 15)
 	expect(ellipsoidValue(equatorX.bodyFixed!, TRIAXIAL.radii)).toBeCloseTo(1, 15)
 
 	const equatorY = bodySurfaceLocation(PIOVERTWO, 0, 0, TRIAXIAL, ICRS)
-	expectNumberArrayToBeCloseTo(equatorY.bodyFixed, [0, 2, 0], 15)
+	expectNumberArrayToBeCloseTo(equatorY.bodyFixed, vecY(2), 15)
 
 	const pole = bodySurfaceLocation(0, PIOVERTWO, 0, TRIAXIAL, ICRS)
-	expectNumberArrayToBeCloseTo(pole.bodyFixed, [0, 0, 1], 15)
+	expectNumberArrayToBeCloseTo(pole.bodyFixed, vecZ(), 15)
 
 	const loc = bodySurfaceLocation(deg(30), deg(40), 0, TRIAXIAL, ICRS)
 	expect(ellipsoidValue(loc.bodyFixed!, TRIAXIAL.radii)).toBeCloseTo(1, 14)
@@ -182,8 +182,8 @@ test('poles remain finite for any longitude', () => {
 
 		expect(north.every(Number.isFinite)).toBe(true)
 		expect(south.every(Number.isFinite)).toBe(true)
-		expectNumberArrayToBeCloseTo(north, [0, 0, 1.1], 12)
-		expectNumberArrayToBeCloseTo(south, [0, 0, -1.1], 12)
+		expectNumberArrayToBeCloseTo(north, vecZ(1.1), 12)
+		expectNumberArrayToBeCloseTo(south, vecZ(-1.1), 12)
 	}
 })
 
@@ -191,7 +191,7 @@ test('a zero-rate frame has zero body-relative velocity', () => {
 	const loc = bodySurfaceLocation(deg(12), deg(-8), 0, UNIT_SPHERE, ICRS)
 	const [p, v] = bodySurfaceState(loc, T0)
 	expectNumberArrayToBeCloseTo(p, loc.bodyFixed!, 15)
-	expectNumberArrayToBeCloseTo(v, [0, 0, 0], 15)
+	expectNumberArrayToBeCloseTo(v, vecZero(), 15)
 })
 
 test('constant +Z spin velocity matches omega cross r', () => {
@@ -227,7 +227,7 @@ test('body-fixed state round-trips through frameToBase and frameAt', () => {
 	const back = frameAt(inertial, loc.frame, T0)
 
 	expectNumberArrayToBeCloseTo(back[0], loc.bodyFixed!, 14)
-	expectNumberArrayToBeCloseTo(back[1], [0, 0, 0], 14)
+	expectNumberArrayToBeCloseTo(back[1], vecZero(), 14)
 })
 
 test('reusable output aliases the supplied state pair', () => {
@@ -251,7 +251,7 @@ test('reusable output aliases the supplied state pair', () => {
 test('bodySurfaceLocation caches the body-fixed point', () => {
 	const loc = bodySurfaceLocation(0, 0, 0, UNIT_SPHERE, ICRS)
 	const cached = loc.bodyFixed
-	expect(cached).toEqual([1, 0, 0])
+	expect(cached).toEqual(vecX())
 
 	loc.bodyFixed = [9, 8, 7]
 	const [p] = bodySurfaceState(loc, T0)

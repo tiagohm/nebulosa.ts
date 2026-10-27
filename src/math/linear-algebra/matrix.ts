@@ -4,7 +4,7 @@ import type { NumberArray } from '../numerical/math'
 // decompositions and a standalone Gaussian-elimination solver. Use the fixed-size mat2.ts/mat3.ts
 // helpers for hot 2x2/3x3 paths; this module is for linear-algebra needs of arbitrary dimension
 // (least squares, general inverses, solving systems). Most arithmetic methods accept an optional output
-// matrix `o` of the correct shape and return it; otherwise a new matrix is allocated.
+// matrix `out` of the correct shape and return it; otherwise a new matrix is allocated.
 
 // Dense matrix stored row-major in a Float64Array (`data`), indexed as data[row * cols + col].
 export class Matrix {
@@ -208,17 +208,17 @@ export class Matrix {
 
 	// Computes the inverse of the matrix.
 	// Throws if the matrix is not square or is singular.
-	// Supports in-place inversion (o === this); source values are captured before writing.
-	invert(o?: Matrix) {
-		o ??= new Matrix(this.rows, this.cols)
-		checkMatrixShape(o, this.rows, this.cols)
+	// Supports in-place inversion (out === this); source values are captured before writing.
+	invert(out?: Matrix) {
+		out ??= new Matrix(this.rows, this.cols)
+		checkMatrixShape(out, this.rows, this.cols)
 
 		if (!this.isSquare) {
 			throw new Error('matrix must be square to compute inverse')
 		}
 
 		const data = this.data
-		const output = o.data
+		const output = out.data
 
 		// Direct inversion for small matrices avoids the cost of an LU decomposition
 		// (a full clone plus O(n³) elimination and substitution).
@@ -226,7 +226,7 @@ export class Matrix {
 			const a = data[0]
 			if (a === 0) throw new Error('matrix is singular and cannot be inverted')
 			output[0] = 1 / a
-			return o
+			return out
 		} else if (this.rows === 2) {
 			const a = data[0]
 			const b = data[1]
@@ -239,7 +239,7 @@ export class Matrix {
 			output[1] = -b * invDet
 			output[2] = -c * invDet
 			output[3] = a * invDet
-			return o
+			return out
 		} else if (this.rows === 3) {
 			const a = data[0]
 			const b = data[1]
@@ -269,140 +269,140 @@ export class Matrix {
 			output[6] = a20 * invDet
 			output[7] = (b * g - a * h) * invDet
 			output[8] = (a * e - b * d) * invDet
-			return o
+			return out
 		}
 
 		// lu.invert throws when the matrix is singular.
-		return new LuDecomposition(this).invert(o)
+		return new LuDecomposition(this).invert(out)
 	}
 
 	// Computes the negation of the matrix.
-	negate(o?: Matrix) {
-		o ??= new Matrix(this.rows, this.cols)
-		checkMatrixShape(o, this.rows, this.cols)
+	negate(out?: Matrix) {
+		out ??= new Matrix(this.rows, this.cols)
+		checkMatrixShape(out, this.rows, this.cols)
 
 		const data = this.data
-		const output = o.data
+		const output = out.data
 
 		for (let i = 0; i < data.length; i++) {
 			output[i] = -data[i]
 		}
 
-		return o
+		return out
 	}
 
 	// Computes the sum of two matrices.
-	plus(b: Matrix, o?: Matrix) {
+	plus(b: Matrix, out?: Matrix) {
 		if (this.rows !== b.rows || this.cols !== b.cols) {
 			throw new Error('matrices must have the same dimensions to add')
 		}
 
-		o ??= new Matrix(this.rows, this.cols)
-		checkMatrixShape(o, this.rows, this.cols)
+		out ??= new Matrix(this.rows, this.cols)
+		checkMatrixShape(out, this.rows, this.cols)
 
 		const aData = this.data
 		const bData = b.data
-		const output = o.data
+		const output = out.data
 
 		for (let i = 0; i < aData.length; i++) {
 			output[i] = aData[i] + bData[i]
 		}
 
-		return o
+		return out
 	}
 
 	// Computes the subtraction of two matrices.
-	minus(b: Matrix, o?: Matrix) {
+	minus(b: Matrix, out?: Matrix) {
 		if (this.rows !== b.rows || this.cols !== b.cols) {
 			throw new Error('matrices must have the same dimensions to subtract')
 		}
 
-		o ??= new Matrix(this.rows, this.cols)
-		checkMatrixShape(o, this.rows, this.cols)
+		out ??= new Matrix(this.rows, this.cols)
+		checkMatrixShape(out, this.rows, this.cols)
 
 		if (this === b) {
-			return o.fill(0)
+			return out.fill(0)
 		}
 
 		const aData = this.data
 		const bData = b.data
-		const output = o.data
+		const output = out.data
 
 		for (let i = 0; i < aData.length; i++) {
 			output[i] = aData[i] - bData[i]
 		}
 
-		return o
+		return out
 	}
 
 	// Computes the sum of a matrix and a scalar.
-	plusScalar(scalar: number, o?: Matrix) {
-		o ??= new Matrix(this.rows, this.cols)
-		checkMatrixShape(o, this.rows, this.cols)
+	plusScalar(scalar: number, out?: Matrix) {
+		out ??= new Matrix(this.rows, this.cols)
+		checkMatrixShape(out, this.rows, this.cols)
 
 		const data = this.data
-		const output = o.data
+		const output = out.data
 
 		for (let i = 0; i < data.length; i++) {
 			output[i] = data[i] + scalar
 		}
 
-		return o
+		return out
 	}
 
 	// Computes the subtraction of a matrix and a scalar.
-	minusScalar(scalar: number, o?: Matrix) {
-		o ??= new Matrix(this.rows, this.cols)
-		checkMatrixShape(o, this.rows, this.cols)
+	minusScalar(scalar: number, out?: Matrix) {
+		out ??= new Matrix(this.rows, this.cols)
+		checkMatrixShape(out, this.rows, this.cols)
 
 		const data = this.data
-		const output = o.data
+		const output = out.data
 
 		for (let i = 0; i < data.length; i++) {
 			output[i] = data[i] - scalar
 		}
 
-		return o
+		return out
 	}
 
 	// Computes the multiplication of a matrix and a scalar.
-	mulScalar(scalar: number, o?: Matrix) {
-		o ??= new Matrix(this.rows, this.cols)
-		checkMatrixShape(o, this.rows, this.cols)
+	mulScalar(scalar: number, out?: Matrix) {
+		out ??= new Matrix(this.rows, this.cols)
+		checkMatrixShape(out, this.rows, this.cols)
 
 		const data = this.data
-		const output = o.data
+		const output = out.data
 
 		for (let i = 0; i < data.length; i++) {
 			output[i] = data[i] * scalar
 		}
 
-		return o
+		return out
 	}
 
 	// Computes the division of a matrix by a scalar.
-	divScalar(scalar: number, o?: Matrix) {
-		o ??= new Matrix(this.rows, this.cols)
-		checkMatrixShape(o, this.rows, this.cols)
+	divScalar(scalar: number, out?: Matrix) {
+		out ??= new Matrix(this.rows, this.cols)
+		checkMatrixShape(out, this.rows, this.cols)
 
 		const data = this.data
-		const output = o.data
+		const output = out.data
 
 		for (let i = 0; i < data.length; i++) {
 			output[i] = data[i] / scalar
 		}
 
-		return o
+		return out
 	}
 
 	// Computes the product of two matrices, MxN and NxP.
 	// The result is a new matrix MxP.
-	mul(b: Matrix, o?: Matrix) {
+	mul(b: Matrix, out?: Matrix) {
 		const m = this.rows
 		const n = b.cols
 		const shared = this.cols
 
-		if (o === this || o === b) {
+		if (out === this || out === b) {
 			throw new Error('invalid output matrix')
 		}
 
@@ -410,12 +410,12 @@ export class Matrix {
 			throw new Error('matrix columns must match matrix rows to multiply')
 		}
 
-		o ??= new Matrix(m, n)
-		checkMatrixShape(o, m, n)
+		out ??= new Matrix(m, n)
+		checkMatrixShape(out, m, n)
 
 		const aData = this.data
 		const bData = b.data
-		const output = o.data
+		const output = out.data
 		const bCols = b.cols
 
 		for (let i = 0; i < m; i++) {
@@ -435,7 +435,7 @@ export class Matrix {
 			}
 		}
 
-		return o
+		return out
 	}
 
 	// Computes the matrix-vector product M·v. `v` length must equal `cols`; returns a new length-`rows` Float64Array.
@@ -656,19 +656,19 @@ export class LuDecomposition {
 	}
 
 	// Computes the matrix inverse by forward/back substitution against the permuted identity.
-	// Writes into `o` (allocated when omitted) and returns it; throws if the matrix is singular.
-	invert(o?: Matrix) {
+	// Writes into `out` (allocated when omitted) and returns it; throws if the matrix is singular.
+	invert(out?: Matrix) {
 		const n = this.#A.rows
 		const aData = this.#A.data
 
-		o ??= new Matrix(n, n)
-		checkMatrixShape(o, n, n)
+		out ??= new Matrix(n, n)
+		checkMatrixShape(out, n, n)
 
 		if (this.isSingular) {
 			throw new Error('matrix is singular and cannot be inverted')
 		}
 
-		const output = o.data
+		const output = out.data
 
 		for (let j = 0; j < n; j++) {
 			for (let i = 0; i < n; i++) {
@@ -693,7 +693,7 @@ export class LuDecomposition {
 			}
 		}
 
-		return o
+		return out
 	}
 
 	// Solves the system of linear equations A*x = B, where A is the matrix and B is the right-hand side vector.
@@ -849,17 +849,17 @@ function hypotenuse(a: number, b: number) {
 // Solves a system of linear equations using Gaussian elimination with partial pivoting.
 // A is the square matrix of coefficients, B is the vector of constants.
 // WARNING: mutates A.data and B in place (row swaps, pivot scaling, and elimination), so pass
-// copies if the originals must be preserved. Passing B as `o` to solve in place is supported.
-// The solution is written to `o` (or a new Float64Array) and returned.
+// copies if the originals must be preserved. Passing B as `out` to solve in place is supported.
+// The solution is written to `out` (or a new Float64Array) and returned.
 // When A is singular (a fully zero pivot column is found), the output is filled with NaN.
 // https://en.wikipedia.org/wiki/Gaussian_elimination
-export function gaussianElimination(A: Matrix, B: NumberArray, o?: NumberArray) {
+export function gaussianElimination(A: Matrix, B: NumberArray, out?: NumberArray) {
 	if (!A.isSquare) {
 		throw new Error('matrix must be square')
 	}
 
 	const n = A.rows
-	const x = o ?? new Float64Array(n)
+	const x = out ?? new Float64Array(n)
 
 	if (B.length !== n) {
 		throw new Error('right-hand side length must match matrix rows')

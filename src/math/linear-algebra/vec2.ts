@@ -3,7 +3,7 @@ import { type Angle, normalizeAngle } from '../units/angle'
 // Two-component vector math: dot product, the scalar 2D cross product, length/distance, normalization, normalized midpoints,
 // scalar and element-wise arithmetic, planar rotation, and azimuth extraction. Components are plain
 // numbers in the caller's unit; angle outputs are radians. As in vec3.ts, helpers take an optional
-// output `o?: MutVec2`: when given, the result is written into `o` (which may alias an input) and
+// output `out?: MutVec2`: when given, the result is written into `out` (which may alias an input) and
 // returned; otherwise a new vector is allocated.
 
 // Mutable vector of numbers with two axis.
@@ -90,8 +90,8 @@ export function vec2Longitude(v: Vec2): Angle {
 }
 
 // Negates the vector.
-export function vec2Negate(a: Vec2, o?: MutVec2): MutVec2 {
-	if (o) return vec2Fill(o, -a[0], -a[1])
+export function vec2Negate(a: Vec2, out?: MutVec2): MutVec2 {
+	if (out) return vec2Fill(out, -a[0], -a[1])
 	else return [-a[0], -a[1]]
 }
 
@@ -101,32 +101,32 @@ export function vec2NegateMut(a: MutVec2): MutVec2 {
 }
 
 // Computes the sum of the vector by scalar.
-export function vec2PlusScalar(a: Vec2, scalar: number, o?: MutVec2): MutVec2 {
-	if (o) return vec2Fill(o, a[0] + scalar, a[1] + scalar)
+export function vec2PlusScalar(a: Vec2, scalar: number, out?: MutVec2): MutVec2 {
+	if (out) return vec2Fill(out, a[0] + scalar, a[1] + scalar)
 	else return [a[0] + scalar, a[1] + scalar]
 }
 
 // Computes the subtraction of the vector by scalar.
-export function vec2MinusScalar(a: Vec2, scalar: number, o?: MutVec2): MutVec2 {
-	if (o) return vec2Fill(o, a[0] - scalar, a[1] - scalar)
+export function vec2MinusScalar(a: Vec2, scalar: number, out?: MutVec2): MutVec2 {
+	if (out) return vec2Fill(out, a[0] - scalar, a[1] - scalar)
 	else return [a[0] - scalar, a[1] - scalar]
 }
 
 // Computes the multiplication of the vector by scalar.
-export function vec2MulScalar(a: Vec2, scalar: number, o?: MutVec2): MutVec2 {
-	if (o) return vec2Fill(o, a[0] * scalar, a[1] * scalar)
+export function vec2MulScalar(a: Vec2, scalar: number, out?: MutVec2): MutVec2 {
+	if (out) return vec2Fill(out, a[0] * scalar, a[1] * scalar)
 	else return [a[0] * scalar, a[1] * scalar]
 }
 
 // Computes the division of the vector by scalar.
-export function vec2DivScalar(a: Vec2, scalar: number, o?: MutVec2): MutVec2 {
-	if (o) return vec2Fill(o, a[0] / scalar, a[1] / scalar)
+export function vec2DivScalar(a: Vec2, scalar: number, out?: MutVec2): MutVec2 {
+	if (out) return vec2Fill(out, a[0] / scalar, a[1] / scalar)
 	else return [a[0] / scalar, a[1] / scalar]
 }
 
 // Computes the sum between the vectors.
-export function vec2Plus(a: Vec2, b: Vec2, o?: MutVec2): MutVec2 {
-	if (o) return vec2Fill(o, a[0] + b[0], a[1] + b[1])
+export function vec2Plus(a: Vec2, b: Vec2, out?: MutVec2): MutVec2 {
+	if (out) return vec2Fill(out, a[0] + b[0], a[1] + b[1])
 	else return [a[0] + b[0], a[1] + b[1]]
 }
 
@@ -134,8 +134,8 @@ export function vec2Plus(a: Vec2, b: Vec2, o?: MutVec2): MutVec2 {
 // For equal-length nonzero vectors this is the minor-arc midpoint direction. An exactly zero sum returns
 // zero (no defined direction); nearly opposite inputs retain their represented residual but are ill-conditioned.
 // Overflowing sums are halved before addition; tiny or overflowing norms are scaled before normalization.
-// Writes and returns o when supplied (it may alias either input); otherwise allocates a fresh vector.
-export function vec2Midpoint(a: Vec2, b: Vec2, o?: MutVec2): MutVec2 {
+// Writes and returns out when supplied (it may alias either input); otherwise allocates a fresh vector.
+export function vec2Midpoint(a: Vec2, b: Vec2, out?: MutVec2): MutVec2 {
 	let x = a[0] + b[0]
 	let y = a[1] + b[1]
 
@@ -145,7 +145,7 @@ export function vec2Midpoint(a: Vec2, b: Vec2, o?: MutVec2): MutVec2 {
 	}
 
 	let length = Math.hypot(x, y)
-	if (length === 0) return vec2Fill(o ?? [0, 0], 0, 0)
+	if (length === 0) return vec2Fill(out ?? [0, 0], 0, 0)
 
 	// Normal-size finite norms keep the common unit-vector path to a single hypot.
 	if (!(length >= Number.MIN_VALUE / Number.EPSILON && Number.isFinite(length))) {
@@ -155,32 +155,32 @@ export function vec2Midpoint(a: Vec2, b: Vec2, o?: MutVec2): MutVec2 {
 		length = Math.hypot(x, y)
 	}
 
-	return vec2Fill(o ?? [0, 0], x / length, y / length)
+	return vec2Fill(out ?? [0, 0], x / length, y / length)
 }
 
 // Computes the subtraction between the vectors.
-export function vec2Minus(a: Vec2, b: Vec2, o?: MutVec2): MutVec2 {
-	if (o) return vec2Fill(o, a[0] - b[0], a[1] - b[1])
+export function vec2Minus(a: Vec2, b: Vec2, out?: MutVec2): MutVec2 {
+	if (out) return vec2Fill(out, a[0] - b[0], a[1] - b[1])
 	else return [a[0] - b[0], a[1] - b[1]]
 }
 
 // Computes the multiplication between the vectors.
-export function vec2Mul(a: Vec2, b: Vec2, o?: MutVec2): MutVec2 {
-	if (o) return vec2Fill(o, a[0] * b[0], a[1] * b[1])
+export function vec2Mul(a: Vec2, b: Vec2, out?: MutVec2): MutVec2 {
+	if (out) return vec2Fill(out, a[0] * b[0], a[1] * b[1])
 	else return [a[0] * b[0], a[1] * b[1]]
 }
 
 // Computes the division between the vectors.
-export function vec2Div(a: Vec2, b: Vec2, o?: MutVec2): MutVec2 {
-	if (o) return vec2Fill(o, a[0] / b[0], a[1] / b[1])
+export function vec2Div(a: Vec2, b: Vec2, out?: MutVec2): MutVec2 {
+	if (out) return vec2Fill(out, a[0] / b[0], a[1] / b[1])
 	else return [a[0] / b[0], a[1] / b[1]]
 }
 
 // Normalizes the vector.
-export function vec2Normalize(v: Vec2, o?: MutVec2): MutVec2 {
+export function vec2Normalize(v: Vec2, out?: MutVec2): MutVec2 {
 	const len = vec2Length(v)
-	if (len === 0) return o ? vec2Fill(o, v[0], v[1]) : vec2Clone(v)
-	else return vec2DivScalar(v, len, o)
+	if (len === 0) return out ? vec2Fill(out, v[0], v[1]) : vec2Clone(v)
+	else return vec2DivScalar(v, len, out)
 }
 
 // Normalizes the vector in place.
@@ -189,10 +189,10 @@ export function vec2NormalizeMut(v: MutVec2): MutVec2 {
 }
 
 // Rotates the vector around the origin.
-export function vec2Rot(v: Vec2, angle: Angle, o?: MutVec2): MutVec2 {
+export function vec2Rot(v: Vec2, angle: Angle, out?: MutVec2): MutVec2 {
 	const ct = Math.cos(angle)
 	const st = Math.sin(angle)
-	if (o) return vec2Fill(o, ct * v[0] - st * v[1], st * v[0] + ct * v[1])
+	if (out) return vec2Fill(out, ct * v[0] - st * v[1], st * v[0] + ct * v[1])
 	else return [ct * v[0] - st * v[1], st * v[0] + ct * v[1]]
 }
 

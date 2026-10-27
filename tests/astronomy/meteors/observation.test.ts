@@ -5,6 +5,7 @@ import { meteorRadiantHorizontal } from '../../../src/astronomy/meteors/radiant'
 import type { MeteorHorizontalRadiant, MeteorVisualObservation } from '../../../src/astronomy/meteors/types'
 import { Timescale, timeYMDHMS } from '../../../src/astronomy/time/time'
 import { PIOVERFOUR, PIOVERTWO } from '../../../src/core/constants'
+import { vecX, vecY } from '../../../src/math/linear-algebra/vec3'
 import { deg } from '../../../src/math/units/angle'
 import { EXPONENTIAL_PROFILE, OBSERVER, REFERENCE_UTC, VISUAL_OBSERVATION } from './util'
 
@@ -83,8 +84,8 @@ test('observation context and circumstances retain supplied local and lunar prov
 		time,
 		solarLongitude: 0,
 		localSiderealTime: deg(123),
-		sun: [1, 0, 0],
-		moon: [0, 1, 0],
+		sun: vecX(),
+		moon: vecY(),
 	})
 	expect(conditions.time).toBe(time)
 	expect(conditions.radiant).toEqual(horizontal)

@@ -484,7 +484,7 @@ export function terrainHorizon(model: TerrainModel, feature: SurfaceFeature, { a
 	if (!(countBound * azimuths <= MAX_HORIZON_SAMPLES)) throw new RangeError(`terrain horizon needs more than ${MAX_HORIZON_SAMPLES} samples; increase step, reduce azimuths or reduce maxDistance`)
 
 	const samples: TerrainHorizonSample[] = []
-	const terrain: MutVec3 = [0, 0, 0]
+	const terrain = vecZero()
 
 	for (let i = 0; i < azimuths; i++) {
 		const azimuth = (i * TAU) / azimuths
@@ -590,10 +590,10 @@ export function terrainSlope(model: TerrainModel, feature: SurfaceFeature, basel
 		return value === undefined || Number.isNaN(value) ? undefined : out
 	}
 
-	const n0 = terrainAt(northward, baseline, [0, 0, 0])
-	const n1 = terrainAt(northward, -baseline, [0, 0, 0])
-	const e0 = terrainAt(eastward, baseline, [0, 0, 0])
-	const e1 = terrainAt(eastward, -baseline, [0, 0, 0])
+	const n0 = terrainAt(northward, baseline, vecZero())
+	const n1 = terrainAt(northward, -baseline, vecZero())
+	const e0 = terrainAt(eastward, baseline, vecZero())
+	const e1 = terrainAt(eastward, -baseline, vecZero())
 	if (n0 === undefined || n1 === undefined || e0 === undefined || e1 === undefined) return undefined
 
 	// Upward normal: (east chord) × (north chord), since east × north = up.

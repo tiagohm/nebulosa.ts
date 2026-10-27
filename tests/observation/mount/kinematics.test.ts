@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test'
 import { PI, PIOVERTWO } from '../../../src/core/constants'
 import { matRodriguesRotation } from '../../../src/math/linear-algebra/mat3'
 import type { RigidTransform3 } from '../../../src/math/linear-algebra/rigid3'
+import { vecX, vecY, vecZ, vecZero } from '../../../src/math/linear-algebra/vec3'
 import { deg } from '../../../src/math/units/angle'
 import { createCanonicalEquatorialGeometry, createIdealAltAzGeometry, mountDirectionFromEncoders, mountPoseFromEncoders, solveMountEncoders, type TwoAxisMountGeometry } from '../../../src/observation/mount/kinematics'
 
@@ -15,11 +16,11 @@ function expectVectorClose(actual: readonly number[], expected: readonly number[
 test('ideal altaz geometry follows north-through-east azimuth and altitude', () => {
 	const geometry = createIdealAltAzGeometry()
 	const cases = [
-		[0, 0, [0, 1, 0]],
-		[PIOVERTWO, 0, [1, 0, 0]],
-		[PI, 0, [0, -1, 0]],
-		[3 * PIOVERTWO, 0, [-1, 0, 0]],
-		[0, PIOVERTWO, [0, 0, 1]],
+		[0, 0, vecY()],
+		[PIOVERTWO, 0, vecX()],
+		[PI, 0, vecY(-1)],
+		[3 * PIOVERTWO, 0, vecX(-1)],
+		[0, PIOVERTWO, vecZ()],
 	] as const
 
 	for (const [primary, secondary, expected] of cases) expectVectorClose(mountDirectionFromEncoders(geometry, { primary, secondary }), expected)
@@ -37,19 +38,19 @@ test('canonical equatorial geometry emits Taki local-equatorial directions', () 
 })
 
 test('forward pose rotates offset points about transported physical axes', () => {
-	const baseToWorld: RigidTransform3 = { rotation: matRodriguesRotation([0, 0, 1], PIOVERTWO), translation: [10, 20, 30] }
+	const baseToWorld: RigidTransform3 = { rotation: matRodriguesRotation(vecZ(), PIOVERTWO), translation: [10, 20, 30] }
 	const geometry = createIdealAltAzGeometry({
 		baseToWorld,
-		primaryPivot: [0, 0, 0],
-		secondaryPivot: [0, 0, 1],
+		primaryPivot: vecZero(),
+		secondaryPivot: vecZ(),
 		opticalOrigin: [1, 0, 1],
 	})
 	const pose = mountPoseFromEncoders(geometry, { primary: PIOVERTWO, secondary: 0 })
 
 	expectVectorClose(pose.origin, [11, 20, 31])
-	expectVectorClose(pose.direction, [0, 1, 0])
-	expectVectorClose(pose.primaryAxis, [0, 0, 1])
-	expectVectorClose(pose.secondaryAxis, [1, 0, 0])
+	expectVectorClose(pose.direction, vecY())
+	expectVectorClose(pose.primaryAxis, vecZ())
+	expectVectorClose(pose.secondaryAxis, vecX())
 	expectVectorClose(pose.secondaryPivot, [10, 20, 31])
 })
 
@@ -89,7 +90,7 @@ test('inverse kinematics recovers local branches for both canonical geometries',
 
 test('inverse kinematics escapes an antipodal default seed', () => {
 	const geometry = createIdealAltAzGeometry()
-	const target = [0, -1, 0] as const
+	const target = vecY(-1)
 	const solution = solveMountEncoders(geometry, target, { tolerance: 1e-12 })
 
 	expect(solution.converged).toBeTrue()
@@ -116,7 +117,7 @@ test('inverse kinematics respects ranges and returns a finite best effort', () =
 
 test('inverse kinematics reports singular seeds without NaN', () => {
 	const geometry = createIdealAltAzGeometry()
-	const solution = solveMountEncoders(geometry, [1, 0, 0], { initial: { primary: 0, secondary: PIOVERTWO } })
+	const solution = solveMountEncoders(geometry, vecX(), { initial: { primary: 0, secondary: PIOVERTWO } })
 	expect(solution.converged).toBeFalse()
 	expect(Number.isFinite(solution.primary)).toBeTrue()
 	expect(Number.isFinite(solution.secondary)).toBeTrue()
@@ -125,9 +126,9 @@ test('inverse kinematics reports singular seeds without NaN', () => {
 
 test('invalid geometry, directions, ranges, and solver controls are rejected', () => {
 	const geometry = createIdealAltAzGeometry()
-	expect(() => mountDirectionFromEncoders({ ...geometry, primaryAxis: [0, 0, 0] }, { primary: 0, secondary: 0 })).toThrow()
-	expect(() => solveMountEncoders(geometry, [0, 0, 0])).toThrow()
-	expect(() => solveMountEncoders(geometry, [0, 1, 0], { primaryRange: [1, -1] })).toThrow()
-	expect(() => solveMountEncoders(geometry, [0, 1, 0], { maxIterations: 0 })).toThrow()
-	expect(() => solveMountEncoders(geometry, [0, 1, 0], { maxIterations: Number.POSITIVE_INFINITY })).toThrow()
+	expect(() => mountDirectionFromEncoders({ ...geometry, primaryAxis: vecZero() }, { primary: 0, secondary: 0 })).toThrow()
+	expect(() => solveMountEncoders(geometry, vecZero())).toThrow()
+	expect(() => solveMountEncoders(geometry, vecY(), { primaryRange: [1, -1] })).toThrow()
+	expect(() => solveMountEncoders(geometry, vecY(), { maxIterations: 0 })).toThrow()
+	expect(() => solveMountEncoders(geometry, vecY(), { maxIterations: Number.POSITIVE_INFINITY })).toThrow()
 })

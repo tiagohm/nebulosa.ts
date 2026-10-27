@@ -9,7 +9,7 @@ import { customEphemerisEndpoint, ephemerisPath, naifEphemerisEndpoint, SOLAR_SY
 import { type ApparentPosition, type AstrometricPosition, apparentPosition, directionPositionInFrame, ephemerisAt, equatorialPosition, geometricPositionInFrame, geometricSphericalPositionAndVelocity, observeEphemeris } from '../../../src/astronomy/ephemeris/position'
 import { Timescale, timeShift, timeSubtract, timeYMDHMS } from '../../../src/astronomy/time/time'
 import { DAYSEC, LIGHT_TIME_AU, PI, PIOVERTWO, TAU } from '../../../src/core/constants'
-import { type MutVec3, type Vec3, vecAngle, vecClone, vecDistance, vecDivScalar, vecDot, vecLength, vecMinus, vecNegate, vecZero } from '../../../src/math/linear-algebra/vec3'
+import { type MutVec3, type Vec3, vecAngle, vecClone, vecDistance, vecDivScalar, vecDot, vecLength, vecMinus, vecNegate, vecX, vecY, vecZ, vecZero } from '../../../src/math/linear-algebra/vec3'
 import { mulberry32 } from '../../../src/math/numerical/random'
 import { normalizeAngle } from '../../../src/math/units/angle'
 
@@ -62,14 +62,8 @@ test('equatorial outputs reuse one buffer for every position stage and support i
 })
 
 test('retarded observation uses SSB states and owns every vector', () => {
-	const observerScratch: PositionAndVelocityMut = [
-		[0.1, 0, 0],
-		[0.01, 0, 0],
-	]
-	const targetScratch: PositionAndVelocityMut = [
-		[0, 0.5, 0],
-		[0.001, 0, 0],
-	]
+	const observerScratch: PositionAndVelocityMut = [vecX(0.1), vecX(0.01)]
+	const targetScratch: PositionAndVelocityMut = [vecY(0.5), vecX(0.001)]
 	const observer = ephemerisPath(SOLAR_SYSTEM_BARYCENTER, EARTH, () => observerScratch)
 	const target = ephemerisPath(SOLAR_SYSTEM_BARYCENTER, MARS, (time) => {
 		targetScratch[0][0] = 1 + (time.fraction - TIME.fraction) * 0.001
@@ -82,8 +76,8 @@ test('retarded observation uses SSB states and owns every vector', () => {
 	expect(position.position).toEqual(topocentricDirection(target.stateAt, observer.stateAt, TIME, 3))
 	expect(vecLength(position.direction)).toBeCloseTo(1, 14)
 	expect(position.distance).toBeCloseTo(vecLength(position.position), 14)
-	expect(position.observerPosition).toEqual([0.1, 0, 0])
-	expect(position.observerVelocity).toEqual([0.01, 0, 0])
+	expect(position.observerPosition).toEqual(vecX(0.1))
+	expect(position.observerVelocity).toEqual(vecX(0.01))
 	expect(position.targetEmissionPosition[0]).toBeCloseTo(position.position[0] + 0.1, 14)
 	observerScratch[0][0] = observerScratch[1][0] = 99
 	targetScratch[0][0] = targetScratch[1][0] = 99
@@ -103,13 +97,10 @@ test('observation rejects moving origins, coincident points, and unbounded work'
 })
 
 test('apparent stage matches the low-level finite-distance correction pipeline', () => {
-	const observer = ephemerisPath(SOLAR_SYSTEM_BARYCENTER, EARTH, () => [vecZero(), [0, 0.01, 0]])
+	const observer = ephemerisPath(SOLAR_SYSTEM_BARYCENTER, EARTH, () => [vecZero(), vecY(0.01)])
 	const target = ephemerisPath(SOLAR_SYSTEM_BARYCENTER, MARS, () => [[1, 0.1, 0], vecZero()])
-	const sun = ephemerisPath(SOLAR_SYSTEM_BARYCENTER, naifEphemerisEndpoint(Naif.SUN), () => [[-1, 0, 0], vecZero()])
-	const deflector = ephemerisPath(SOLAR_SYSTEM_BARYCENTER, naifEphemerisEndpoint(Naif.JUPITER), () => [
-		[0.5, 0.01, 0],
-		[0, 0.001, 0],
-	])
+	const sun = ephemerisPath(SOLAR_SYSTEM_BARYCENTER, naifEphemerisEndpoint(Naif.SUN), () => [vecX(-1), vecZero()])
+	const deflector = ephemerisPath(SOLAR_SYSTEM_BARYCENTER, naifEphemerisEndpoint(Naif.JUPITER), () => [[0.5, 0.01, 0], vecY(0.001)])
 	const astrometric = observeEphemeris(observer, target, TIME)!
 	const apparent = apparentPosition(astrometric, { sun, deflectors: [{ mass: SUN_LIGHT_DEFLECTOR_MASS, limiter: SUN_LIGHT_DEFLECTOR_LIMITER, path: deflector }] })
 	const lowLevel = apparentDirection(target.stateAt, observer.stateAt, TIME, { sun: sun.stateAt, deflectors: [{ mass: SUN_LIGHT_DEFLECTOR_MASS, limiter: SUN_LIGHT_DEFLECTOR_LIMITER, state: deflector.stateAt }] })!
@@ -127,7 +118,7 @@ test('apparent stage matches the low-level finite-distance correction pipeline',
 
 test('apparent stage requires barycentric Sun and deflectors', () => {
 	const observer = ephemerisPath(SOLAR_SYSTEM_BARYCENTER, EARTH, () => [vecZero(), vecZero()])
-	const target = ephemerisPath(SOLAR_SYSTEM_BARYCENTER, MARS, () => [[1, 0, 0], vecZero()])
+	const target = ephemerisPath(SOLAR_SYSTEM_BARYCENTER, MARS, () => [vecX(), vecZero()])
 	const astrometric = observeEphemeris(observer, target, TIME)!
 	const nonBarycentric = ephemerisPath(EARTH, MARS, target.stateAt)
 	expect(() => apparentPosition(astrometric)).toThrow('sun barycentric state is required')
@@ -137,10 +128,7 @@ test('apparent stage requires barycentric Sun and deflectors', () => {
 
 test('frame and equatorial helpers preserve stage-specific physical quantities', () => {
 	const observer = ephemerisPath(SOLAR_SYSTEM_BARYCENTER, EARTH, () => [vecZero(), vecZero()])
-	const target = ephemerisPath(SOLAR_SYSTEM_BARYCENTER, MARS, () => [
-		[1, 1, 0.5],
-		[0, 0.01, 0],
-	])
+	const target = ephemerisPath(SOLAR_SYSTEM_BARYCENTER, MARS, () => [[1, 1, 0.5], vecY(0.01)])
 	const geometric = ephemerisAt(target, TIME)
 	const astrometric = observeEphemeris(observer, target, TIME)!
 	const apparent = apparentPosition(astrometric, { aberration: false })
@@ -164,7 +152,7 @@ test('frame and equatorial helpers preserve stage-specific physical quantities',
 
 test('equatorial position publishes right ascension in [0, TAU)', () => {
 	const geometric = ephemerisAt(
-		ephemerisPath(SOLAR_SYSTEM_BARYCENTER, MARS, () => [[0, -1, 0], vecZero()]),
+		ephemerisPath(SOLAR_SYSTEM_BARYCENTER, MARS, () => [vecY(-1), vecZero()]),
 		TIME,
 	)
 	const [rightAscension, declination, distance] = equatorialPosition(geometric)
@@ -176,7 +164,7 @@ test('equatorial position publishes right ascension in [0, TAU)', () => {
 
 	const astrometric = observeEphemeris(
 		ephemerisPath(SOLAR_SYSTEM_BARYCENTER, EARTH, () => [vecZero(), vecZero()]),
-		ephemerisPath(SOLAR_SYSTEM_BARYCENTER, MARS, () => [[0, -1, 0], vecZero()]),
+		ephemerisPath(SOLAR_SYSTEM_BARYCENTER, MARS, () => [vecY(-1), vecZero()]),
 		TIME,
 	)!
 	const apparent = apparentPosition(astrometric, { aberration: false })
@@ -223,11 +211,11 @@ test('zero and very large geometric states stay finite and owned', () => {
 })
 
 test('observation is SSB-only, unit, and has no public velocity', () => {
-	const site = ephemerisPath(EARTH, customEphemerisEndpoint('site'), () => stationary([1e-5, 0, 0], [0, 1e-6, 0]))
-	const moon = ephemerisPath(EARTH, naifEphemerisEndpoint(Naif.MOON), () => stationary([0.002, 0, 0]))
+	const site = ephemerisPath(EARTH, customEphemerisEndpoint('site'), () => stationary(vecX(1e-5), vecY(1e-6)))
+	const moon = ephemerisPath(EARTH, naifEphemerisEndpoint(Naif.MOON), () => stationary(vecX(0.002)))
 	expect(() => observeEphemeris(site, moon, TIME)).toThrow('observer ephemeris path must be SSB-centered')
 	expect(() => observeEphemeris(barycentric(EARTH, stationary(vecZero())), moon, TIME)).toThrow('target ephemeris path must be SSB-centered')
-	const observed = observeEphemeris(barycentric(EARTH, stationary(vecZero(), [0, 0.01, 0])), barycentric(MARS, stationary([2, 0.1, -0.2])), TIME)!
+	const observed = observeEphemeris(barycentric(EARTH, stationary(vecZero(), vecY(0.01))), barycentric(MARS, stationary([2, 0.1, -0.2])), TIME)!
 	expect(observed.center).toBe(EARTH)
 	expect(observed.target).toBe(MARS)
 	expect(observed.kind).toBe('astrometric')
@@ -240,21 +228,15 @@ test('observation is SSB-only, unit, and has no public velocity', () => {
 })
 
 test('deflector snapshots, ordering inputs, and the absence of a hidden ephemeris', () => {
-	const sunScratch: PositionAndVelocityMut = [
-		[-1, 0.1, 0],
-		[0, 0.001, 0],
-	]
-	const deflectorScratch: PositionAndVelocity = [
-		[0.4, 0.02, 0],
-		[0, 0.002, 0],
-	]
+	const sunScratch: PositionAndVelocityMut = [[-1, 0.1, 0], vecY(0.001)]
+	const deflectorScratch: PositionAndVelocity = [[0.4, 0.02, 0], vecY(0.002)]
 	let sunCalls = 0
 	const sun = ephemerisPath(SOLAR_SYSTEM_BARYCENTER, SUN, () => {
 		sunCalls++
 		return sunScratch
 	})
 	const deflector = ephemerisPath(SOLAR_SYSTEM_BARYCENTER, naifEphemerisEndpoint(Naif.JUPITER), () => deflectorScratch)
-	const observed = observeEphemeris(barycentric(EARTH, stationary(vecZero(), [0, 0.017, 0])), barycentric(MARS, stationary([1, 0.05, 0.01])), TIME)!
+	const observed = observeEphemeris(barycentric(EARTH, stationary(vecZero(), vecY(0.017))), barycentric(MARS, stationary([1, 0.05, 0.01])), TIME)!
 	const withoutDeflection = apparentPosition(observed, { sun, deflectors: [] })
 	const withSun = apparentPosition(observed, { sun, deflectors: [{ mass: SUN_LIGHT_DEFLECTOR_MASS, limiter: SUN_LIGHT_DEFLECTOR_LIMITER, path: sun }] })
 	expect(vecAngle(withoutDeflection.direction, observed.direction)).toBeGreaterThan(1e-6)
@@ -270,7 +252,7 @@ test('deflector snapshots, ordering inputs, and the absence of a hidden ephemeri
 	let samples = 0
 	const invalid = ephemerisPath(EARTH, MARS, () => {
 		samples++
-		return stationary([1, 0, 0])
+		return stationary(vecX())
 	})
 	expect(() =>
 		apparentPosition(observed, {
@@ -288,8 +270,8 @@ test('deflector snapshots, ordering inputs, and the absence of a hidden ephemeri
 
 test('correction order is light deflection then aberration', () => {
 	const observerPosition: Vec3 = vecZero()
-	const observerVelocity: Vec3 = [0, 0.12, 0]
-	const targetPosition: Vec3 = [1, 0, 0]
+	const observerVelocity: Vec3 = vecY(0.12)
+	const targetPosition: Vec3 = vecX()
 	const sunPosition: Vec3 = [0.35, 0.004, 0]
 	const sunVelocity: Vec3 = vecZero()
 	const observed = observeEphemeris(barycentric(EARTH, stationary(observerPosition, observerVelocity)), barycentric(MARS, stationary(targetPosition)), TIME)!
@@ -321,9 +303,9 @@ test('deflector order follows the caller list, not merely a difference between o
 	// Stationary eraLd updates commute, so this pair moves along the ray. The expected
 	// direction is eraLd applied in one order, backtracking each mass with the direction
 	// left by the previous one. A pipeline that reversed the list would match the other order.
-	const observed = observeEphemeris(barycentric(EARTH, stationary(vecZero(), vecZero())), barycentric(MARS, stationary([1, 0, 0])), TIME)!
-	const approaching = { position: [0.3, 0.001, 0] as Vec3, velocity: [15, 0, 0] as Vec3, mass: 100, limiter: 1e-18 }
-	const receding = { position: [0.7, -0.001, 0] as Vec3, velocity: [-15, 0, 0] as Vec3, mass: 100, limiter: 1e-18 }
+	const observed = observeEphemeris(barycentric(EARTH, stationary(vecZero(), vecZero())), barycentric(MARS, stationary(vecX())), TIME)!
+	const approaching = { position: [0.3, 0.001, 0] as Vec3, velocity: vecX(15), mass: 100, limiter: 1e-18 }
+	const receding = { position: [0.7, -0.001, 0] as Vec3, velocity: vecX(-15), mass: 100, limiter: 1e-18 }
 	const lightDaysPerAu = LIGHT_TIME_AU / DAYSEC
 	const deflectInOrder = (bodies: readonly (typeof approaching)[]) => {
 		const direction = vecClone(observed.direction)
@@ -378,14 +360,7 @@ test('deflector order follows the caller list, not merely a difference between o
 test('singular directions and tiny or huge separations stay finite when defined', () => {
 	const observer = barycentric(EARTH, stationary(vecZero()))
 	expect(observeEphemeris(observer, barycentric(MARS, stationary(vecZero())), TIME)).toBeUndefined()
-	for (const position of [
-		[0, 0, 1],
-		[0, 0, -1],
-		[1e-6, 0, 1],
-		[1e-15, 0, 0],
-		[1e8, -1e8, 1e7],
-		[1e-12, -1e-12, 1e-12],
-	] as const) {
+	for (const position of [vecZ(), vecZ(-1), [1e-6, 0, 1], vecX(1e-15), [1e8, -1e8, 1e7], [1e-12, -1e-12, 1e-12]] as const) {
 		const geometric = ephemerisAt(barycentric(MARS, stationary(position)), TIME)
 		const [rightAscension, declination, distance] = equatorialPosition(geometric)
 		expect(Number.isFinite(rightAscension)).toBe(true)
@@ -448,13 +423,13 @@ test('frame helpers own outputs and keep the rotating-frame velocity term', () =
 
 describe('equatorial coordinates cover the cardinal axes, poles, and stage distances', () => {
 	const cases = [
-		{ position: [1, 0, 0], ra: 0, dec: 0 },
-		{ position: [0, 1, 0], ra: PIOVERTWO, dec: 0 },
-		{ position: [-1, 0, 0], ra: PI, dec: 0 },
-		{ position: [0, -1, 0], ra: (3 * PI) / 2, dec: 0 },
+		{ position: vecX(), ra: 0, dec: 0 },
+		{ position: vecY(), ra: PIOVERTWO, dec: 0 },
+		{ position: vecX(-1), ra: PI, dec: 0 },
+		{ position: vecY(-1), ra: (3 * PI) / 2, dec: 0 },
 		{ position: [1e-8, 0, 1], ra: 0, dec: Math.atan2(1, 1e-8) },
-		{ position: [0, 0, 1], ra: 0, dec: PIOVERTWO },
-		{ position: [0, 0, -1], ra: 0, dec: -PIOVERTWO },
+		{ position: vecZ(), ra: 0, dec: PIOVERTWO },
+		{ position: vecZ(-1), ra: 0, dec: -PIOVERTWO },
 		{ position: [Math.cos(1e-8), Math.sin(1e-8), 0], ra: 1e-8, dec: 0 },
 		{ position: [Math.cos(-1e-8), Math.sin(-1e-8), 0], ra: normalizeAngle(-1e-8), dec: 0 },
 	] as const
@@ -472,14 +447,14 @@ describe('equatorial coordinates cover the cardinal axes, poles, and stage dista
 
 test('spherical geometric state covers motion, poles, and an optional frame', () => {
 	const at = (position: Vec3, velocity: Vec3) => ephemerisAt(barycentric(MARS, stationary(position, velocity)), TIME)
-	const circular = geometricSphericalPositionAndVelocity(at([1, 0, 0], [0, 1, 0]))!
+	const circular = geometricSphericalPositionAndVelocity(at(vecX(), vecY()))!
 	expect(circular.longitudeRate).toBeCloseTo(1, 12)
 	expect(circular.latitudeRate).toBeCloseTo(0, 12)
 	expect(circular.radialVelocity).toBeCloseTo(0, 12)
-	const radial = geometricSphericalPositionAndVelocity(at([1, 0, 0], [0.2, 0, 0]))!
+	const radial = geometricSphericalPositionAndVelocity(at(vecX(), vecX(0.2)))!
 	expect(radial.radialVelocity).toBeCloseTo(0.2, 12)
 	expect(radial.longitudeRate).toBeCloseTo(0, 12)
-	const latitude = geometricSphericalPositionAndVelocity(at([1, 0, 0], [0, 0, 0.3]))!
+	const latitude = geometricSphericalPositionAndVelocity(at(vecX(), vecZ(0.3)))!
 	expect(latitude.latitudeRate).toBeCloseTo(0.3, 12)
 	const mixed = geometricSphericalPositionAndVelocity(at([0.8, -0.4, 0.3], [0.012, -0.007, 0.004]))!
 	// Skyfield 1.55 ICRF.frame_latlon_and_rates(ICRS).
@@ -489,10 +464,10 @@ test('spherical geometric state covers motion, poles, and an optional frame', ()
 	expect(mixed.latitudeRate).toBeCloseTo(-0.000653233341741511, 12)
 	expect(mixed.longitudeRate).toBeCloseTo(-0.001, 12)
 	expect(mixed.radialVelocity).toBeCloseTo(0.014415971168086496, 12)
-	expect(geometricSphericalPositionAndVelocity(at(vecZero(), [1, 0, 0]))).toBeUndefined()
-	expect(geometricSphericalPositionAndVelocity(at([0, 0, 1], [0.1, -0.2, 0.3]))!.longitudeRate).toBeUndefined()
-	expect(geometricSphericalPositionAndVelocity(at([0, 0, -2], [0.1, 0.2, 0]))!.latitudeRate).toBeUndefined()
-	const nearPole = geometricSphericalPositionAndVelocity(at([1e-8, 0, 1], [0, 1, 0]))!
+	expect(geometricSphericalPositionAndVelocity(at(vecZero(), vecX()))).toBeUndefined()
+	expect(geometricSphericalPositionAndVelocity(at(vecZ(), [0.1, -0.2, 0.3]))!.longitudeRate).toBeUndefined()
+	expect(geometricSphericalPositionAndVelocity(at(vecZ(-2), [0.1, 0.2, 0]))!.latitudeRate).toBeUndefined()
+	const nearPole = geometricSphericalPositionAndVelocity(at([1e-8, 0, 1], vecY()))!
 	expect(nearPole.longitudeRate).toBeGreaterThan(1e6)
 	expect(geometricSphericalPositionAndVelocity(at([1, 0.2, 0.3], [0.01, 0.02, 0.03]))).toBeDefined()
 	const framed = geometricSphericalPositionAndVelocity(at([0.8, -0.4, 0.3], [0.012, -0.007, 0.004]), GALACTIC)!
@@ -508,7 +483,7 @@ test('distances, unit directions, and a galactic round trip stay finite', () => 
 		const velocity = [random() * 0.01, random() * 0.01, random() * 0.01] as Vec3
 		const geometric = ephemerisAt(barycentric(MARS, stationary(target, velocity)), TIME)
 		expect(vecLength(geometric.position)).toBeGreaterThan(0)
-		const observed = observeEphemeris(barycentric(EARTH, stationary(vecZero(), [0, 0.01, 0])), barycentric(MARS, stationary(target, velocity)), TIME)!
+		const observed = observeEphemeris(barycentric(EARTH, stationary(vecZero(), vecY(0.01))), barycentric(MARS, stationary(target, velocity)), TIME)!
 		expect(observed.distance).toBeGreaterThan(0)
 		expect(vecLength(observed.direction)).toBeCloseTo(1, 12)
 		const apparent = apparentPosition(observed, { aberration: false })
@@ -519,8 +494,8 @@ test('distances, unit directions, and a galactic round trip stay finite', () => 
 })
 
 test('stage metadata and synchronous evaluation are preserved', () => {
-	const observer = barycentric(EARTH, stationary([0.1, 0.2, 0.3], [0.01, 0, 0]))
-	const target = barycentric(MARS, stationary([1.4, -0.2, 0.5], [0, 0.001, 0]))
+	const observer = barycentric(EARTH, stationary([0.1, 0.2, 0.3], vecX(0.01)))
+	const target = barycentric(MARS, stationary([1.4, -0.2, 0.5], vecY(0.001)))
 	const geometric = ephemerisAt(target, TIME)
 	const astrometric = observeEphemeris(observer, target, TIME)!
 	const sun = barycentric(SUN, stationary([-0.5, 0.2, 0.1]))

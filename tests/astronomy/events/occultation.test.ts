@@ -8,7 +8,7 @@ import { KeplerOrbit } from '../../../src/astronomy/orbits/asteroid'
 import { type Time, Timescale, time, timeShift, timeSubtract } from '../../../src/astronomy/time/time'
 import { AU_M, DAYSEC, GM_SUN_PITJEVA_2005, ONE_SECOND, SPEED_OF_LIGHT } from '../../../src/core/constants'
 import { matIdentity } from '../../../src/math/linear-algebra/mat3'
-import { vecZero, type Vec3 } from '../../../src/math/linear-algebra/vec3'
+import { type Vec3, vecX, vecZero } from '../../../src/math/linear-algebra/vec3'
 import { deg, toArcsec } from '../../../src/math/units/angle'
 import { kilometer, toKilometer } from '../../../src/math/units/distance'
 
@@ -38,7 +38,7 @@ function driftingBody(t: Time): PositionAndVelocity {
 	]
 }
 
-const STAR: Vec3 = [1, 0, 0]
+const STAR: Vec3 = vecX()
 
 test('finds the appulse of a straight-line encounter with the analytic chord and speed', () => {
 	const start = timeShift(CROSSING, -0.02)
@@ -122,10 +122,7 @@ test('with light time disabled, never samples the observer or body outside the r
 	const stop = timeShift(CROSSING, 19 * ONE_SECOND)
 	const guard: PositionAndVelocityOverTime = (t) => {
 		if (timeSubtract(t, start) < 0 || timeSubtract(stop, t) < 0) throw new Error('sampled outside the window')
-		return [
-			[0, 0, 0],
-			[0, 0, 0],
-		]
+		return [vecZero(), vecZero()]
 	}
 	const guardedBody: PositionAndVelocityOverTime = (t) => {
 		if (timeSubtract(t, start) < 0 || timeSubtract(stop, t) < 0) throw new Error('sampled outside the window')

@@ -1,6 +1,7 @@
 import type { Socket, TCPSocketListener } from 'bun'
 import type { Camera, GuideOutput } from '../../../devices/indi/device'
 import type { ImageRawType } from '../../../imaging/model/types'
+import { DEFAULT_MAX_PENDING_WRITE, SocketWriteQueue } from '../../../io/socket'
 import type { GuiderClient, GuiderClientConnectOptions, GuiderClientHandler } from '../client'
 import { phd2EventsOf } from './events'
 // oxfmt-ignore
@@ -83,9 +84,6 @@ export const DEFAULT_PHD2_EXPOSURE_DURATIONS: readonly number[] = [10, 20, 50, 1
 // Default longest unterminated input line, in bytes.
 const DEFAULT_MAX_LINE_LENGTH = 1024 * 1024
 
-// Default most queued output bytes per socket.
-const DEFAULT_MAX_PENDING_WRITE = 16 * 1024 * 1024
-
 // JSON-RPC 2.0 error codes.
 const PARSE_ERROR = -32700
 const INVALID_REQUEST = -32600
@@ -118,9 +116,7 @@ interface Connection {
 	// Whether the rest of a malformed line is dropped until its line feed.
 	discarding: boolean
 	// Output not yet accepted by the socket, in order.
-	readonly queue: Buffer[]
-	// Total bytes in `queue`.
-	queued: number
+	readonly output: SocketWriteQueue
 }
 
 // PHD2-compatible JSON-RPC server delegating to one GuiderClient.
@@ -220,7 +216,7 @@ export class PHD2Server implements Disposable {
 
 	// Greets a new socket like PHD2: Version, the lock position and calibration when known, then the app state.
 	#open(socket: Socket<unknown>) {
-		const connection: Connection = { id: ++this.#sequence, socket, discarding: false, queue: [], queued: 0 }
+		const connection: Connection = { id: ++this.#sequence, socket, discarding: false, output: new SocketWriteQueue(this.#maxPendingWrite) }
 		this.#connections.set(socket, connection)
 
 		this.#send(connection, event('Version', { PHDVersion: PHD2_VERSION, PHDSubver: PHD2_SUBVER, OverlapSupport: PHD2_OVERLAP_SUPPORT, MsgVersion: PHD2_MSG_VERSION }))
@@ -244,8 +240,7 @@ export class PHD2Server implements Disposable {
 	#drop(connection: Connection, reason: string) {
 		console.warn('PHD2 server closing connection', connection.id, reason)
 		connection.buffer = undefined
-		connection.queue.length = 0
-		connection.queued = 0
+		connection.output.clear()
 		connection.socket.end()
 		this.#close(connection.socket)
 	}
@@ -572,38 +567,12 @@ export class PHD2Server implements Disposable {
 	// exceeds `maxPendingWrite`: Bun does not buffer the bytes a write could not take.
 	#write(connection: Connection, data: Buffer) {
 		if (!this.#connections.has(connection.socket)) return
-
-		if (connection.queue.length === 0) {
-			const written = Math.max(0, connection.socket.write(data))
-			if (written >= data.byteLength) return
-			data = data.subarray(written)
-		}
-
-		connection.queue.push(data)
-		connection.queued += data.byteLength
-
-		if (connection.queued > this.#maxPendingWrite) this.#drop(connection, 'output queue full')
+		if (!connection.output.write(connection.socket, data)) this.#drop(connection, 'output queue full')
 	}
 
 	// Flushes the output queue of a socket that can take more bytes.
 	#drain(socket: Socket<unknown>) {
-		const connection = this.#connections.get(socket)
-		if (connection === undefined) return
-
-		const { queue } = connection
-
-		while (queue.length > 0) {
-			const head = queue[0]
-			const written = Math.max(0, socket.write(head))
-			connection.queued -= written
-
-			if (written < head.byteLength) {
-				queue[0] = head.subarray(written)
-				return
-			}
-
-			queue.shift()
-		}
+		this.#connections.get(socket)?.output.drain(socket)
 	}
 
 	// Calls `notify` for every handler; a throw is logged under `kind` and does not skip the others.

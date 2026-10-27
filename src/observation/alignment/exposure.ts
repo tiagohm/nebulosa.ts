@@ -2,10 +2,9 @@ import { pixelScale } from '../../astronomy/formulas'
 import type { GeographicPosition } from '../../astronomy/observer/location'
 import type { Time } from '../../astronomy/time/time'
 import { PI, PIOVERTWO, SIDEREAL_DAYSEC, SIDEREAL_DRIFT_RATE } from '../../core/constants'
-import { type MutVec3, type Vec3, vecAngleUnit, vecDot, vecLength, vecNegateMut } from '../../math/linear-algebra/vec3'
+import { type MutVec3, type Vec3, vecAngleUnit, vecDot, vecLength, vecNegateMut, vecZero } from '../../math/linear-algebra/vec3'
 import { type Angle, arcsec } from '../../math/units/angle'
-import type { ThreePointPolarAlignmentResult } from './polaralignment'
-import { celestialPoleVector, transportEarthFixed } from './polaralignment.util'
+import { celestialPoleVector, transportEarthFixed } from './polaralignment'
 
 // Exposure limits imposed exclusively by polar-axis misalignment. All directions share the inertial
 // frame used by plate solutions, angular quantities are radians, rates are radians per SI second,
@@ -95,10 +94,10 @@ export interface PolarAlignmentExposureLimit {
 	readonly guided?: PolarAlignmentGuidedExposureLimit
 }
 
-// Convenience input that obtains both poles from an existing three-point alignment result.
+// Convenience input that obtains both poles from an alignment result, such as a three-point one.
 export interface PolarAlignmentResultExposureInput extends Omit<PolarAlignmentExposureInput, 'mountPole' | 'celestialPole'> {
-	// Mechanical pole and exposure epoch produced by three-point polar alignment.
-	readonly alignment: Pick<ThreePointPolarAlignmentResult, 'pole' | 'time'>
+	// Unit ICRF mechanical pole and its exposure epoch, as produced by three-point polar alignment.
+	readonly alignment: { readonly pole: Vec3; readonly time: Time }
 	// Optional exposure-start epoch. The alignment pole is transported as Earth-fixed from
 	// alignment.time; when omitted, the estimate starts at alignment.time.
 	readonly time?: Time
@@ -186,7 +185,7 @@ export function polarAlignmentExposureLimit(input: Readonly<PolarAlignmentExposu
 		const target = normalizeFiniteVector(input.target, 'target')
 		targetRate = unguidedRateForMount(geometry, target, geometry.mount[0], geometry.mount[1], geometry.mount[2], SIDEREAL_DRIFT_RATE)
 
-		const mount: MutVec3 = [0, 0, 0]
+		const mount = vecZero()
 		const rateAt = (sampleTime: number) => {
 			transportedMount(geometry, sampleTime, mount)
 			return unguidedRateForMount(geometry, target, mount[0], mount[1], mount[2], SIDEREAL_DRIFT_RATE)
@@ -212,7 +211,7 @@ export function polarAlignmentExposureLimit(input: Readonly<PolarAlignmentExposu
 		} else {
 			const fieldFactor = Math.sin(Math.min(fieldRadius, PIOVERTWO))
 
-			const mount: MutVec3 = [0, 0, 0]
+			const mount = vecZero()
 			const rateAt = (sampleTime: number) => {
 				transportedMount(geometry, sampleTime, mount)
 				const sampleRate = guidedRateForMount(geometry, guide, poleGuideDot, mount[0], mount[1], mount[2], SIDEREAL_DRIFT_RATE)
@@ -228,7 +227,7 @@ export function polarAlignmentExposureLimit(input: Readonly<PolarAlignmentExposu
 	return { polarError: geometry.polarError, imageScale: input.imageScale, maxTrail, unguided, guided }
 }
 
-// Estimates exposure limits directly from a three-point alignment result. By default the estimate
+// Estimates exposure limits directly from an alignment result (pole and epoch, e.g. three-point). By default the estimate
 // starts at alignment.time. An explicit time transports the Earth-fixed mechanical pole through ITRS
 // to that epoch. The true pole is computed once without refraction before delegating to the vector
 // estimator; target and guide directions must describe the selected start epoch.

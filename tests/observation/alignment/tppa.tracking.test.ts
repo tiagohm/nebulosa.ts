@@ -6,8 +6,8 @@ import { DAYSEC, PI, SIDEREAL_DRIFT_RATE } from '../../../src/core/constants'
 import { matMulVec, matTransposeMulVec } from '../../../src/math/linear-algebra/mat3'
 import { type Vec3, vecAngle, vecCross, vecNormalize, vecRotateByRodrigues } from '../../../src/math/linear-algebra/vec3'
 import { arcsec, deg, toArcsec } from '../../../src/math/units/angle'
-import { ThreePointPolarAlignment, type ThreePointPolarAlignmentResult, threePointPolarAlignmentAfterAdjustment, threePointPolarAlignmentError } from '../../../src/observation/alignment/polaralignment'
-import { applyMountAdjustment } from '../../../src/observation/alignment/polaralignment.util'
+import { applyMountAdjustment } from '../../../src/observation/alignment/polaralignment'
+import { ThreePointPolarAlignment, type ThreePointPolarAlignmentResult, threePointPolarAlignmentAfterAdjustment, threePointPolarAlignmentError } from '../../../src/observation/alignment/tppa'
 
 // Exact rigid-mount geometry, independent of the simulator's first-order TPoint model and ASTAP.
 // All boresights lie on one circle in ITRS even when their ICRF coordinates span hours or days.

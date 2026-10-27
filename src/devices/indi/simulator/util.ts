@@ -126,15 +126,15 @@ export function clampDeclination(value: number) {
 // radius and the size of the error. That is far below the seeing disc for any realistic pointing
 // error, and it buys a stable catalog cache that a moving projection centre would defeat.
 //
-// All angles are radians and `pixelScale` is radians per pixel. Writes into `o` and returns whether
-// any displacement applies; `o` is left untouched when it does not, which happens for a zero error, a
+// All angles are radians and `pixelScale` is radians per pixel. Writes into `out` and returns whether
+// any displacement applies; `out` is left untouched when it does not, which happens for a zero error, a
 // degenerate pixel scale, or a boresight outside the projection domain.
-export function pointingOffsetInPixels(rightAscension: Angle, declination: Angle, boresightRightAscension: Angle, boresightDeclination: Angle, pixelScale: Angle, o: Point) {
+export function pointingOffsetInPixels(rightAscension: Angle, declination: Angle, boresightRightAscension: Angle, boresightDeclination: Angle, pixelScale: Angle, out: Point) {
 	if (!(pixelScale > 0)) return false
 	if (boresightRightAscension === rightAscension && boresightDeclination === declination) return false
-	if (new Gnomonic(boresightRightAscension, boresightDeclination).project(rightAscension, declination, o) === undefined) return false
-	o.x = -o.x / pixelScale
-	o.y = -o.y / pixelScale
+	if (new Gnomonic(boresightRightAscension, boresightDeclination).project(rightAscension, declination, out) === undefined) return false
+	out.x = -out.x / pixelScale
+	out.y = -out.y / pixelScale
 	return true
 }
 
@@ -149,10 +149,10 @@ export function pointingOffsetInPixels(rightAscension: Angle, declination: Angle
 // left in the frame of date, a hundred pixels of eastward travel acquired about a quarter pixel of
 // north-south displacement in 2026, growing with the length of the trail and with the epoch.
 //
-// `pixelScale` is radians per unbinned pixel. Writes into `o` and returns whether any offset applies,
-// leaving `o` untouched when it does not.
-export function boresightOffsetInPixels(centerRightAscension: Angle, centerDeclination: Angle, rightAscension: Angle, declination: Angle, pixelScale: Angle, time: Time, o: Point) {
+// `pixelScale` is radians per unbinned pixel. Writes into `out` and returns whether any offset applies,
+// leaving `out` untouched when it does not.
+export function boresightOffsetInPixels(centerRightAscension: Angle, centerDeclination: Angle, rightAscension: Angle, declination: Angle, pixelScale: Angle, time: Time, out: Point) {
 	const [center, centerDec] = equatorialToJ2000(centerRightAscension, centerDeclination, time)
 	const [boresight, boresightDec] = equatorialToJ2000(rightAscension, declination, time)
-	return pointingOffsetInPixels(center, centerDec, boresight, boresightDec, pixelScale, o)
+	return pointingOffsetInPixels(center, centerDec, boresight, boresightDec, pixelScale, out)
 }

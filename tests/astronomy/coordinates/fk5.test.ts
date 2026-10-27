@@ -3,7 +3,7 @@ import { fk5, precessFk5, precessFk5FromJ2000, precessFk5ToJ2000 } from '../../.
 import { fk5ToIcrs } from '../../../src/astronomy/coordinates/frame'
 import { Timescale, timeYMDHMS } from '../../../src/astronomy/time/time'
 import { ONE_KILOPARSEC } from '../../../src/core/constants'
-import { type MutVec3, vecLength } from '../../../src/math/linear-algebra/vec3'
+import { type MutVec3, vecLength, vecZero } from '../../../src/math/linear-algebra/vec3'
 import { deg } from '../../../src/math/units/angle'
 
 test('fk5', () => {
@@ -83,7 +83,7 @@ test('precessFk5 matches the J2000 convenience wrappers', () => {
 test('precessFk5 writes into and returns the provided output vector', () => {
 	const e = timeYMDHMS(1975, 1, 1, 12, 0, 0, Timescale.TT)
 	const p = fk5(deg(10.625), deg(41.2), 1)
-	const out: MutVec3 = [0, 0, 0]
+	const out = vecZero()
 	const result = precessFk5FromJ2000(p, e, out)
 
 	expect(result).toBe(out)

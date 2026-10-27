@@ -33,76 +33,76 @@ export interface AffineFrame extends Frame {
 }
 
 // Applies an affine transform (base -> frame) to a position or full state at
-// time. Pass `o` to write the result into an existing vector or state and avoid
-// allocation; `o` may alias `pv` for an in-place transform.
+// time. Pass `out` to write the result into an existing vector or state and avoid
+// allocation; `out` may alias `pv` for an in-place transform.
 //
 //   p_f = R · (p − O)
 //   v_f = R · (v − Ȯ) + W · p_f      (W = dRdtTimesRtAt, only for rotating frames)
 //
 // O is originAt, Ȯ is originVelocityAt; both default to zero when absent.
-export function affineFromBase<T extends CoordinateFrame>(pv: T, frame: AffineFrame, time: Time, o?: CoordinateFrameOutput<T>): CoordinateFrameOutput<T> {
+export function affineFromBase<T extends CoordinateFrame>(pv: T, frame: AffineFrame, time: Time, out?: CoordinateFrameOutput<T>): CoordinateFrameOutput<T> {
 	const r = frame.rotationAt(time)
 	const origin = frame.originAt?.(time)
 
 	if (pv.length === 3) {
-		if (origin) return matMulVec(r, vecMinus(pv, origin), o as MutVec3 | undefined) as never
-		return matMulVec(r, pv, o as MutVec3 | undefined) as never
+		if (origin) return matMulVec(r, vecMinus(pv, origin), out as MutVec3 | undefined) as never
+		return matMulVec(r, pv, out as MutVec3 | undefined) as never
 	}
 
-	const out = o as PositionAndVelocityMut | undefined
+	const state = out as PositionAndVelocityMut | undefined
 	const originVelocity = frame.originVelocityAt?.(time)
 	// Subtract the origin offsets first; these produce fresh vectors, so writing p
-	// into out[0] afterwards is safe even when `o` aliases `pv`.
+	// into state[0] afterwards is safe even when `out` aliases `pv`.
 	const dp = origin ? vecMinus(pv[0], origin) : pv[0]
 	const dv = originVelocity ? vecMinus(pv[1], originVelocity) : pv[1]
 
-	const p = matMulVec(r, dp, out?.[0])
-	const v = matMulVec(r, dv, out?.[1])
+	const p = matMulVec(r, dp, state?.[0])
+	const v = matMulVec(r, dv, state?.[1])
 
 	if (frame.dRdtTimesRtAt) {
 		vecPlus(v, matMulVec(frame.dRdtTimesRtAt(time, r), p), v)
 	}
 
-	if (out) {
-		out[0] = p
-		out[1] = v
-		return out as never
+	if (state) {
+		state[0] = p
+		state[1] = v
+		return state as never
 	}
 
 	return [p, v] as never
 }
 
 // Rotates and shifts a position or full state from `frame` back into the base
-// frame. This is the exact inverse of affineFromBase. Pass `o` to avoid
-// allocation; `o` may alias `pv` for an in-place transform.
+// frame. This is the exact inverse of affineFromBase. Pass `out` to avoid
+// allocation; `out` may alias `pv` for an in-place transform.
 //
 //   p = Rᵀ · p_f + O
 //   v = Rᵀ · (v_f − W · p_f) + Ȯ
-export function affineToBase<T extends CoordinateFrame>(pv: T, frame: AffineFrame, time: Time, o?: CoordinateFrameOutput<T>): CoordinateFrameOutput<T> {
+export function affineToBase<T extends CoordinateFrame>(pv: T, frame: AffineFrame, time: Time, out?: CoordinateFrameOutput<T>): CoordinateFrameOutput<T> {
 	const r = frame.rotationAt(time)
 	const origin = frame.originAt?.(time)
 
 	if (pv.length === 3) {
-		const p = matTransposeMulVec(r, pv, o as MutVec3 | undefined)
+		const p = matTransposeMulVec(r, pv, out as MutVec3 | undefined)
 		return (origin ? vecPlus(p, origin, p) : p) as never
 	}
 
-	const out = o as PositionAndVelocityMut | undefined
+	const state = out as PositionAndVelocityMut | undefined
 
 	// Build the drag-corrected velocity from the original position first, since
-	// computing p may overwrite pv[0] when `o` aliases `pv`.
+	// computing p may overwrite pv[0] when `out` aliases `pv`.
 	const dv = frame.dRdtTimesRtAt ? vecMinus(pv[1], matMulVec(frame.dRdtTimesRtAt(time, r), pv[0])) : pv[1]
-	const v = matTransposeMulVec(r, dv, out?.[1])
+	const v = matTransposeMulVec(r, dv, state?.[1])
 	const originVelocity = frame.originVelocityAt?.(time)
 	if (originVelocity) vecPlus(v, originVelocity, v)
 
-	const p = matTransposeMulVec(r, pv[0], out?.[0])
+	const p = matTransposeMulVec(r, pv[0], state?.[0])
 	if (origin) vecPlus(p, origin, p)
 
-	if (out) {
-		out[0] = p
-		out[1] = v
-		return out as never
+	if (state) {
+		state[0] = p
+		state[1] = v
+		return state as never
 	}
 
 	return [p, v] as never
@@ -111,11 +111,11 @@ export function affineToBase<T extends CoordinateFrame>(pv: T, frame: AffineFram
 // Transforms a position or full state from one (affine) frame into another,
 // composing through the common base. Accepts plain Frames too, since every Frame
 // is an AffineFrame with no origin; when neither frame has an origin or velocity
-// offset this reduces exactly to frameToFrame. Pass `o` to avoid allocation.
-export function affineToAffine<T extends CoordinateFrame>(pv: T, from: AffineFrame, to: AffineFrame, time: Time, o?: CoordinateFrameOutput<T>): CoordinateFrameOutput<T> {
-	// Stage the intermediate base state in `o` (when given), then transform in place.
-	const base = affineToBase(pv, from, time, o)
-	return affineFromBase(base, to, time, o as never) as never
+// offset this reduces exactly to frameToFrame. Pass `out` to avoid allocation.
+export function affineToAffine<T extends CoordinateFrame>(pv: T, from: AffineFrame, to: AffineFrame, time: Time, out?: CoordinateFrameOutput<T>): CoordinateFrameOutput<T> {
+	// Stage the intermediate base state in `out` (when given), then transform in place.
+	const base = affineToBase(pv, from, time, out)
+	return affineFromBase(base, to, time, out as never) as never
 }
 
 // The barycentric ecliptic frame is just ECLIPTIC_J2000 used as an AffineFrame

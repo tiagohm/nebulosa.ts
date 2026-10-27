@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test'
 import { herrickGibbs, type HerrickGibbsWarning } from '../../../../src/astronomy/orbits/determination/herrickgibbs'
 import { type Time, Timescale, timeShift, timeYMDHMS } from '../../../../src/astronomy/time/time'
 import { GM_SUN_PITJEVA_2005 } from '../../../../src/core/constants'
-import { type MutVec3, type Vec3, vecDistance } from '../../../../src/math/linear-algebra/vec3'
+import { type MutVec3, type Vec3, vecDistance, vecX, vecZero } from '../../../../src/math/linear-algebra/vec3'
 
 const EPOCH = timeYMDHMS(2026, 1, 1, 0, 0, 0, Timescale.TT)
 const MU = GM_SUN_PITJEVA_2005
@@ -86,7 +86,7 @@ test('throwOnInvalid does not throw for a valid short arc', () => {
 test('reports invalid position norms for zero, NaN, and infinite vectors', () => {
 	const { r1, r2, r3, t1, t2, t3 } = sampleCircular()
 	const cases = [
-		[[0, 0, 0], r2, r3],
+		[vecZero(), r2, r3],
 		[[Number.NaN, 0, 0], r2, r3],
 		[r1, [Number.POSITIVE_INFINITY, 0, 0], r3],
 	] as const
@@ -112,7 +112,7 @@ test('reports invalid gravitational parameters', () => {
 
 test('reports near-colinear radial geometry', () => {
 	const [t1, t2, t3] = sampleTimes(0.05)
-	const result = herrickGibbs([1, 0, 0], [1.00001, 0, 0], [1.00002, 0, 0], t1, t2, t3, MU)
+	const result = herrickGibbs(vecX(), vecX(1.00001), vecX(1.00002), t1, t2, t3, MU)
 
 	expect(result.diagnostics.reliable).toBeFalse()
 	expectWarnings(result.diagnostics.warnings, 'NEAR_COLINEAR_POSITIONS', 'LOW_RELIABILITY_GEOMETRY')
@@ -120,7 +120,7 @@ test('reports near-colinear radial geometry', () => {
 
 test('reports poor coplanarity', () => {
 	const [t1, t2, t3] = sampleTimes(0.05)
-	const result = herrickGibbs([1, 0, 0], [Math.cos(0.01), Math.sin(0.01), 0], [Math.cos(0.02), Math.sin(0.02), 0.01], t1, t2, t3, MU)
+	const result = herrickGibbs(vecX(), [Math.cos(0.01), Math.sin(0.01), 0], [Math.cos(0.02), Math.sin(0.02), 0.01], t1, t2, t3, MU)
 
 	expect(result.diagnostics.reliable).toBeFalse()
 	expect(result.diagnostics.coplanarityError).toBeGreaterThan(1e-3)
@@ -129,8 +129,8 @@ test('reports poor coplanarity', () => {
 
 test('reports angular separations outside configured limits', () => {
 	const [t1, t2, t3] = sampleTimes(0.05)
-	const tooSmall = herrickGibbs([1, 0, 0], [1, 1e-10, 0], [1, 2e-10, 0], t1, t2, t3, MU)
-	const tooLarge = herrickGibbs([1, 0, 0], [Math.cos(0.2), Math.sin(0.2), 0], [Math.cos(0.4), Math.sin(0.4), 0], t1, t2, t3, MU)
+	const tooSmall = herrickGibbs(vecX(), [1, 1e-10, 0], [1, 2e-10, 0], t1, t2, t3, MU)
+	const tooLarge = herrickGibbs(vecX(), [Math.cos(0.2), Math.sin(0.2), 0], [Math.cos(0.4), Math.sin(0.4), 0], t1, t2, t3, MU)
 
 	expect(tooSmall.diagnostics.reliable).toBeFalse()
 	expectWarnings(tooSmall.diagnostics.warnings, 'ANGULAR_SEPARATION_TOO_SMALL')

@@ -4,7 +4,8 @@ import { DEG2RAD } from '../../core/constants'
 import { matMulVec } from '../../math/linear-algebra/mat3'
 import { type Vec3, vecAngleUnit, vecLatitude, vecLength, vecPlane } from '../../math/linear-algebra/vec3'
 import { type Angle, normalizePI } from '../../math/units/angle'
-import type { ThreePointPolarAlignmentInput } from './polaralignment'
+import type { PolarAlignmentDirection } from './polaralignment'
+import type { ThreePointPolarAlignmentInput } from './tppa'
 
 // Conditioning of the three timestamped plate solves that seed a three-point polar alignment. Each
 // sample is expressed in the Earth-fixed ITRS frame at its own exposure epoch, which is the common
@@ -15,9 +16,6 @@ import type { ThreePointPolarAlignmentInput } from './polaralignment'
 // per-axis astrometric error σ and a rotation φ (radians) between consecutive samples, independent
 // of declination, so acceptance is driven by rotation; sky separation and the chord area only
 // guard against astrometric noise and non-RA motion. All angles are radians; nothing is mutated.
-
-// Direction of the RA motion that produces the samples: towards the west or the east horizon.
-export type PolarAlignmentDirection = 'WEST' | 'EAST'
 
 // Limits that decide whether timestamped samples form a usable three-point geometry.
 export interface PolarAlignmentGeometryLimits {

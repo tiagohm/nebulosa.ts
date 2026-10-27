@@ -7,11 +7,10 @@ import { type GeographicPosition, geodeticLocation } from '../../../src/astronom
 import { cirsRotationMatrix, type Time, timeYMDHMS } from '../../../src/astronomy/time/time'
 import type { FitsHeader } from '../../../src/io/formats/fits/fits'
 import { matMulVec, matTransposeMulVec } from '../../../src/math/linear-algebra/mat3'
-import { type Vec3, vecCross, vecDot, vecNormalizeMut, vecRotateByRodrigues } from '../../../src/math/linear-algebra/vec3'
+import { type Vec3, vecCross, vecDot, vecNormalizeMut, vecRotateByRodrigues, vecX, vecY, vecZ, vecZero } from '../../../src/math/linear-algebra/vec3'
 import { type Angle, arcmin, arcsec, deg, toDeg } from '../../../src/math/units/angle'
 import { decomposePolarError, IPolarPolarAlignment, projectGuidePoint, solveImageFixedPoint, solveSimilarityFixedPoint } from '../../../src/observation/alignment/ipolar'
-import { mountAdjustmentAxes } from '../../../src/observation/alignment/polaralignment'
-import { celestialPoleVector } from '../../../src/observation/alignment/polaralignment.util'
+import { celestialPoleVector, mountAdjustmentAxes } from '../../../src/observation/alignment/polaralignment'
 
 test('solve similarity fixed point', () => {
 	const transform = { a: Math.cos(deg(5)), b: Math.sin(deg(5)), tx: 12, ty: -8, mirrored: false } as const
@@ -42,9 +41,9 @@ test('solve similarity fixed point supports mirrored transforms', () => {
 
 test('fixed-point solver refines a near-center seed for a small RA rotation', () => {
 	const axis = eraS2c(0, arcmin(30))
-	const forward: Vec3 = [1, 0, 0]
-	const right: Vec3 = [0, 1, 0]
-	const up: Vec3 = [0, 0, 1]
+	const forward: Vec3 = vecX()
+	const right: Vec3 = vecY()
+	const up: Vec3 = vecZ()
 	const reference = fixedPointRegressionFrame(forward, right, up, arcsec(10))
 	const current = fixedPointRegressionFrame(vecRotateByRodrigues(forward, axis, arcmin(10)), vecRotateByRodrigues(right, axis, arcmin(10)), vecRotateByRodrigues(up, axis, arcmin(10)), arcsec(10))
 	const expected = tanProject(reference, 0, arcmin(30))
@@ -487,8 +486,8 @@ function practicalFrame({ time, azimuthError, altitudeError, raRotation, cameraO
 	const alignedForward = vecRotateByRodrigues(pole, eastAxis, cameraOffset)
 	const axis = vecRotateByRodrigues(vecRotateByRodrigues(pole, upAxis, azimuthError), eastAxis, altitudeError)
 	const forward = vecRotateByRodrigues(vecRotateByRodrigues(alignedForward, upAxis, azimuthError), eastAxis, altitudeError)
-	const right = vecNormalizeMut(vecCross(forward, axis, [0, 0, 0]))
-	const up = vecNormalizeMut(vecCross(right, forward, [0, 0, 0]))
+	const right = vecNormalizeMut(vecCross(forward, axis, vecZero()))
+	const up = vecNormalizeMut(vecCross(right, forward, vecZero()))
 	const rolledRight = vecRotateByRodrigues(right, forward, baseRoll)
 	const rolledUp = vecRotateByRodrigues(up, forward, baseRoll)
 	const rotatedForward = vecRotateByRodrigues(forward, axis, raRotation)
@@ -521,7 +520,7 @@ function practicalFrame({ time, azimuthError, altitudeError, raRotation, cameraO
 }
 
 function tangentBasis(origin: Vec3) {
-	const reference = Math.abs(origin[2]) < 0.9 ? ([0, 0, 1] as const) : ([0, 1, 0] as const)
+	const reference = Math.abs(origin[2]) < 0.9 ? vecZ() : vecY()
 	const east = vecNormalizeMut(vecCross(reference, origin))
 	const north = vecNormalizeMut(vecCross(origin, east))
 	return { east, north } as const

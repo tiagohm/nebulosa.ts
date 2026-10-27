@@ -1,7 +1,7 @@
 import type { EquatorialCoordinate } from '../../astronomy/coordinates/coordinate'
 import { eraS2c } from '../../astronomy/coordinates/erfa/erfa'
 import { AMIN2RAD, DEG2RAD, PI, PIOVERFOUR, PIOVERTWO, TAU } from '../../core/constants'
-import type { MutVec3 } from '../../math/linear-algebra/vec3'
+import { type MutVec3, vecZero } from '../../math/linear-algebra/vec3'
 import { clamp } from '../../math/numerical/math'
 import { type Angle, normalizeAngle } from '../../math/units/angle'
 
@@ -380,7 +380,7 @@ function tileToUnitVector(tileId: number, nside: number, dx: number, dy: number,
 }
 
 // Reusable scratch unit vector for an edge-point probe during distance evaluation.
-const DISTANCE_EDGE_SCRATCH: MutVec3 = [0, 0, 0]
+const DISTANCE_EDGE_SCRATCH = vecZero()
 
 // Maps an edge index and a parameter t in [0, 1] to a tile sub-tile offset (dx, dy) and returns
 // the squared chord distance from the unit direction (vx, vy, vz) to that boundary point. The four
@@ -505,7 +505,7 @@ function validateCoordinate(rightAscension: Angle, declination: Angle) {
 }
 
 // Scratch unit vector reused by the public HEALPix XY operations.
-const COORD_SCRATCH: MutVec3 = [0, 0, 0]
+const COORD_SCRATCH = vecZero()
 
 // Converts normalized right ascension and declination (radians) to an Astrometry.net XY tile id.
 // Right ascension is normalized to [0, TAU); declination is used as supplied.

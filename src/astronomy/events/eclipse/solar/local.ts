@@ -448,8 +448,8 @@ export function computeLocalFundamentalState(pbe: PolynomialBesselianElements, l
 // Computes the local scalar geometry (distance, L1, L2 in Earth equatorial radii) from an already evaluated
 // Besselian sample. The sample depends only on the instant, so callers probing many (longitude, latitude)
 // points at one time can evaluate it once and reuse it here instead of re-running the polynomial per probe.
-// The returned tuple aliases `o`.
-function localFundamentalMetricsFromSample(be: Pick<InstantBesselianElements, 'mu' | 'deltaTLongitudeCorrection' | 'd' | 'x' | 'y' | 'l1' | 'l2' | 'tanF1' | 'tanF2'>, longitude: Angle, latitude: Angle, o: [distance: number, L1: number, L2: number]) {
+// The returned tuple aliases `out`.
+function localFundamentalMetricsFromSample(be: Pick<InstantBesselianElements, 'mu' | 'deltaTLongitudeCorrection' | 'd' | 'x' | 'y' | 'l1' | 'l2' | 'tanF1' | 'tanF2'>, longitude: Angle, latitude: Angle, out: [distance: number, L1: number, L2: number]) {
 	const H = hourAngleFromLongitude(longitude, be.mu, be.deltaTLongitudeCorrection)
 
 	const sinD = Math.sin(be.d)
@@ -465,16 +465,16 @@ function localFundamentalMetricsFromSample(be: Pick<InstantBesselianElements, 'm
 	const eta = rhoSinPhi * cosD - rhoCosPhi * cosH * sinD
 	const zeta = rhoSinPhi * sinD + rhoCosPhi * cosH * cosD
 
-	o[0] = Math.hypot(be.x - ksi, be.y - eta)
-	o[1] = be.l1 - zeta * be.tanF1
-	o[2] = be.l2 - zeta * be.tanF2
-	return o
+	out[0] = Math.hypot(be.x - ksi, be.y - eta)
+	out[1] = be.l1 - zeta * be.tanF1
+	out[2] = be.l2 - zeta * be.tanF2
+	return out
 }
 
 // Computes only the local scalar geometry needed by hot root/minimum searches. The returned tuple aliases
-// `o` and contains distance, L1 and L2 in Earth equatorial radii.
-function computeLocalFundamentalMetrics(pbe: PolynomialBesselianElements, longitude: Angle, latitude: Angle, time: Time, o: [distance: number, L1: number, L2: number]) {
-	return localFundamentalMetricsFromSample(evaluateBesselian(pbe, time), longitude, latitude, o)
+// `out` and contains distance, L1 and L2 in Earth equatorial radii.
+function computeLocalFundamentalMetrics(pbe: PolynomialBesselianElements, longitude: Angle, latitude: Angle, time: Time, out: [distance: number, L1: number, L2: number]) {
+	return localFundamentalMetricsFromSample(evaluateBesselian(pbe, time), longitude, latitude, out)
 }
 
 // Local magnitude at a Julian Day, reusing `metrics` to avoid per-sample LocalFundamentalState allocation.
@@ -1220,8 +1220,8 @@ const SHADOW_EDGE_STEP_KM = 5
 
 // Destination geographic point reached from (lon, lat) along a great-circle bearing (from north toward
 // east) after a surface distance, on a sphere of radius EARTH_RADIUS_KM. Writes [longitude, latitude] into
-// `o` and returns the same tuple to avoid allocations during shadow-edge marches.
-function destinationPoint(longitude: Angle, latitude: Angle, bearing: Angle, distanceKm: number, o: [longitude: Angle, latitude: Angle]) {
+// `out` and returns the same tuple to avoid allocations during shadow-edge marches.
+function destinationPoint(longitude: Angle, latitude: Angle, bearing: Angle, distanceKm: number, out: [longitude: Angle, latitude: Angle]) {
 	const angular = distanceKm / EARTH_RADIUS_KM
 	const sinLat = Math.sin(latitude)
 	const cosLat = Math.cos(latitude)
@@ -1229,9 +1229,9 @@ function destinationPoint(longitude: Angle, latitude: Angle, bearing: Angle, dis
 	const cosAng = Math.cos(angular)
 	const lat2 = Math.asin(clamp(sinLat * cosAng + cosLat * sinAng * Math.cos(bearing), -1, 1))
 	const lon2 = longitude + Math.atan2(Math.sin(bearing) * sinAng * cosLat, cosAng - sinLat * Math.sin(lat2))
-	o[0] = lon2
-	o[1] = lat2
-	return o
+	out[0] = lon2
+	out[1] = lat2
+	return out
 }
 
 // Distance (km) from the observer to the central-shadow edge along a bearing at a fixed instant: marches
