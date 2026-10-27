@@ -58,6 +58,9 @@ export interface StreakDetectionOptions {
 	readonly minSNR?: number
 	// Minimum covariance anisotropy in [0, 1].
 	readonly minLinearity?: number
+	// Minimum fraction, in [0, 1], of the measured segment whose samples support the streak; a continuous trail covers
+	// almost all of it, a chain of aligned sources or a dotted trail much less. 0 accepts any coverage.
+	readonly minCoverage?: number
 	// Maximum returned detections after merging and duplicate suppression.
 	readonly maxStreaks?: number
 	// Background-grid cell size in native-plane pixels.
@@ -97,6 +100,7 @@ export const DEFAULT_STREAK_DETECTION_OPTIONS: Required<Omit<StreakDetectionOpti
 	maxWidth: 16,
 	minSNR: 5,
 	minLinearity: 0.8,
+	minCoverage: 0.5,
 	maxStreaks: 32,
 	backgroundCellSize: 64,
 	thresholdSigma: 2.5,

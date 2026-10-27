@@ -207,6 +207,22 @@ test('finds a streak among crowded stars, whose edges would otherwise outvote it
 	expect(detectStreaks(frame, { minCoherence: 0 }).filter(alongStreak)).toEqual([])
 })
 
+test('reports no streak in crowded star fields without one', () => {
+	for (const seed of [0x2545f491, 0x1234567, 0x9e3779b9, 0x7f4a7c15, 0x51ed270b]) {
+		const frame = image(320, 240)
+		addGaussianNoise(frame, 0.003, seed)
+		let state = seed
+		const next = () => {
+			state ^= state << 13
+			state ^= state >>> 17
+			state ^= state << 5
+			return (state >>> 0) / 0x1_0000_0000
+		}
+		for (let index = 0; index < 1200; index++) addStar(frame, next() * 320, next() * 240, 0.9 + next() * 0.8, 0.05 + next() ** 2 * 0.8)
+		expect(detectStreaks(frame)).toEqual([])
+	}
+})
+
 test('uses measured width and residual local noise for final photometry', () => {
 	const plain = image(176, 112)
 	const gradient = image(176, 112)

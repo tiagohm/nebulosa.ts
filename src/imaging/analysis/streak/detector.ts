@@ -54,6 +54,12 @@ const TIP_LENGTH = STREAK_COHERENCE_RADIUS + STREAK_COMPACT_DILATION
 // chains of stars are not bridged.
 const MERGE_GAP_ALLOWANCE = 2 * TIP_LENGTH
 
+// Fraction of the axis peak of a transverse profile that a bin outside its significant core may not reach: a streak is
+// the brightest structure of its corridor, while a line fitted through a chain of sources, a halo, or nebulosity has
+// brighter flux beside the axis. A resolved neighbouring streak lies outside the corridor or crosses it too briefly to
+// raise a bin that high.
+const STREAK_SECONDARY_PEAK_RATIO = 0.5
+
 // Longitudinal sample without support.
 const SAMPLE_UNSUPPORTED = 0
 
@@ -82,6 +88,8 @@ interface ResolvedStreakDetectionOptions {
 	readonly minSNR: number
 	// Minimum covariance anisotropy.
 	readonly minLinearity: number
+	// Minimum supported fraction of the measured segment.
+	readonly minCoverage: number
 	// Maximum final result count.
 	readonly maxStreaks: number
 	// Positive-signal threshold in local noise sigmas.
@@ -190,6 +198,7 @@ function resolveStreakOptions(options: Readonly<StreakDetectionOptions>): Resolv
 		maxWidth: options.maxWidth ?? DEFAULT_STREAK_DETECTION_OPTIONS.maxWidth,
 		minSNR: options.minSNR ?? DEFAULT_STREAK_DETECTION_OPTIONS.minSNR,
 		minLinearity: options.minLinearity ?? DEFAULT_STREAK_DETECTION_OPTIONS.minLinearity,
+		minCoverage: options.minCoverage ?? DEFAULT_STREAK_DETECTION_OPTIONS.minCoverage,
 		maxStreaks: options.maxStreaks ?? DEFAULT_STREAK_DETECTION_OPTIONS.maxStreaks,
 		thresholdSigma: options.thresholdSigma ?? DEFAULT_STREAK_DETECTION_OPTIONS.thresholdSigma,
 		gradientSigma: options.gradientSigma ?? DEFAULT_STREAK_DETECTION_OPTIONS.gradientSigma,
@@ -208,6 +217,7 @@ function resolveStreakOptions(options: Readonly<StreakDetectionOptions>): Resolv
 	validateInRange(resolved.maxWidth, 1, MAXIMUM_STREAK_WIDTH)
 	validateInRange(resolved.minSNR, 0, 1_000_000)
 	validateInRange(resolved.minLinearity, 0, 1)
+	validateInRange(resolved.minCoverage, 0, 1)
 	validatePositiveInteger(resolved.maxStreaks)
 	validatePositiveInteger(resolved.maxCandidates)
 	validateInRange(resolved.maxStreaks, 1, 4096)
@@ -543,6 +553,7 @@ function finishStreakRun(
 
 	const snr = photometry.noiseVariance > 0 ? photometry.flux / Math.sqrt(photometry.noiseVariance) : undefined
 	if (snr !== undefined && snr < options.minSNR) return
+	if (coverage < options.minCoverage) return
 	if (clippedAtBorder && !options.allowBorderClipping) return
 
 	const [start, end] = canonicalizeStreakEndpoints(streakPlanePointToImage(planeStart, grid.sourceLeft, grid.sourceTop, grid.step), streakPlanePointToImage(planeEnd, grid.sourceLeft, grid.sourceTop, grid.step))
@@ -925,7 +936,12 @@ function measureStreakPhotometry(prepared: PreparedStreakImage, start: Readonly<
 	}
 }
 
-// Estimates transverse FWHM from signed profiles accumulated over unique corridor pixels.
+// Estimates the transverse FWHM, in plane pixels, of the streak on the fitted axis from start to end (plane pixels) at
+// angle (radians), from the signed profile accumulated over unique pixels within maximumWidth (plane pixels) of the axis.
+// The significant core is grown from the axis, so flux off the axis never sets the width, and the measurement is
+// refused when a bin outside the core reaches STREAK_SECONDARY_PEAK_RATIO of the axis peak: the brightest structure of
+// the corridor is then not the fitted line but a source, halo, or nebulosity beside it. Returns undefined as well when
+// the axis is not significant or the budget is exhausted.
 function measureStreakWidth(prepared: PreparedStreakImage, start: Readonly<Point>, end: Readonly<Point>, angle: number, maximumWidth: number, thresholdSigma: number, budget: StreakWorkBudget): number | undefined {
 	const halfWidth = operationalStreakHalfWidth(prepared, maximumWidth)
 	if (!chargeStreakWork(prepared, budget, estimateStreakCorridorWork(start, end, halfWidth))) return undefined
@@ -948,9 +964,9 @@ function measureStreakWidth(prepared: PreparedStreakImage, start: Readonly<Point
 		noiseVariance[bin] += noise * noise
 	})
 
-	let peak = -1
-	for (let bin = 0; bin < binCount; bin++) if (peak < 0 || profile[bin] > profile[peak]) peak = bin
-	if (peak < 0) return undefined
+	// The axis bin, or a neighbour when the axis falls between two pixel rows.
+	let peak = halfWidth
+	for (let bin = halfWidth - 1; bin <= halfWidth + 1; bin++) if (bin >= 0 && bin < binCount && profile[bin] > profile[peak]) peak = bin
 	const numericalFloor = prepared.residualFloor
 	const significant = (bin: number) => profile[bin] > (noiseVariance[bin] > 0 ? Math.max(0.5, thresholdSigma * 0.25) * Math.sqrt(noiseVariance[bin]) : numericalFloor)
 	if (!significant(peak)) return undefined
@@ -959,6 +975,10 @@ function measureStreakWidth(prepared: PreparedStreakImage, start: Readonly<Point
 	let last = peak
 	while (first > 0 && significant(first - 1)) first--
 	while (last + 1 < binCount && significant(last + 1)) last++
+
+	const secondaryLimit = STREAK_SECONDARY_PEAK_RATIO * profile[peak]
+	for (let bin = 0; bin < binCount; bin++) if ((bin < first || bin > last) && profile[bin] >= secondaryLimit) return undefined
+
 	let weight = 0
 	let firstMoment = 0
 	let secondMoment = 0

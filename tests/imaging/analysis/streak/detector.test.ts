@@ -103,6 +103,7 @@ for (const crossingDegrees of [5, 8, 12]) {
 }
 
 // Dashes as short as the 4 px quarter-duty ones are as round as a star, so the compact-source test is disabled for them.
+// A dashed streak covers at most half of its length, so the coverage test is disabled for both.
 for (const [name, on, off, minCoherence] of [
 	['half-duty', 8, 8, undefined],
 	['quarter-duty', 4, 12, 0],
@@ -113,7 +114,7 @@ for (const [name, on, off, minCoherence] of [
 		const segmentLength = on + off
 		for (let start = 0; start < 200; start += segmentLength) intervals.push({ start: start / 200, end: Math.min(1, (start + on) / 200) })
 		renderSyntheticStreak(frame, { start: { x: 20, y: 48 }, end: { x: 220, y: 48 }, width: 3, intensity: 0.8, profile: { type: 'segments', intervals } })
-		const detections = detectStreaks(frame, { minLength: 140, maxWidth: 8, mergeGap: off + 2, backgroundCellSize: 32, minCoherence })
+		const detections = detectStreaks(frame, { minLength: 140, maxWidth: 8, mergeGap: off + 2, backgroundCellSize: 32, minCoherence, minCoverage: 0 })
 		expect(detections.length).toBe(1)
 		expect(detections[0].length).toBeGreaterThan(190)
 		const expectedCoverage = on / segmentLength
@@ -121,6 +122,17 @@ for (const [name, on, off, minCoherence] of [
 		expect(detections[0].coverage).toBeLessThan(expectedCoverage + 0.2)
 	})
 }
+
+test('rejects a streak covering less of its length than minCoverage', () => {
+	const frame = image(240, 96)
+	const intervals: { start: number; end: number }[] = []
+	for (let start = 0; start < 200; start += 16) intervals.push({ start: start / 200, end: Math.min(1, (start + 4) / 200) })
+	renderSyntheticStreak(frame, { start: { x: 20, y: 48 }, end: { x: 220, y: 48 }, width: 3, intensity: 0.8, profile: { type: 'segments', intervals } })
+	const options = { minLength: 140, maxWidth: 8, mergeGap: 14, backgroundCellSize: 32, minCoherence: 0 }
+	expect(detectStreaks(frame, options)).toEqual([])
+	expect(detectStreaks(frame, { ...options, minCoverage: 0.2 }).length).toBe(1)
+	expect(() => detectStreaks(frame, { ...options, minCoverage: 1.01 })).toThrow(RangeError)
+})
 
 test('does not bridge randomly displaced short fragments into a long streak', () => {
 	const frame = image(240, 128)
