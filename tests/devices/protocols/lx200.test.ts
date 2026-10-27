@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test'
 import { Socket } from 'node:net'
 import { temporalFromDate } from '../../../src/astronomy/time/temporal'
+import type { ProtocolClient } from '../../../src/devices/protocols/client'
 import { Lx200ProtocolServer, type Lx200ProtocolHandler, type MoveDirection, type SlewRate } from '../../../src/devices/protocols/lx200'
 import { dms, hms } from '../../../src/math/units/angle'
 
@@ -127,13 +128,17 @@ test('reports a refused or unsupported goto as not possible', async () => {
 	}
 })
 
-test('preserves staged target and connection state across clients', async () => {
-	const slewed: number[][] = []
+test('stages targets per client and reports the client of each action', async () => {
+	const slewed: [number, number, string][] = []
+	const opened: ProtocolClient[] = []
 	let disconnects = 0
 	const server = new Lx200ProtocolServer({
 		handler: makeHandler({
-			goto: (server, rightAscension, declination) => {
-				slewed.push([rightAscension, declination])
+			clientOpen: (_, client) => {
+				opened.push(client)
+			},
+			goto: (_, rightAscension, declination, client) => {
+				slewed.push([rightAscension, declination, client.id])
 			},
 			disconnect: () => {
 				disconnects++
@@ -143,46 +148,229 @@ test('preserves staged target and connection state across clients', async () => 
 	server.start('127.0.0.1', 0)
 
 	const first = await connectClient(server.port)
-	let second: Socket | undefined
+	const second = await connectClient(server.port)
+	const ports = [first.localPort!, second.localPort!]
 
 	try {
-		const targetResponse = readUntil(first, (value) => value === '11')
+		await waitFor(() => opened.length === 2)
 
-		first.write('#:Sr12:00:00##:Sd+45*00:00#', 'ascii')
+		const firstRa = readUntil(first, (value) => value === '1')
+		first.write(':Sr12:00:00#', 'ascii')
+		expect(await firstRa).toBe('1')
 
-		expect(await targetResponse).toBe('11')
+		const secondTarget = readUntil(second, (value) => value === '11')
+		second.write(':Sr06:00:00#:Sd-10*00:00#', 'ascii')
+		expect(await secondTarget).toBe('11')
 
-		const secondSocket = await connectClient(server.port)
-		second = secondSocket
-		const secondResponse = readUntil(secondSocket, (value) => value === '00:00:00#')
+		const firstSlew = readUntil(first, (value) => value === '10')
+		first.write(':Sd+45*00:00#:MS#', 'ascii')
+		expect(await firstSlew).toBe('10')
 
-		secondSocket.write('#:GR#', 'ascii')
-
-		expect(await secondResponse).toBe('00:00:00#')
-
-		const slewResponse = readUntil(first, (value) => value === '0')
-
-		first.write('#:MS#', 'ascii')
-
-		expect(await slewResponse).toBe('0')
+		const secondSlew = readUntil(second, (value) => value === '0')
+		second.write(':MS#', 'ascii')
+		expect(await secondSlew).toBe('0')
 
 		const secondClosed = new Promise<void>((resolve) => {
-			secondSocket.once('close', () => resolve())
+			second.once('close', () => resolve())
 		})
-		secondSocket.destroy()
+		second.destroy()
 		await secondClosed
-		await Bun.sleep(1)
+		await waitFor(() => server.clients().length === 1)
 
 		expect(disconnects).toBe(0)
 	} finally {
 		first.destroy()
-		second?.destroy()
+		second.destroy()
+		server.stop()
+	}
+
+	expect(opened[0].id).not.toBe(opened[1].id)
+	expect(opened.map((client) => client.ip)).toEqual(['127.0.0.1', '127.0.0.1'])
+	expect(opened.map((client) => client.port)).toEqual(ports)
+	expect(slewed).toHaveLength(2)
+	expect(slewed[0][0]).toBeCloseTo(hms(12), 12)
+	expect(slewed[0][1]).toBeCloseTo(dms(45), 12)
+	expect(slewed[0][2]).toBe(opened[0].id)
+	expect(slewed[1][0]).toBeCloseTo(hms(6), 12)
+	expect(slewed[1][1]).toBeCloseTo(dms(-10), 12)
+	expect(slewed[1][2]).toBe(opened[1].id)
+})
+
+test('seeds the staged target of every client with the current position', async () => {
+	const slewed: number[][] = []
+	let rightAscension = hms(1)
+
+	const server = new Lx200ProtocolServer({ handler: makeHandler({ rightAscension: () => rightAscension, goto: (_, ra, dec) => void slewed.push([ra, dec]) }) })
+	server.start('127.0.0.1', 0)
+
+	const first = await connectClient(server.port)
+	await waitFor(() => server.clients().length === 1)
+	rightAscension = hms(2)
+	const second = await connectClient(server.port)
+	await waitFor(() => server.clients().length === 2)
+
+	try {
+		const response = readUntil(second, (value) => value === '0')
+		second.write(':MS#', 'ascii')
+		expect(await response).toBe('0')
+	} finally {
+		first.destroy()
+		second.destroy()
 		server.stop()
 	}
 
 	expect(slewed).toHaveLength(1)
-	expect(slewed[0][0]).toBeCloseTo(hms(12), 12)
-	expect(slewed[0][1]).toBeCloseTo(dms(45), 12)
+	expect(slewed[0][0]).toBeCloseTo(hms(2), 12)
+})
+
+test('disconnects one client and keeps the listener and the other client working', async () => {
+	const closed: string[] = []
+	let disconnects = 0
+	const server = new Lx200ProtocolServer({
+		handler: makeHandler({
+			clientClose: (_, client) => {
+				closed.push(client.id)
+			},
+			disconnect: () => {
+				disconnects++
+			},
+		}),
+	})
+	server.start('127.0.0.1', 0)
+
+	const first = await connectClient(server.port)
+	const second = await connectClient(server.port)
+
+	try {
+		await waitFor(() => server.clients().length === 2)
+		const [firstClient] = server.clients()
+		const firstClosed = new Promise<void>((resolve) => {
+			first.once('close', () => resolve())
+		})
+
+		expect(server.disconnectClient(firstClient.id)).toBe(true)
+		expect(server.disconnectClient(firstClient.id)).toBe(false)
+		expect(closed).toEqual([firstClient.id])
+		expect(server.clients()).toHaveLength(1)
+
+		await firstClosed
+		await Bun.sleep(5)
+
+		expect(closed).toEqual([firstClient.id])
+		expect(disconnects).toBe(0)
+
+		const response = readUntil(second, (value) => value === '00:00:00#')
+		second.write(':GR#', 'ascii')
+		expect(await response).toBe('00:00:00#')
+
+		const third = await connectClient(server.port)
+		await waitFor(() => server.clients().length === 2)
+		third.destroy()
+	} finally {
+		first.destroy()
+		second.destroy()
+		server.stop()
+	}
+
+	expect(closed).toHaveLength(3)
+	expect(new Set(closed).size).toBe(3)
+	expect(disconnects).toBe(1)
+	expect(server.clients()).toHaveLength(0)
+	server.stop()
+	expect(closed).toHaveLength(3)
+})
+
+test('closes only the client that sends an oversized command', async () => {
+	const server = new Lx200ProtocolServer({ handler: makeHandler() })
+	server.start('127.0.0.1', 0)
+
+	const abuser = await connectClient(server.port)
+	const other = await connectClient(server.port)
+
+	try {
+		await waitFor(() => server.clients().length === 2)
+		const abuserClosed = new Promise<void>((resolve) => {
+			abuser.once('close', () => resolve())
+		})
+
+		abuser.write(`:${'x'.repeat(200)}`, 'ascii')
+		await abuserClosed
+
+		expect(server.clients()).toHaveLength(1)
+
+		const response = readUntil(other, (value) => value === '00:00:00#')
+		other.write(':GR#', 'ascii')
+		expect(await response).toBe('00:00:00#')
+	} finally {
+		abuser.destroy()
+		other.destroy()
+		server.stop()
+	}
+})
+
+test('refuses site and clock setters without calling the handler when the site is read-only', async () => {
+	const writes: string[] = []
+
+	await withLx200Server(
+		async (client) => {
+			const response = readUntil(client, (value) => value === '00000')
+
+			client.write(':Sg070*30#:St+12*15#:SG+03.0#:SL02:06:07#:SC04/24/26#', 'ascii')
+
+			expect(await response).toBe('00000')
+		},
+		makeHandler({
+			longitude: (_, longitude) => {
+				if (longitude !== undefined) writes.push('longitude')
+				return 0
+			},
+			latitude: (_, latitude) => {
+				if (latitude !== undefined) writes.push('latitude')
+				return 0
+			},
+			dateTime: (_, date) => {
+				if (date !== undefined) writes.push('dateTime')
+				return [temporalFromDate(2026, 1, 1), 0] as const
+			},
+		}),
+		{ readOnlySite: true },
+	)
+
+	expect(writes).toEqual([])
+})
+
+test('reports a refused or unsupported sync as failed', async () => {
+	for (const handler of [makeHandler({ sync: () => false }), makeHandler()]) {
+		await withLx200Server(async (client) => {
+			const response = readUntil(client, (value) => value.endsWith('#'))
+
+			client.write(':CM#', 'ascii')
+
+			expect(await response).toBe('Sync failed#')
+		}, handler)
+	}
+})
+
+test('dispatches a motion start and stop of one packet in order with the client', async () => {
+	const moves: [MoveDirection, boolean, string][] = []
+
+	await withLx200Server(
+		async (client) => {
+			client.write(':Mn#:Qn#', 'ascii')
+			await waitFor(() => moves.length === 2)
+		},
+		makeHandler({
+			move: (_, direction, enabled, client) => {
+				moves.push([direction, enabled, client.id])
+			},
+		}),
+	)
+
+	expect(moves.map(([direction, enabled]) => [direction, enabled])).toEqual([
+		['NORTH', true],
+		['NORTH', false],
+	])
+	expect(moves[0][2]).toBe(moves[1][2])
 })
 
 test('keeps the previous target coordinates after invalid coordinate writes', async () => {

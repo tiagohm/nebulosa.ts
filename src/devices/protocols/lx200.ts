@@ -1,10 +1,13 @@
 import type { Socket, TCPSocketListener } from 'bun'
 import { daysInMonth, formatTemporal, type Temporal, type TemporalDate, temporalAdd, temporalFromDate } from '../../astronomy/time/temporal'
 import { type Angle, parseAngle, toDms, toHms } from '../../math/units/angle'
+import { type ProtocolClient, type ProtocolClientEntry, ProtocolClients } from './client'
 
 // Server implementing the Meade LX200 serial command protocol over TCP, so LX200-speaking clients (e.g.
 // planetarium apps) can drive a mount. Parses the '#'-framed ASCII commands, delegates reads/actions to a
 // handler, and writes the protocol's ASCII responses. Coordinates exchanged with the handler are J2000.
+// Several clients may connect at once; each has its own staged target and clock, so one client never
+// completes a command another one is assembling, and actions are reported with the client that sent them.
 // http://www.company7.com/library/meade/LX200CommandSet.pdf
 // https://soundstepper.sourceforge.net/LX200_Compatible_Commands.html
 // https://www.cloudynights.com/topic/72166-lx-200-gps-serial-commands/
@@ -16,9 +19,13 @@ export type MoveDirection = 'NORTH' | 'SOUTH' | 'EAST' | 'WEST'
 export type SlewRate = 'CENTER' | 'GUIDE' | 'FIND' | 'MAX'
 
 // Callbacks the server uses to read mount state and perform actions. Read coordinates are J2000 radians;
-// optional action callbacks may be omitted for read-only mounts.
+// optional action callbacks may be omitted for read-only mounts. Action callbacks receive the client that sent
+// the command as their last argument.
 export interface Lx200ProtocolHandler {
+	// A client connected; runs for every client.
 	readonly connect?: (server: Lx200ProtocolServer) => void
+	// A client connected, with its identity; runs for every client, after connect.
+	readonly clientOpen?: (server: Lx200ProtocolServer, client: ProtocolClient) => void
 	readonly rightAscension: (server: Lx200ProtocolServer) => Angle // J2000
 	readonly declination: (server: Lx200ProtocolServer) => Angle // J2000
 	readonly longitude: (server: Lx200ProtocolServer, longitude?: Angle) => Angle
@@ -27,12 +34,16 @@ export interface Lx200ProtocolHandler {
 	readonly tracking: (server: Lx200ProtocolServer) => boolean
 	readonly parked: (server: Lx200ProtocolServer) => boolean
 	readonly slewing: (server: Lx200ProtocolServer) => boolean
-	readonly slewRate: (server: Lx200ProtocolServer, rate: SlewRate) => void
-	readonly sync?: (server: Lx200ProtocolServer, rightAscension: Angle, declination: Angle) => void
-	// Starts a slew to the staged J2000 target; returning false reports to the client that the slew is not possible.
-	readonly goto?: (server: Lx200ProtocolServer, rightAscension: Angle, declination: Angle) => boolean | void
-	readonly move?: (server: Lx200ProtocolServer, direction: MoveDirection, enabled: boolean) => void
-	readonly abort?: (server: Lx200ProtocolServer) => void
+	readonly slewRate: (server: Lx200ProtocolServer, rate: SlewRate, client: ProtocolClient) => void
+	// Syncs on the client's staged J2000 target; returning false reports to the client that the sync failed.
+	readonly sync?: (server: Lx200ProtocolServer, rightAscension: Angle, declination: Angle, client: ProtocolClient) => boolean | void
+	// Starts a slew to the client's staged J2000 target; returning false reports to the client that the slew is not possible.
+	readonly goto?: (server: Lx200ProtocolServer, rightAscension: Angle, declination: Angle, client: ProtocolClient) => boolean | void
+	readonly move?: (server: Lx200ProtocolServer, direction: MoveDirection, enabled: boolean, client: ProtocolClient) => void
+	readonly abort?: (server: Lx200ProtocolServer, client: ProtocolClient) => void
+	// A client disconnected, with its identity; runs exactly once for every client, before disconnect.
+	readonly clientClose?: (server: Lx200ProtocolServer, client: ProtocolClient) => void
+	// The last connected client disconnected.
 	readonly disconnect?: (server: Lx200ProtocolServer) => void
 }
 
@@ -41,6 +52,24 @@ export interface Lx200ProtocolServerOptions {
 	handler: Lx200ProtocolHandler
 	name?: string
 	version?: string
+	// Refuses the site and clock setters (:Sg#, :St#, :SG#, :SL#, :SC#) with 0 without calling the handler, for a
+	// mount whose site and time must not be changed by clients; the getters still read the handler.
+	readOnlySite?: boolean
+}
+
+// Command assembly state of one client: the partially received command, the staged target, and the date,
+// time, and offset assembled across the three-part set-time sequence.
+interface Lx200ClientState {
+	// Characters of the command received so far, starting with ':' or '#'; empty between commands.
+	command: string
+	// Staged target right ascension and declination, J2000 radians.
+	readonly coordinates: [Angle, Angle]
+	// Local date and time staged by :SC# and :SL#.
+	readonly utc: TemporalDate
+	// Offset of local time from UTC in minutes staged by :SG#.
+	utcOffset: number
+	// Number of clock setters received since the clock was last committed.
+	utcStep: number
 }
 
 // Single-byte protocol responses (ACK 'G', success '1', failure '0') and the alignment-query request byte.
@@ -49,22 +78,19 @@ const ONE = Buffer.from([49]) // 1
 const ZERO = Buffer.from([48]) // 0
 const ACK_REQUEST = '\u0006'
 
+// Longest command, in characters, a client may send. The longest valid one (:SC with its date, or a target
+// setter) has about a dozen, so a longer one is garbage and its client is closed instead of being buffered.
+const LX200_MAX_COMMAND_LENGTH = 64
+
 // Date/time response formats used by the protocol.
 const DATE_FORMAT = 'MM/DD/YY'
 const TIME_FORMAT = 'HH:mm:ss'
 
 // Meade Telescope Serial Command Protocol Server.
 export class Lx200ProtocolServer {
-	readonly #sockets: Socket<unknown>[] = []
-	// Per-socket accumulation of the partially-received command string.
-	readonly #commands = new Map<Socket<unknown>, string>()
+	// Clients of the current run, replaced on every start.
+	#clients = new ProtocolClients<Lx200ClientState>()
 	#server?: TCPSocketListener
-
-	// Staged target coordinates (radians) and the date/time/offset assembled across the set-time sequence.
-	readonly #coordinates: [Angle, Angle] = [0, 0]
-	readonly #utc: TemporalDate = [2025, 1, 1, 0, 0, 0, 0]
-	#utcOffset = 0
-	#utcStep = 0
 
 	constructor(readonly options: Readonly<Lx200ProtocolServerOptions>) {}
 
@@ -77,10 +103,14 @@ export class Lx200ProtocolServer {
 		return this.#server?.port ?? -1
 	}
 
-	// Starts the TCP listener, seeding the staged coordinates from the handler on connect. Returns false if
-	// already started.
+	// Starts the TCP listener, seeding each client's staged target with the handler's position when it connects.
+	// Returns false if already started; throws the bind error (such as EADDRINUSE) when the address cannot be used.
 	start(hostname: string, port: number) {
 		if (this.#server) return false
+
+		// Callbacks of this run only ever reach this run's clients, so a socket of a stopped run arriving late
+		// cannot touch a server started again meanwhile.
+		const clients = new ProtocolClients<Lx200ClientState>()
 
 		this.#server = Bun.listen({
 			hostname,
@@ -88,25 +118,19 @@ export class Lx200ProtocolServer {
 			allowHalfOpen: false,
 			socket: {
 				data: (socket, data) => {
-					this.#processData(socket, data)
+					const entry = clients.get(socket)
+					if (entry) this.#processData(clients, entry, data)
 				},
 				open: (socket) => {
 					console.info('connection open')
-					const firstSocket = this.#sockets.length === 0
-					this.#sockets.push(socket)
-					this.options.handler.connect?.(this)
-
-					if (firstSocket) {
-						this.#coordinates[0] = this.options.handler.rightAscension(this)
-						this.#coordinates[1] = this.options.handler.declination(this)
-					}
+					const { handler } = this.options
+					const entry = clients.add(socket, { command: '', coordinates: [handler.rightAscension(this), handler.declination(this)], utc: [2025, 1, 1, 0, 0, 0, 0], utcOffset: 0, utcStep: 0 })
+					handler.connect?.(this)
+					handler.clientOpen?.(this, entry.client)
 				},
 				close: (socket) => {
 					console.warn('connection closed')
-					const index = this.#sockets.indexOf(socket)
-					if (index >= 0) this.#sockets.splice(index, 1)
-					this.#commands.delete(socket)
-					if (this.#sockets.length === 0) this.options.handler.disconnect?.(this)
+					this.#closed(clients, socket)
 				},
 				error: (_, error) => {
 					console.error('socket error:', error)
@@ -120,53 +144,100 @@ export class Lx200ProtocolServer {
 			},
 		})
 
+		this.#clients = clients
+
 		return true
 	}
 
-	// Stops the listener and drops all client/command state.
+	// Stops the listener and closes every client, reporting each one closed and then the last disconnect.
+	// Idempotent.
 	stop() {
+		const clients = this.#clients
+		this.#clients = new ProtocolClients()
 		this.#server?.stop(true)
 		this.#server = undefined
-		this.#sockets.length = 0
-		this.#commands.clear()
+		for (const entry of Array.from(clients.values())) this.#drop(clients, entry)
 	}
 
-	// Accumulates received bytes into '#'-framed commands per socket, accepting both ':CMD#' and
-	// '#:CMD#' forms, answering bare ACK requests immediately, and dispatching each complete command.
-	#processData(socket: Socket<unknown>, data: Buffer) {
-		let command = this.#commands.get(socket) ?? ''
+	// Connected clients of the current run, in connection order.
+	clients(): readonly ProtocolClient[] {
+		return this.#clients.list()
+	}
+
+	// Closes the connection of one client, leaving the listener and the other clients untouched. The client is
+	// reported closed before this returns. Returns false when no such client is connected.
+	disconnectClient(id: string) {
+		const entry = this.#clients.find(id)
+		if (!entry) return false
+		this.#drop(this.#clients, entry)
+		return true
+	}
+
+	// Handles a socket closed by its peer or by the network.
+	#closed(clients: ProtocolClients<Lx200ClientState>, socket: Socket<unknown>) {
+		const entry = clients.delete(socket)
+		if (entry) this.#notifyClosed(clients, entry.client)
+	}
+
+	// Removes a client, reports it closed, and ends its socket. The close callback that follows finds nothing to
+	// remove, so the client is reported once.
+	#drop(clients: ProtocolClients<Lx200ClientState>, entry: ProtocolClientEntry<Lx200ClientState>) {
+		if (clients.delete(entry.socket) === undefined) return
+		this.#notifyClosed(clients, entry.client)
+		entry.socket.end()
+	}
+
+	// Reports one client closed, and the disconnection of the last one.
+	#notifyClosed(clients: ProtocolClients<Lx200ClientState>, client: ProtocolClient) {
+		this.options.handler.clientClose?.(this, client)
+		if (clients.size === 0) this.options.handler.disconnect?.(this)
+	}
+
+	// Accumulates received bytes into '#'-framed commands per client, accepting both ':CMD#' and
+	// '#:CMD#' forms, answering bare ACK requests immediately, and dispatching each complete command in the
+	// order received. A command longer than LX200_MAX_COMMAND_LENGTH closes its client.
+	#processData(clients: ProtocolClients<Lx200ClientState>, entry: ProtocolClientEntry<Lx200ClientState>, data: Buffer) {
+		const { socket, state } = entry
 
 		for (const char of data.toString('ascii')) {
+			// A command may have closed the client, such as one whose handler disconnected it.
+			if (clients.get(socket) !== entry) return
+
 			if (char === ACK_REQUEST) {
-				if (command === '#') command = ''
+				if (state.command === '#') state.command = ''
 				this.#ack(socket)
 				continue
 			}
 
-			if (command.length === 0) {
-				if (char === ':' || char === '#') command = char
+			if (state.command.length === 0) {
+				if (char === ':' || char === '#') state.command = char
 				continue
 			}
 
 			if (char === '#') {
-				if (command !== '#') this.#processCommand(socket, `${command}#`)
-				command = ''
+				const command = state.command
+				state.command = ''
+				if (command !== '#') this.#processCommand(entry, `${command}#`)
 				continue
 			}
 
-			command += char
-		}
+			if (state.command.length >= LX200_MAX_COMMAND_LENGTH) {
+				console.warn('command too long, closing connection')
+				this.#drop(clients, entry)
+				return
+			}
 
-		if (command.length === 0) this.#commands.delete(socket)
-		else this.#commands.set(socket, command)
+			state.command += char
+		}
 	}
 
 	// Decodes one complete LX200 command and writes its response. Get* commands read via the handler;
-	// Set* commands stage target/site/time values; motion/slew commands invoke the handler actions. The
-	// per-case comments name each command.
-	#processCommand(socket: Socket<unknown>, rawCommand: string) {
-		// console.debug('command received', command)
+	// Set* commands stage target/site/time values of the client; motion/slew commands invoke the handler
+	// actions. The per-case comments name each command.
+	#processCommand(entry: ProtocolClientEntry<Lx200ClientState>, rawCommand: string) {
+		const { socket, state, client } = entry
 		const command = rawCommand.startsWith('#') ? rawCommand.slice(1) : rawCommand
+		const { handler, readOnlySite } = this.options
 
 		switch (command) {
 			// Get Telescope Product Name
@@ -209,14 +280,17 @@ export class Lx200ProtocolServer {
 			case ':D#':
 				return this.#slewing(socket)
 			// Synchronizes the telescope's position with the currently selected database object's coordinates
-			case ':CM#':
-				this.options.handler.sync?.(this, ...this.#coordinates)
-				return this.#text(socket, '#')
+			// Replies '#' when synced, or a failure message when there is no sync handler or it refuses.
+			case ':CM#': {
+				const [rightAscension, declination] = state.coordinates
+				if (handler.sync !== undefined && handler.sync(this, rightAscension, declination, client) !== false) return this.#text(socket, '#')
+				return this.#text(socket, 'Sync failed#')
+			}
 			// Slew to Target Object
 			// Replies 0 when the slew starts, or 1 plus a message when there is no goto handler or it refuses.
 			case ':MS#': {
-				const goto = this.options.handler.goto
-				if (goto !== undefined && goto(this, ...this.#coordinates) !== false) return this.#zero(socket)
+				const [rightAscension, declination] = state.coordinates
+				if (handler.goto !== undefined && handler.goto(this, rightAscension, declination, client) !== false) return this.#zero(socket)
 				return this.#text(socket, '1Slew not possible#')
 			}
 			// Move/Halt Telescope
@@ -228,46 +302,50 @@ export class Lx200ProtocolServer {
 			case ':Qn#':
 			case ':Qs#':
 			case ':Qw#':
-				this.options.handler.move?.(this, command[2] === 'n' ? 'NORTH' : command[2] === 's' ? 'SOUTH' : command[2] === 'e' ? 'EAST' : 'WEST', command[1] === 'M')
+				handler.move?.(this, command[2] === 'n' ? 'NORTH' : command[2] === 's' ? 'SOUTH' : command[2] === 'e' ? 'EAST' : 'WEST', command[1] === 'M', client)
 				return
 			// Halt all current slewing
 			case ':Q#':
-				this.options.handler.abort?.(this)
+				handler.abort?.(this, client)
 				return
 			// Slew Rate Commands (Centering, Guiding, Finding, Max)
 			case ':RC#':
 			case ':RG#':
 			case ':RM#':
 			case ':RS#':
-				this.options.handler.slewRate(this, command[2] === 'C' ? 'CENTER' : command[2] === 'G' ? 'GUIDE' : command[2] === 'M' ? 'FIND' : 'MAX')
+				handler.slewRate(this, command[2] === 'C' ? 'CENTER' : command[2] === 'G' ? 'GUIDE' : command[2] === 'M' ? 'FIND' : 'MAX', client)
 				return
 			default:
 				// Set target object RA
 				if (command.startsWith(':Sr')) {
 					const ra = parseAngle(command.slice(3, command.length - 1), true)
 					if (ra === undefined) return this.#zero(socket)
-					this.#coordinates[0] = ra
+					state.coordinates[0] = ra
 					return this.#one(socket)
 				}
 				// Set target object declination
 				else if (command.startsWith(':Sd')) {
 					const dec = parseAngle(command.slice(3, command.length - 1))
 					if (dec === undefined) return this.#zero(socket)
-					this.#coordinates[1] = dec
+					state.coordinates[1] = dec
 					return this.#one(socket)
+				}
+				// Site and clock setters, refused as a whole when the site is read-only
+				else if (readOnlySite && (command.startsWith(':Sg') || command.startsWith(':St') || command.startsWith(':SG') || command.startsWith(':SL') || command.startsWith(':SC'))) {
+					return this.#zero(socket)
 				}
 				// Set current site’s longitude
 				else if (command.startsWith(':Sg')) {
 					const longitude = parseAngle(command.slice(3, command.length - 1))
 					if (longitude === undefined) return this.#zero(socket)
-					this.options.handler.longitude(this, -longitude)
+					handler.longitude(this, -longitude)
 					return this.#one(socket)
 				}
 				// Sets the current site latitude
 				else if (command.startsWith(':St')) {
 					const latitude = parseAngle(command.slice(3, command.length - 1))
 					if (latitude === undefined) return this.#zero(socket)
-					this.options.handler.latitude(this, latitude)
+					handler.latitude(this, latitude)
 					return this.#one(socket)
 				}
 				// Set the number of hours added to local time to yield UTC
@@ -275,8 +353,8 @@ export class Lx200ProtocolServer {
 					const value = command.slice(3, command.length - 1)
 					const hours = Number(value)
 					if (value.length === 0 || !Number.isFinite(hours)) return this.#zero(socket)
-					this.#utcOffset = Math.trunc(-hours * 60)
-					this.#handleDateTimeAndOffset()
+					state.utcOffset = Math.trunc(-hours * 60)
+					this.#handleDateTimeAndOffset(state)
 					return this.#one(socket)
 				}
 				// Set the local Time
@@ -285,10 +363,10 @@ export class Lx200ProtocolServer {
 					if (values.length !== 3 || values.some((value) => value.length === 0)) return this.#zero(socket)
 					const [h, m, s] = values.map(Number)
 					if (!Number.isInteger(h) || !Number.isInteger(m) || !Number.isInteger(s) || !(h >= 0 && h <= 23) || !(m >= 0 && m <= 59) || !(s >= 0 && s <= 59)) return this.#zero(socket)
-					this.#utc[3] = h
-					this.#utc[4] = m
-					this.#utc[5] = s
-					this.#handleDateTimeAndOffset()
+					state.utc[3] = h
+					state.utc[4] = m
+					state.utc[5] = s
+					this.#handleDateTimeAndOffset(state)
 					return this.#one(socket)
 				}
 				// Change Handbox Date to MM/DD/YY
@@ -297,10 +375,10 @@ export class Lx200ProtocolServer {
 					if (values.length !== 3 || values.some((value) => value.length === 0)) return this.#zero(socket)
 					const [m, d, y] = values.map(Number)
 					if (!Number.isInteger(m) || !Number.isInteger(d) || !Number.isInteger(y) || !(m >= 1 && m <= 12) || !(y >= 0 && y <= 99) || !(d >= 1 && d <= daysInMonth(2000 + y, m))) return this.#zero(socket)
-					this.#utc[0] = 2000 + y
-					this.#utc[1] = m
-					this.#utc[2] = d
-					this.#handleDateTimeAndOffset()
+					state.utc[0] = 2000 + y
+					state.utc[1] = m
+					state.utc[2] = d
+					this.#handleDateTimeAndOffset(state)
 					return this.#text(socket, '1Updating planetary data       #                              #')
 				}
 
@@ -330,13 +408,13 @@ export class Lx200ProtocolServer {
 	}
 
 	// Commits the staged date/time to the handler once all three of the date/time/offset set-commands have
-	// arrived (LX200 sends them separately), converting local time + offset to UTC.
-	#handleDateTimeAndOffset() {
-		this.#utcStep++
+	// arrived from the same client (LX200 sends them separately), converting local time + offset to UTC.
+	#handleDateTimeAndOffset(state: Lx200ClientState) {
+		state.utcStep++
 
-		if (this.#utcStep >= 3) {
-			this.#utcStep = 0
-			this.options.handler.dateTime(this, [temporalAdd(temporalFromDate(...this.#utc), -this.#utcOffset, 'm'), this.#utcOffset])
+		if (state.utcStep >= 3) {
+			state.utcStep = 0
+			this.options.handler.dateTime(this, [temporalAdd(temporalFromDate(...state.utc), -state.utcOffset, 'm'), state.utcOffset])
 		}
 	}
 
