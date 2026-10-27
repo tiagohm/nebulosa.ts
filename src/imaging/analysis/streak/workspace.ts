@@ -130,7 +130,8 @@ export interface StreakDetectionWorkspace {
 	readonly longitudinalOffset: Float64Array
 	// Bounded fit weight at each longitudinal position.
 	readonly longitudinalWeight: Float64Array
-	// Capped positive-signal first normal moment for each longitudinal bin.
+	// Capped positive-signal first normal moment for each longitudinal bin. The final support scan reuses it for the axis
+	// contrast of each sample, in local noise sigmas.
 	readonly longitudinalNormalFirst: Float64Array
 	// Capped positive-signal second normal moment for each longitudinal bin.
 	readonly longitudinalNormalSecond: Float64Array

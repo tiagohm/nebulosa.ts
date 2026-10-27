@@ -207,6 +207,50 @@ test('finds a streak among crowded stars, whose edges would otherwise outvote it
 	expect(detectStreaks(frame, { minCoherence: 0 }).filter(alongStreak)).toEqual([])
 })
 
+test('recovers a faint first quarter of a trail below the robust profile floor', () => {
+	const frame = image(240, 160)
+	addGaussianNoise(frame, 0.004, 0x51ed270b)
+	renderSyntheticStreak(frame, {
+		start: { x: 20, y: 80 },
+		end: { x: 220, y: 80 },
+		width: 2.5,
+		intensity: 0.3,
+		profile: {
+			type: 'segments',
+			intervals: [
+				{ start: 0, end: 0.25, intensity: 0.06 },
+				{ start: 0.25, end: 1, intensity: 1 },
+			],
+		},
+	})
+	const trail = detectStreaks(frame, { backgroundCellSize: 32 }).find((streak) => Math.abs(streak.start.y - 80) < 2 && Math.abs(streak.end.y - 80) < 2)
+	expect(trail).toBeDefined()
+	expect(Math.abs(trail!.start.x - 20)).toBeLessThan(3)
+	expect(Math.abs(trail!.end.x - 220)).toBeLessThan(3)
+})
+
+test('ends a trail where it ends, not in the crowded field beyond it', () => {
+	for (const [seed, stars] of [
+		[0x2545f491, 300],
+		[0x9e3779b9, 500],
+	]) {
+		const frame = image(240, 160)
+		addGaussianNoise(frame, 0.004, seed)
+		renderSyntheticStreak(frame, { start: { x: 20, y: 80 }, end: { x: 140, y: 80 }, width: 2.5, intensity: 0.15 })
+		let state = seed
+		const next = () => {
+			state ^= state << 13
+			state ^= state >>> 17
+			state ^= state << 5
+			return (state >>> 0) / 0x1_0000_0000
+		}
+		for (let index = 0; index < stars; index++) addStar(frame, 130 + next() * 110, next() * 160, 0.9 + next() * 0.8, 0.03 + next() ** 2 * 0.5)
+		const trail = detectStreaks(frame, { backgroundCellSize: 32 }).find((streak) => Math.abs(streak.start.y - 80) < 4 && streak.start.x < 40)
+		expect(trail).toBeDefined()
+		expect(trail!.end.x).toBeLessThan(150)
+	}
+})
+
 test('reports no streak in crowded star fields without one', () => {
 	for (const seed of [0x2545f491, 0x1234567, 0x9e3779b9, 0x7f4a7c15, 0x51ed270b]) {
 		const frame = image(320, 240)

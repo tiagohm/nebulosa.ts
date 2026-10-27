@@ -60,6 +60,20 @@ const MERGE_GAP_ALLOWANCE = 2 * TIP_LENGTH
 // raise a bin that high.
 const STREAK_SECONDARY_PEAK_RATIO = 0.5
 
+// Samples of the window whose axis contrast decides whether the run grows over one more sample of a faint tip.
+const FAINT_TIP_WINDOW = 8
+
+// Quantile of the axis contrast of the window that must reach thresholdSigma for a faint tip to grow: three quarters
+// of the samples must stand out, which the faint continuation of a trail does and a star on the axis, raising a few
+// samples, does not.
+const FAINT_TIP_QUANTILE = 0.25
+
+// Distance, in plane pixels, from the axis of the transverse pixels that make the axis level of the contrast.
+const CONTRAST_AXIS_HALF_WIDTH = 1
+
+// Smallest distance, in plane pixels, from the axis of the flank pixels of the contrast, out to the corridor edge.
+const CONTRAST_FLANK_DISTANCE = 3
+
 // Longitudinal sample without support.
 const SAMPLE_UNSUPPORTED = 0
 
@@ -150,6 +164,12 @@ interface FinalStreakSupport {
 	readonly coverage: number
 	// Whether the selected run reaches either plane/ROI boundary.
 	readonly clippedAtBorder: boolean
+	// First point of the seed run on the final axis, trimmed to axis contrast, in plane pixels.
+	readonly seedStart: Readonly<Point>
+	// Last point of the seed run on the final axis, trimmed to axis contrast, in plane pixels.
+	readonly seedEnd: Readonly<Point>
+	// Whether the trimmed seed run reaches either plane/ROI boundary.
+	readonly seedClippedAtBorder: boolean
 }
 
 // Detects, measures, and deterministically ranks straight luminous streaks without physical classification.
@@ -450,6 +470,8 @@ function refineStreakCandidate(prepared: PreparedStreakImage, candidate: StreakH
 
 // Robustly fits and measures one supported run from a single Hough hypothesis. When recentered is given and the run
 // holds its trail at the corridor edge, the fitted line is appended to it instead, to be scanned again as a seed.
+// The endpoints and coverage are those of the final support scan along the fitted axis, or the trimmed endpoints and
+// the coverage of the seed run when that is longer, as across a gap or a stretch below the robust profile floor.
 function finishStreakRun(
 	prepared: PreparedStreakImage,
 	candidate: StreakHoughCandidate,
@@ -530,13 +552,17 @@ function finishStreakRun(
 	let planeEnd = { x: Math.max(0, Math.min(grid.width - 1, fit.center.x + maximum * vectors.tangent.x)), y: Math.max(0, Math.min(grid.height - 1, fit.center.y + maximum * vectors.tangent.y)) }
 	let coverage = supported / (last - first + 1)
 	let clippedAtBorder = first === 0 || last === sampleCount - 1
-	const finalSupport = scanFinalStreakSupport(prepared, fit, options, budget)
+	const finalSupport = scanFinalStreakSupport(prepared, fit, options, budget, planeStart, planeEnd)
 
-	if (finalSupport && Math.hypot(finalSupport.end.x - finalSupport.start.x, finalSupport.end.y - finalSupport.start.y) >= Math.hypot(planeEnd.x - planeStart.x, planeEnd.y - planeStart.y)) {
+	if (finalSupport && Math.hypot(finalSupport.end.x - finalSupport.start.x, finalSupport.end.y - finalSupport.start.y) >= Math.hypot(finalSupport.seedEnd.x - finalSupport.seedStart.x, finalSupport.seedEnd.y - finalSupport.seedStart.y)) {
 		planeStart = { x: finalSupport.start.x, y: finalSupport.start.y }
 		planeEnd = { x: finalSupport.end.x, y: finalSupport.end.y }
 		coverage = finalSupport.coverage
 		clippedAtBorder = finalSupport.clippedAtBorder
+	} else if (finalSupport) {
+		planeStart = { x: finalSupport.seedStart.x, y: finalSupport.seedStart.y }
+		planeEnd = { x: finalSupport.seedEnd.x, y: finalSupport.seedEnd.y }
+		clippedAtBorder = finalSupport.seedClippedAtBorder
 	}
 
 	const photometry = measureStreakPhotometry(prepared, planeStart, planeEnd, fit.angle, options.maxWidth / grid.step, options.thresholdSigma, budget)
@@ -585,8 +611,14 @@ function finishStreakRun(
 	})
 }
 
-// Rescans the final TLS axis and returns the supported run containing its fitted center.
-function scanFinalStreakSupport(prepared: PreparedStreakImage, fit: WeightedLineFit, options: ResolvedStreakDetectionOptions, budget: StreakWorkBudget): FinalStreakSupport | undefined {
+// Rescans the final TLS axis and returns the supported run containing its fitted center, bridging unsupported gaps of
+// mergeGap. The run then grows over the ends a compact-source mask covers (TIP_LENGTH), and over faint tips whose axis
+// still stands out of its flanks: the FAINT_TIP_QUANTILE of the axis contrast of the FAINT_TIP_WINDOW samples around
+// the next sample, in local noise sigmas, must reach thresholdSigma. A faint end of a trail that the support threshold
+// or the robust profile floor leaves out is so recovered, while scattered stars beyond the end are not. The seed run
+// from seedStart to seedEnd (plane pixels) is also returned, projected on the axis and trimmed at each end to where the
+// samples inside it show that contrast.
+function scanFinalStreakSupport(prepared: PreparedStreakImage, fit: WeightedLineFit, options: ResolvedStreakDetectionOptions, budget: StreakWorkBudget, seedStart: Readonly<Point>, seedEnd: Readonly<Point>): FinalStreakSupport | undefined {
 	const { workspace, grid } = prepared
 
 	const clipped = clipStreakLineToArea(fit.angle, fit.rho, { left: 0, top: 0, right: grid.width, bottom: grid.height })
@@ -617,6 +649,10 @@ function scanFinalStreakSupport(prepared: PreparedStreakImage, fit: WeightedLine
 		let valid = 0
 		let tipFlux = 0
 		let tipValid = 0
+		let axisFlux = 0
+		let axisCount = 0
+		let flankFlux = 0
+		let flankCount = 0
 
 		for (let offset = -halfWidth; offset <= halfWidth; offset++) {
 			const x = Math.round(baseX + normalX * offset)
@@ -628,6 +664,16 @@ function scanFinalStreakSupport(prepared: PreparedStreakImage, fit: WeightedLine
 
 			tipValid++
 			tipFlux += workspace.signal[index]
+			const distance = Math.abs(offset)
+
+			if (distance <= CONTRAST_AXIS_HALF_WIDTH) {
+				axisFlux += workspace.signal[index]
+				axisCount++
+			} else if (distance >= CONTRAST_FLANK_DISTANCE) {
+				flankFlux += workspace.signal[index]
+				flankCount++
+			}
+
 			if (workspace.mask[index] & STREAK_MASK_COMPACT) continue
 
 			valid++
@@ -640,6 +686,9 @@ function scanFinalStreakSupport(prepared: PreparedStreakImage, fit: WeightedLine
 		// Flux and valid count with compact samples, for growing the selected run over the tips of the trail.
 		workspace.longitudinalOffset[sample] = tipFlux
 		workspace.longitudinalPositionFirst[sample] = tipValid
+		// Axis contrast, compact samples included: mean axis signal minus mean flank signal, in local noise sigmas.
+		const noiseScale = streakLocalNoise(prepared, baseX, baseY) || numericalFloor
+		workspace.longitudinalNormalFirst[sample] = axisCount > 0 && flankCount > 0 ? (axisFlux / axisCount - flankFlux / flankCount) / (noiseScale * Math.sqrt(1 / axisCount + 1 / flankCount)) : Number.NEGATIVE_INFINITY
 		workspace.longitudinalSupported[sample] = SAMPLE_UNSUPPORTED
 		if (flux > 0) workspace.statistics.push(flux)
 	}
@@ -719,21 +768,60 @@ function scanFinalStreakSupport(prepared: PreparedStreakImage, fit: WeightedLine
 		return workspace.longitudinalOffset[sample] > (noise > 0 ? options.thresholdSigma * noise * Math.sqrt(tipValid) : numericalFloor * Math.sqrt(tipValid))
 	}
 
-	for (let grown = 0; grown < TIP_LENGTH && selectedFirst > 0 && tipSupported(selectedFirst - 1); grown++) {
-		selectedFirst--
-		selectedSupported++
+	for (let grown = 0; grown < TIP_LENGTH && selectedFirst > 0 && tipSupported(selectedFirst - 1); grown++) workspace.longitudinalSupported[--selectedFirst] = SAMPLE_SUPPORTED
+	for (let grown = 0; grown < TIP_LENGTH && selectedLast + 1 < sampleCount && tipSupported(selectedLast + 1); grown++) workspace.longitudinalSupported[++selectedLast] = SAMPLE_SUPPORTED
+
+	// Quantile of the axis contrast of FAINT_TIP_WINDOW samples from a sample: from sample - 3 to sample + 4 in the
+	// outward direction, or the window just inside it (from sample - 7 to sample) when inner is true; NaN without enough
+	// samples.
+	const contrastWindow = workspace.scratch.subarray(0, Math.min(FAINT_TIP_WINDOW, workspace.scratch.length))
+	const contrastQuantile = (sample: number, outward: 1 | -1, inner: boolean, quantile: number) => {
+		let count = 0
+		const from = inner ? 1 - FAINT_TIP_WINDOW : 1 - (FAINT_TIP_WINDOW >> 1)
+		for (let k = from; k < from + FAINT_TIP_WINDOW && count < contrastWindow.length; k++) {
+			const index = sample + outward * k
+			if (index >= 0 && index < sampleCount) contrastWindow[count++] = workspace.longitudinalNormalFirst[index]
+		}
+		if (count < FAINT_TIP_WINDOW >> 1) return Number.NaN
+		const sorted = contrastWindow.subarray(0, count).sort()
+		return sorted[Math.round(quantile * (count - 1))]
 	}
 
-	for (let grown = 0; grown < TIP_LENGTH && selectedLast + 1 < sampleCount && tipSupported(selectedLast + 1); grown++) {
-		selectedLast++
-		selectedSupported++
+	// Grows one end over the contiguous samples whose window quantile reaches the contrast threshold, then moves the
+	// grown end back to where the contrast falls to half of the level just inside it, and returns it. No gap is bridged:
+	// a trail continuing beyond a gap is the seed run's to reach. A faint tip only moves the end: its samples are not
+	// support.
+	const growFaintTip = (end: number, outward: 1 | -1) => {
+		let grown = end
+		while (grown + outward >= 0 && grown + outward < sampleCount && contrastQuantile(grown + outward, outward, false, FAINT_TIP_QUANTILE) >= options.thresholdSigma) grown += outward
+		if (grown === end) return end
+		const halfLevel = contrastQuantile(grown, outward, true, 0.5) * 0.5
+		while (grown !== end && !(workspace.longitudinalNormalFirst[grown] >= halfLevel)) grown -= outward
+		return grown
 	}
+
+	selectedFirst = growFaintTip(selectedFirst, -1)
+	selectedLast = growFaintTip(selectedLast, 1)
+	// Coverage over the reported range, whose grown faint tips hold no support.
+	selectedSupported = 0
+	for (let sample = selectedFirst; sample <= selectedLast; sample++) if (workspace.longitudinalSupported[sample] === SAMPLE_SUPPORTED) selectedSupported++
+
+	// The seed run, projected on this axis, with each end moved inward until the samples just inside it show axis
+	// contrast, which trims a seed run that ran on through scattered sources.
+	const seedSample = (point: Readonly<Point>) => Math.max(0, Math.min(sampleCount - 1, Math.round(((point.x - clipped[0].x) * tangentX + (point.y - clipped[0].y) * tangentY) / sampleStep)))
+	let [seedFirst, seedLast] = [seedSample(seedStart), seedSample(seedEnd)].sort((a, b) => a - b)
+	while (seedFirst < seedLast && !(contrastQuantile(seedFirst, -1, true, FAINT_TIP_QUANTILE) >= options.thresholdSigma)) seedFirst++
+	while (seedLast > seedFirst && !(contrastQuantile(seedLast, 1, true, FAINT_TIP_QUANTILE) >= options.thresholdSigma)) seedLast--
+	const point = (sample: number) => ({ x: clipped[0].x + tangentX * sample * sampleStep, y: clipped[0].y + tangentY * sample * sampleStep })
 
 	return {
-		start: { x: clipped[0].x + tangentX * selectedFirst * sampleStep, y: clipped[0].y + tangentY * selectedFirst * sampleStep },
-		end: { x: clipped[0].x + tangentX * selectedLast * sampleStep, y: clipped[0].y + tangentY * selectedLast * sampleStep },
+		start: point(selectedFirst),
+		end: point(selectedLast),
 		coverage: selectedSupported / (selectedLast - selectedFirst + 1),
 		clippedAtBorder: selectedFirst === 0 || selectedLast === sampleCount - 1,
+		seedStart: point(seedFirst),
+		seedEnd: point(seedLast),
+		seedClippedAtBorder: seedFirst === 0 || seedLast === sampleCount - 1,
 	}
 }
 
