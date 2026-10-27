@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import { TAU } from '../../../../src/core/constants'
-import { preprocessStreakImage, STREAK_MASK_INVALID, STREAK_MASK_SATURATED, streakLocalNoise, streakLocalNoiseAtPixel } from '../../../../src/imaging/analysis/streak/preprocess'
+import { markStreakCompactSources, preprocessStreakImage, STREAK_MASK_COMPACT, STREAK_MASK_INVALID, STREAK_MASK_SATURATED, streakLocalNoise, streakLocalNoiseAtPixel } from '../../../../src/imaging/analysis/streak/preprocess'
 import { createStreakDetectionWorkspace } from '../../../../src/imaging/analysis/streak/workspace'
 import type { Image } from '../../../../src/imaging/model/types'
 
@@ -58,6 +58,37 @@ test('reuses fixed workspace buffers and rejects insufficient capacity', () => {
 	const signal = workspace.signal
 	expect(preprocessStreakImage(image(raw, 16, 16), { backgroundCellSize: 8 }, workspace).workspace.signal).toBe(signal)
 	expect(() => preprocessStreakImage(image(raw, 16, 16), { maxCandidates: workspace.maximumCandidates + 1 }, workspace)).toThrow(RangeError)
+})
+
+test('marks stars as compact sources but not the body of bright or faint trails', () => {
+	const width = 96
+	const height = 64
+	const raw = new Float32Array(width * height).fill(0.1)
+	addGaussianNoise(raw, () => 0.002, width)
+	for (let y = 0; y < height; y++) {
+		for (let x = 0; x < width; x++) {
+			raw[y * width + x] += 0.4 * Math.exp(-((x - 20) ** 2 + (y - 20) ** 2) / (2 * 1.2 * 1.2))
+			if (x >= 40 && x <= 90) raw[y * width + x] += 0.3 * Math.exp(-((y - 16) ** 2) / (2 * 1.2 * 1.2)) + 0.008 * Math.exp(-((y - 48) ** 2) / (2 * 1.2 * 1.2))
+		}
+	}
+	const prepared = preprocessStreakImage(image(raw, width, height), { backgroundCellSize: 16 })
+	expect(markStreakCompactSources(prepared, 2.5, 0)).toBe(0)
+	expect(prepared.workspace.mask.every((mask) => (mask & STREAK_MASK_COMPACT) === 0)).toBeTrue()
+	expect(markStreakCompactSources(prepared, 2.5, 0.2)).toBeGreaterThan(0)
+	const compact = (x: number, y: number) => (prepared.workspace.mask[y * width + x] & STREAK_MASK_COMPACT) !== 0
+	// The star, with its faint wing one pixel beyond the significant core.
+	for (const [x, y] of [
+		[20, 20],
+		[19, 20],
+		[21, 21],
+		[20, 23],
+	] as const)
+		expect(compact(x, y)).toBeTrue()
+	// The body of the bright trail and of a trail about four noise sigmas bright.
+	for (let x = 50; x <= 80; x++) {
+		expect(compact(x, 16)).toBeFalse()
+		expect(compact(x, 48)).toBeFalse()
+	}
 })
 
 test('estimates residual Gaussian noise locally after removing a smooth gradient', () => {

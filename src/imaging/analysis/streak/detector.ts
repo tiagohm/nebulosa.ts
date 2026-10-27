@@ -4,9 +4,9 @@ import type { Point } from '../../../math/numerical/geometry'
 import type { Image } from '../../model/types'
 import { areStreakSegmentsMergeCompatible, canonicalizeStreakEndpoints, clipStreakLineToArea, normalizeStreakAngle, streakAxialAngleDistance, streakLineVectors, streakPlanePointToImage, streakSegmentProjectionRelation, type WeightedLineFit } from './geometry'
 import { collectStreakEdges, detectStreakHoughCandidates, MAX_STREAK_LOCAL_ANGLE_VOTES, type StreakHoughCandidate } from './hough'
-import { preprocessStreakImage, type PreparedStreakImage, STREAK_MASK_INVALID, STREAK_MASK_SATURATED, streakLocalNoise } from './preprocess'
+import { markStreakCompactSources, preprocessStreakImage, type PreparedStreakImage, STREAK_MASK_COMPACT, STREAK_MASK_INVALID, STREAK_MASK_SATURATED, streakLocalNoise } from './preprocess'
 import { DEFAULT_STREAK_DETECTION_OPTIONS, type Streak, type StreakDetectionOptions } from './types'
-import type { StreakDetectionWorkspace } from './workspace'
+import { STREAK_COHERENCE_RADIUS, STREAK_COMPACT_DILATION, type StreakDetectionWorkspace } from './workspace'
 
 // End-to-end deterministic detector for approximately straight luminous structures. Processing stays
 // on one native image plane; all public geometry is converted back to received-image pixel units.
@@ -17,20 +17,59 @@ const MAXIMUM_STREAK_WIDTH = 256
 // Largest public refinement-candidate count accepted by the v1 detector.
 const MAXIMUM_STREAK_CANDIDATES = 512
 
-// Maximum candidate/longitudinal/transverse sample combinations processed per detection call.
+// Maximum candidate/longitudinal/transverse sample combinations processed per detection call. Reaching it, or the run
+// and refit limits below, stops the refinement and keeps what was measured so far (state.refinementTruncated).
 const MAXIMUM_STREAK_REFINEMENT_WORK = 100_000_000
 
 // Maximum supported runs admitted to final support and photometric measurement.
 const MAXIMUM_STREAK_SUPPORTED_RUNS = MAXIMUM_STREAK_CANDIDATES
 
+// Times a seed may be replaced by the line fitted to its run and scanned again. A seed a few angle steps off a short
+// trail holds it at the edge of its corridor, where the centroids clamp and the fit corrects only part of the error;
+// one or two rescans centred on the fitted line converge, so such seeds yield the geometry of the trail.
+const MAXIMUM_SEED_RECENTERINGS = 2
+
+// Smallest fraction of the supported samples of a run whose centroid lies within one pixel of the corridor edge for its
+// seed to be recentred: only such clamped runs are recentred, so a fit pulled by a nearby crossing trail is not
+// iterated toward it.
+const SEED_RECENTERING_EDGE_FRACTION = 0.25
+
+// Length ratio above which the longer of two duplicates is kept whatever their confidences.
+const DUPLICATE_LENGTH_RATIO = 1.1
+
 // Maximum compatible detection pairs admitted to a full pipeline refit.
 const MAXIMUM_STREAK_MERGE_REFITS = MAXIMUM_STREAK_CANDIDATES
 
+// Mask bits of the samples left out of support, width, and photometry: invalid samples and compact sources.
+const EXCLUDED = STREAK_MASK_INVALID | STREAK_MASK_COMPACT
+
+// Length, in plane pixels, of the end of a trail the compact-source mask may cover: the end of a line looks as
+// isotropic as a star to the coherence window. Final support and photometry count compact samples within it of either
+// end, so the endpoints and the flux of a trail are not shortened.
+const TIP_LENGTH = STREAK_COHERENCE_RADIUS + STREAK_COMPACT_DILATION
+
+// Extra gap, in plane pixels, the seed scan of a merge refit may bridge between two compatible fragments: a compact
+// source lying on the trail removes its flux over the source and its masked tips on both sides, so the gap the scan
+// sees exceeds the one between the measured fragments by up to twice TIP_LENGTH. Other seeds get no allowance, so
+// chains of stars are not bridged.
+const MERGE_GAP_ALLOWANCE = 2 * TIP_LENGTH
+
+// Longitudinal sample without support.
+const SAMPLE_UNSUPPORTED = 0
+
+// Longitudinal sample whose corridor flux supports a streak.
+const SAMPLE_SUPPORTED = 1
+
 // Per-call accounting shared by initial hypotheses, supported runs, and merge refits.
 interface StreakWorkBudget {
+	// Corridor sample visits charged so far.
 	work: number
+	// Runs admitted to final support and photometry so far.
 	supportedRuns: number
+	// Merge refits admitted so far.
 	mergeRefits: number
+	// Whether a limit was reached; nothing more is admitted afterwards.
+	exhausted: boolean
 }
 
 // Fully resolved options used by every pipeline stage.
@@ -63,6 +102,8 @@ interface ResolvedStreakDetectionOptions {
 	readonly mergeAngleTolerance: number
 	// Maximum perpendicular line separation for global fragment merging, in received-image pixels.
 	readonly mergeDistance: number
+	// Smallest structure-tensor coherence of a significant sample that is not a compact source, in [0, 1].
+	readonly minCoherence: number
 	// Whether ROI-truncated results are retained.
 	readonly allowBorderClipping: boolean
 }
@@ -107,6 +148,7 @@ interface FinalStreakSupport {
 export function detectStreaks(image: Image, options: Readonly<StreakDetectionOptions> = {}, workspace?: StreakDetectionWorkspace): readonly Streak[] {
 	const resolved = resolveStreakOptions(options)
 	const prepared = preprocessStreakImage(image, options, workspace)
+	markStreakCompactSources(prepared, resolved.thresholdSigma, resolved.minCoherence)
 	const edges = collectStreakEdges(prepared, resolved)
 
 	if (edges.count === 0) return []
@@ -119,15 +161,18 @@ export function detectStreaks(image: Image, options: Readonly<StreakDetectionOpt
 	})
 	const maximumHalfWidth = operationalStreakHalfWidth(prepared, resolved.maxWidth / prepared.grid.step)
 	const maximumScanWork = (Math.ceil(Math.hypot(prepared.grid.width, prepared.grid.height)) + 1) * (2 * maximumHalfWidth + 1)
-	let initialScanWork = 0
-	for (let index = 0; index < candidates.length; index++) initialScanWork += estimateInitialCandidateScanWork(prepared, candidates[index], maximumHalfWidth)
-	// Every admitted candidate is scanned once initially and may require one full final-axis scan.
-	// Reject an unsafe option/candidate combination before entering either expensive stage.
-	if (initialScanWork + candidates.length * maximumScanWork > MAXIMUM_STREAK_REFINEMENT_WORK) throw new RangeError('streak refinement exceeds the bounded work budget')
-	const budget: StreakWorkBudget = { work: 0, supportedRuns: 0, mergeRefits: 0 }
+	// Every admitted candidate is scanned once initially and may require one full final-axis scan, so only the strongest
+	// candidates, in score order, whose worst case fits the budget are admitted.
+	let admitted = 0
+	for (let plannedWork = 0; admitted < candidates.length; admitted++) {
+		plannedWork += estimateInitialCandidateScanWork(prepared, candidates[admitted], maximumHalfWidth) + maximumScanWork
+		if (plannedWork > MAXIMUM_STREAK_REFINEMENT_WORK) break
+	}
+	const budget: StreakWorkBudget = { work: 0, supportedRuns: 0, mergeRefits: 0, exhausted: false }
+	prepared.workspace.state.refinementTruncated = admitted < candidates.length
 
 	const detections: Streak[] = []
-	for (let i = 0; i < candidates.length; i++) refineStreakCandidate(prepared, candidates[i], resolved, detections, budget)
+	for (let i = 0; i < admitted && !budget.exhausted; i++) refineStreakCandidate(prepared, candidates[i], resolved, detections, budget)
 	detections.sort(streaksComparator)
 	if (detections.length > resolved.maxCandidates) detections.length = resolved.maxCandidates
 
@@ -155,6 +200,7 @@ function resolveStreakOptions(options: Readonly<StreakDetectionOptions>): Resolv
 		mergeGap: options.mergeGap ?? DEFAULT_STREAK_DETECTION_OPTIONS.mergeGap,
 		mergeAngleTolerance: options.mergeAngleTolerance ?? DEFAULT_STREAK_DETECTION_OPTIONS.mergeAngleTolerance,
 		mergeDistance: options.mergeDistance ?? DEFAULT_STREAK_DETECTION_OPTIONS.mergeDistance,
+		minCoherence: options.minCoherence ?? DEFAULT_STREAK_DETECTION_OPTIONS.minCoherence,
 		allowBorderClipping: options.allowBorderClipping ?? DEFAULT_STREAK_DETECTION_OPTIONS.allowBorderClipping,
 	}
 
@@ -174,6 +220,7 @@ function resolveStreakOptions(options: Readonly<StreakDetectionOptions>): Resolv
 	validateInRange(resolved.mergeGap, 0, 1_000_000)
 	validateInRange(resolved.mergeAngleTolerance, 0, PIOVERTWO)
 	validateInRange(resolved.mergeDistance, 0, 1_000_000)
+	validateInRange(resolved.minCoherence, 0, 1)
 	const actualAngleStep = PI / Math.ceil(PI / resolved.angleStep)
 	const localAngleVotes = 2 * Math.ceil(resolved.orientationTolerance / actualAngleStep) + 1
 	if (localAngleVotes > MAX_STREAK_LOCAL_ANGLE_VOTES) throw new RangeError('streak orientation tolerance exceeds the local Hough voting budget')
@@ -192,7 +239,7 @@ function mergeStreakDetections(prepared: PreparedStreakImage, detections: readon
 		outer: for (let first = 0; first < merged.length - 1; first++) {
 			for (let second = first + 1; second < merged.length; second++) {
 				if (!areStreakSegmentsMergeCompatible(merged[first], merged[second], { angle: options.mergeAngleTolerance, gap: options.mergeGap, distance: options.mergeDistance })) continue
-				chargeMergeRefit(prepared, budget)
+				if (!chargeMergeRefit(prepared, budget)) return merged
 				const refitted = refitMergedStreak(prepared, merged[first], merged[second], options, budget)
 				if (!refitted) continue
 				merged[first] = refitted
@@ -206,7 +253,8 @@ function mergeStreakDetections(prepared: PreparedStreakImage, detections: readon
 	return merged
 }
 
-// Builds a union seed from two image-space detections and returns the best full photometric refit.
+// Builds a union seed from two image-space detections and returns the best full photometric refit that runs along both
+// of them: the union seed line may also cross unrelated structures, whose runs are not a merge of the two fragments.
 function refitMergedStreak(prepared: PreparedStreakImage, first: Streak, second: Streak, options: ResolvedStreakDetectionOptions, budget: StreakWorkBudget): Streak | undefined {
 	const sine = Math.sin(2 * first.angle) + Math.sin(2 * second.angle)
 	const cosine = Math.cos(2 * first.angle) + Math.cos(2 * second.angle)
@@ -217,11 +265,18 @@ function refitMergedStreak(prepared: PreparedStreakImage, first: Streak, second:
 	const planeY = (centerY - prepared.grid.sourceTop) / prepared.grid.step
 	const normal = streakLineVectors(angle).normal
 	const output: Streak[] = []
-	refineStreakCandidate(prepared, { angle, rho: planeX * normal.x + planeY * normal.y, score: Math.max(first.confidence, second.confidence) }, options, output, budget)
+	refineStreakCandidate(prepared, { angle, rho: planeX * normal.x + planeY * normal.y, score: Math.max(first.confidence, second.confidence) }, options, output, budget, 0, MERGE_GAP_ALLOWANCE)
 	if (output.length === 0) return undefined
 	output.sort(streaksComparator)
 	const requiredLength = Math.max(first.length, second.length)
-	return output.find((candidate) => candidate.length >= requiredLength * 0.9)
+	return output.find((candidate) => candidate.length >= requiredLength * 0.9 && coversFragment(candidate, first, options) && coversFragment(candidate, second, options))
+}
+
+// Whether a refitted segment runs along a fragment: their axes agree within the merge angle and most of the fragment
+// lies inside the refitted corridor, widened by the merge distance and half of the wider of the two widths.
+function coversFragment(refitted: Streak, fragment: Streak, options: ResolvedStreakDetectionOptions): boolean {
+	if (streakAxialAngleDistance(refitted.angle, fragment.angle) > Math.max(options.mergeAngleTolerance, options.angleStep)) return false
+	return segmentCorridorOverlap(fragment, refitted, Math.max(options.mergeDistance, Math.max(refitted.width, fragment.width) * 0.5) + 1) >= 0.75
 }
 
 // Removes numerically equivalent corridor hypotheses while preserving resolved parallels and crossings.
@@ -242,7 +297,10 @@ function suppressStreakDuplicates(detections: readonly Streak[], options: Resolv
 			const baseDistanceTolerance = Math.max(planeStep * 0.75, options.distanceStep * planeStep * 1.5)
 			const nearAngleTolerance = Math.max(options.angleStep * 2.5, options.mergeAngleTolerance)
 			const distanceTolerance = angleDistance <= nearAngleTolerance ? Math.max(baseDistanceTolerance, (candidate.width + accepted.width) * 0.75) : Math.max(baseDistanceTolerance, Math.min(candidate.width, accepted.width) * 0.35)
-			if (segmentCorridorOverlap(candidate, accepted, distanceTolerance) < 0.75 || segmentCorridorOverlap(accepted, candidate, distanceTolerance) < 0.75) continue
+			// The shorter segment lying inside the corridor of the longer one is a duplicate, so a fragment of a merged trail is
+			// removed as well as an equivalent copy.
+			const [shorter, longer] = candidate.length <= accepted.length ? [candidate, accepted] : [accepted, candidate]
+			if (segmentCorridorOverlap(shorter, longer, distanceTolerance) < 0.75) continue
 			duplicate = previous
 			break
 		}
@@ -252,13 +310,19 @@ function suppressStreakDuplicates(detections: readonly Streak[], options: Resolv
 			continue
 		}
 
-		const accepted = retained[duplicate]
-		const candidateEvidence = candidate.flux * candidate.linearity * candidate.coverage
-		const acceptedEvidence = accepted.flux * accepted.linearity * accepted.coverage
-		if (candidateEvidence > acceptedEvidence || (candidateEvidence === acceptedEvidence && streaksComparator(candidate, accepted) < 0)) retained[duplicate] = candidate
+		if (preferredDuplicate(candidate, retained[duplicate]) === candidate) retained[duplicate] = candidate
 	}
 
 	return retained
+}
+
+// Returns the duplicate to keep: the clearly longer one (by more than DUPLICATE_LENGTH_RATIO), which is a merged trail
+// rather than one of its fragments, else the one of higher confidence. Flux is not compared, since a copy rotated inside
+// a wide corridor collects the flux of crossing structures and would win with the worse geometry.
+function preferredDuplicate(first: Streak, second: Streak): Streak {
+	if (first.length > second.length * DUPLICATE_LENGTH_RATIO) return first
+	if (second.length > first.length * DUPLICATE_LENGTH_RATIO) return second
+	return streaksComparator(first, second) <= 0 ? first : second
 }
 
 // Estimates how much of one segment lies inside the finite corridor of another.
@@ -285,8 +349,10 @@ function pointSegmentDistance(x: number, y: number, start: Readonly<Point>, end:
 	return Math.hypot(x - start.x - fraction * dx, y - start.y - fraction * dy)
 }
 
-// Converts one infinite Hough seed into one or more supported longitudinal segments.
-function refineStreakCandidate(prepared: PreparedStreakImage, candidate: StreakHoughCandidate, options: ResolvedStreakDetectionOptions, output: Streak[], budget: StreakWorkBudget): void {
+// Converts one infinite Hough seed into one or more supported longitudinal segments. recenterings counts how many times
+// this seed already replaced an earlier one (see MAXIMUM_SEED_RECENTERINGS); gapAllowance widens the unsupported gap
+// a run may bridge, in plane pixels (see MERGE_GAP_ALLOWANCE).
+function refineStreakCandidate(prepared: PreparedStreakImage, candidate: StreakHoughCandidate, options: ResolvedStreakDetectionOptions, output: Streak[], budget: StreakWorkBudget, recenterings: number = 0, gapAllowance: number = 0): void {
 	const { grid, workspace } = prepared
 
 	const clipped = clipStreakLineToArea(candidate.angle, candidate.rho, { left: 0, top: 0, right: grid.width, bottom: grid.height })
@@ -298,7 +364,7 @@ function refineStreakCandidate(prepared: PreparedStreakImage, candidate: StreakH
 	const visibleLength = Math.hypot(dx, dy)
 	if (!(visibleLength > 0)) return
 
-	const sampleCount = Math.min(workspace.longitudinalSignal.length, Math.floor(visibleLength) + 1)
+	const sampleCount = Math.min(workspace.seedSupported.length, Math.floor(visibleLength) + 1)
 	if (sampleCount < 2) return
 
 	const sampleStep = visibleLength / (sampleCount - 1)
@@ -308,7 +374,7 @@ function refineStreakCandidate(prepared: PreparedStreakImage, candidate: StreakH
 	const normalY = tangentX
 	const halfWidth = operationalStreakHalfWidth(prepared, options.maxWidth / grid.step)
 	const numericalFloor = prepared.residualFloor
-	chargeStreakWork(prepared, budget, sampleCount * (2 * halfWidth + 1))
+	if (!chargeStreakWork(prepared, budget, sampleCount * (2 * halfWidth + 1))) return
 	workspace.statistics.reset()
 
 	for (let sample = 0; sample < sampleCount; sample++) {
@@ -324,7 +390,8 @@ function refineStreakCandidate(prepared: PreparedStreakImage, candidate: StreakH
 			const y = Math.round(baseY + normalY * offset)
 			if (x < 0 || x >= grid.width || y < 0 || y >= grid.height) continue
 			const index = y * grid.width + x
-			if (workspace.mask[index] & STREAK_MASK_INVALID) continue
+
+			if (workspace.mask[index] & EXCLUDED) continue
 
 			valid++
 
@@ -339,20 +406,21 @@ function refineStreakCandidate(prepared: PreparedStreakImage, candidate: StreakH
 
 		const noise = streakLocalNoise(prepared, baseX, baseY)
 		const threshold = noise > 0 ? options.thresholdSigma * noise * Math.sqrt(valid) : numericalFloor * Math.sqrt(valid)
-		workspace.longitudinalSignal[sample] = signedFlux
-		workspace.longitudinalOffset[sample] = positiveFlux > 0 ? offsetMoment / positiveFlux : 0
-		workspace.longitudinalWeight[sample] = positiveFlux
-		workspace.longitudinalSupported[sample] = signedFlux > threshold && positiveFlux > 0 ? 1 : 0
+		workspace.seedOffset[sample] = positiveFlux > 0 ? offsetMoment / positiveFlux : 0
+		workspace.seedWeight[sample] = positiveFlux
+		workspace.seedSupported[sample] = signedFlux > threshold && positiveFlux > 0 ? SAMPLE_SUPPORTED : SAMPLE_UNSUPPORTED
 	}
 
-	const maximumGap = Math.floor(options.mergeGap / grid.step)
+	const maximumGap = Math.floor(options.mergeGap / grid.step) + gapAllowance
+	// Seeds fitted away from this one; refined only after the run loop, which still reads the seed buffers they overwrite.
+	const recentered: StreakHoughCandidate[] | undefined = recenterings < MAXIMUM_SEED_RECENTERINGS ? [] : undefined
 	let first = -1
 	let last = -1
 
 	for (let sample = 0; sample <= sampleCount; sample++) {
-		const supported = sample < sampleCount && workspace.longitudinalSupported[sample] !== 0
+		const state = sample < sampleCount ? workspace.seedSupported[sample] : SAMPLE_UNSUPPORTED
 
-		if (supported) {
+		if (state === SAMPLE_SUPPORTED) {
 			if (first < 0) first = sample
 			last = sample
 			continue
@@ -360,16 +428,18 @@ function refineStreakCandidate(prepared: PreparedStreakImage, candidate: StreakH
 
 		if (first < 0 || sample - last - 1 <= maximumGap) continue
 
-		finishStreakRun(prepared, candidate, options, clipped[0], tangentX, tangentY, normalX, normalY, sampleStep, sampleCount, first, last, output, budget)
+		finishStreakRun(prepared, candidate, options, clipped[0], tangentX, tangentY, normalX, normalY, sampleStep, sampleCount, first, last, output, budget, recentered)
 
 		first = -1
 		last = -1
 	}
 
-	if (first >= 0) finishStreakRun(prepared, candidate, options, clipped[0], tangentX, tangentY, normalX, normalY, sampleStep, sampleCount, first, last, output, budget)
+	if (first >= 0) finishStreakRun(prepared, candidate, options, clipped[0], tangentX, tangentY, normalX, normalY, sampleStep, sampleCount, first, last, output, budget, recentered)
+	if (recentered) for (const seed of recentered) refineStreakCandidate(prepared, seed, options, output, budget, recenterings + 1, gapAllowance)
 }
 
-// Robustly fits and measures one supported run from a single Hough hypothesis.
+// Robustly fits and measures one supported run from a single Hough hypothesis. When recentered is given and the run
+// holds its trail at the corridor edge, the fitted line is appended to it instead, to be scanned again as a seed.
 function finishStreakRun(
 	prepared: PreparedStreakImage,
 	candidate: StreakHoughCandidate,
@@ -385,6 +455,7 @@ function finishStreakRun(
 	last: number,
 	output: Streak[],
 	budget: StreakWorkBudget,
+	recentered?: StreakHoughCandidate[],
 ): void {
 	const { workspace, grid } = prepared
 
@@ -394,14 +465,29 @@ function finishStreakRun(
 	let longitudinalCount = 0
 
 	for (let sample = first; sample <= last; sample++) {
-		if (!workspace.longitudinalSupported[sample]) continue
+		if (workspace.seedSupported[sample] !== SAMPLE_SUPPORTED) continue
 		longitudinalCount++
 	}
 	if (longitudinalCount < 2) return
 
 	const fit = fitLongitudinalCentroids(workspace, origin, seedTangentX, seedTangentY, seedNormalX, seedNormalY, sampleStep, first, last)
 	if (!fit || fit.linearity < options.minLinearity) return
-	chargeSupportedRun(prepared, budget)
+	// A run whose centroids follow another structure, such as a streak crossing the seed corridor obliquely, swings
+	// the axis away from the seed; refining it would report that structure rotated inside the corridor.
+	if (streakAxialAngleDistance(fit.angle, candidate.angle) > 2 * Math.max(options.angleStep, options.orientationTolerance)) return
+
+	if (recentered) {
+		const edge = operationalStreakHalfWidth(prepared, options.maxWidth / grid.step) - 1
+		let clamped = 0
+		for (let sample = first; sample <= last; sample++) if (workspace.seedSupported[sample] === SAMPLE_SUPPORTED && Math.abs(workspace.seedOffset[sample]) >= edge) clamped++
+
+		if (clamped >= longitudinalCount * SEED_RECENTERING_EDGE_FRACTION) {
+			recentered.push({ angle: fit.angle, rho: fit.rho, score: candidate.score })
+			return
+		}
+	}
+
+	if (!chargeSupportedRun(prepared, budget)) return
 
 	const vectors = streakLineVectors(fit.angle)
 	let minimum = Number.POSITIVE_INFINITY
@@ -409,9 +495,9 @@ function finishStreakRun(
 	let supported = 0
 
 	for (let sample = first; sample <= last; sample++) {
-		if (!workspace.longitudinalSupported[sample]) continue
-		const x = origin.x + seedTangentX * sample * sampleStep + seedNormalX * workspace.longitudinalOffset[sample]
-		const y = origin.y + seedTangentY * sample * sampleStep + seedNormalY * workspace.longitudinalOffset[sample]
+		if (workspace.seedSupported[sample] !== SAMPLE_SUPPORTED) continue
+		const x = origin.x + seedTangentX * sample * sampleStep + seedNormalX * workspace.seedOffset[sample]
+		const y = origin.y + seedTangentY * sample * sampleStep + seedNormalY * workspace.seedOffset[sample]
 		const projection = (x - fit.center.x) * vectors.tangent.x + (y - fit.center.y) * vectors.tangent.y
 		minimum = Math.min(minimum, projection)
 		maximum = Math.max(maximum, projection)
@@ -509,7 +595,7 @@ function scanFinalStreakSupport(prepared: PreparedStreakImage, fit: WeightedLine
 	const normalY = tangentX
 	const halfWidth = operationalStreakHalfWidth(prepared, options.maxWidth / grid.step)
 	const numericalFloor = prepared.residualFloor
-	chargeStreakWork(prepared, budget, sampleCount * (2 * halfWidth + 1))
+	if (!chargeStreakWork(prepared, budget, sampleCount * (2 * halfWidth + 1))) return undefined
 
 	workspace.statistics.reset()
 
@@ -518,6 +604,8 @@ function scanFinalStreakSupport(prepared: PreparedStreakImage, fit: WeightedLine
 		const baseY = clipped[0].y + tangentY * sample * sampleStep
 		let flux = 0
 		let valid = 0
+		let tipFlux = 0
+		let tipValid = 0
 
 		for (let offset = -halfWidth; offset <= halfWidth; offset++) {
 			const x = Math.round(baseX + normalX * offset)
@@ -527,6 +615,10 @@ function scanFinalStreakSupport(prepared: PreparedStreakImage, fit: WeightedLine
 			const index = y * grid.width + x
 			if (workspace.mask[index] & STREAK_MASK_INVALID) continue
 
+			tipValid++
+			tipFlux += workspace.signal[index]
+			if (workspace.mask[index] & STREAK_MASK_COMPACT) continue
+
 			valid++
 
 			flux += workspace.signal[index]
@@ -534,6 +626,10 @@ function scanFinalStreakSupport(prepared: PreparedStreakImage, fit: WeightedLine
 
 		workspace.longitudinalSignal[sample] = flux
 		workspace.longitudinalWeight[sample] = valid
+		// Flux and valid count with compact samples, for growing the selected run over the tips of the trail.
+		workspace.longitudinalOffset[sample] = tipFlux
+		workspace.longitudinalPositionFirst[sample] = tipValid
+		workspace.longitudinalSupported[sample] = SAMPLE_UNSUPPORTED
 		if (flux > 0) workspace.statistics.push(flux)
 	}
 
@@ -552,7 +648,7 @@ function scanFinalStreakSupport(prepared: PreparedStreakImage, fit: WeightedLine
 		const valid = workspace.longitudinalWeight[sample]
 		const noise = streakLocalNoise(prepared, baseX, baseY)
 		const noiseThreshold = noise > 0 ? options.thresholdSigma * noise * Math.sqrt(valid) : numericalFloor * Math.sqrt(valid)
-		workspace.longitudinalSupported[sample] = workspace.longitudinalSignal[sample] > Math.max(noiseThreshold, profileFloor) ? 1 : 0
+		if (workspace.longitudinalSignal[sample] > Math.max(noiseThreshold, profileFloor)) workspace.longitudinalSupported[sample] = SAMPLE_SUPPORTED
 	}
 
 	const centerProjection = (fit.center.x - clipped[0].x) * tangentX + (fit.center.y - clipped[0].y) * tangentY
@@ -568,7 +664,9 @@ function scanFinalStreakSupport(prepared: PreparedStreakImage, fit: WeightedLine
 	let supported = 0
 
 	for (let sample = 0; sample <= sampleCount; sample++) {
-		if (sample < sampleCount && workspace.longitudinalSupported[sample]) {
+		const state = sample < sampleCount ? workspace.longitudinalSupported[sample] : SAMPLE_UNSUPPORTED
+
+		if (state === SAMPLE_SUPPORTED) {
 			if (first < 0) first = sample
 			last = sample
 			supported++
@@ -603,6 +701,23 @@ function scanFinalStreakSupport(prepared: PreparedStreakImage, fit: WeightedLine
 
 	if (selectedFirst < 0 || selectedLast <= selectedFirst) return undefined
 
+	// Grows the run over the tips the compact-source mask covers, while the flux counted with compact samples supports them.
+	const tipSupported = (sample: number) => {
+		const noise = streakLocalNoise(prepared, clipped[0].x + tangentX * sample * sampleStep, clipped[0].y + tangentY * sample * sampleStep)
+		const tipValid = workspace.longitudinalPositionFirst[sample]
+		return workspace.longitudinalOffset[sample] > (noise > 0 ? options.thresholdSigma * noise * Math.sqrt(tipValid) : numericalFloor * Math.sqrt(tipValid))
+	}
+
+	for (let grown = 0; grown < TIP_LENGTH && selectedFirst > 0 && tipSupported(selectedFirst - 1); grown++) {
+		selectedFirst--
+		selectedSupported++
+	}
+
+	for (let grown = 0; grown < TIP_LENGTH && selectedLast + 1 < sampleCount && tipSupported(selectedLast + 1); grown++) {
+		selectedLast++
+		selectedSupported++
+	}
+
 	return {
 		start: { x: clipped[0].x + tangentX * selectedFirst * sampleStep, y: clipped[0].y + tangentY * selectedFirst * sampleStep },
 		end: { x: clipped[0].x + tangentX * selectedLast * sampleStep, y: clipped[0].y + tangentY * selectedLast * sampleStep },
@@ -615,7 +730,7 @@ function scanFinalStreakSupport(prepared: PreparedStreakImage, fit: WeightedLine
 function fitLongitudinalCentroids(workspace: StreakDetectionWorkspace, origin: Readonly<Point>, tangentX: number, tangentY: number, normalX: number, normalY: number, sampleStep: number, first: number, last: number): WeightedLineFit | undefined {
 	workspace.statistics.reset()
 
-	for (let sample = first; sample <= last; sample++) if (workspace.longitudinalSupported[sample]) workspace.statistics.push(workspace.longitudinalWeight[sample])
+	for (let sample = first; sample <= last; sample++) if (workspace.seedSupported[sample] === SAMPLE_SUPPORTED) workspace.statistics.push(workspace.seedWeight[sample])
 
 	const medianWeight = workspace.statistics.median()
 	const weightCap = Number.isFinite(medianWeight) && medianWeight > 0 ? medianWeight * 2 : Number.POSITIVE_INFINITY
@@ -629,9 +744,9 @@ function fitLongitudinalCentroids(workspace: StreakDetectionWorkspace, origin: R
 			workspace.statistics.reset()
 
 			for (let sample = first; sample <= last; sample++) {
-				if (!workspace.longitudinalSupported[sample]) continue
-				const x = origin.x + tangentX * sample * sampleStep + normalX * workspace.longitudinalOffset[sample]
-				const y = origin.y + tangentY * sample * sampleStep + normalY * workspace.longitudinalOffset[sample]
+				if (workspace.seedSupported[sample] !== SAMPLE_SUPPORTED) continue
+				const x = origin.x + tangentX * sample * sampleStep + normalX * workspace.seedOffset[sample]
+				const y = origin.y + tangentY * sample * sampleStep + normalY * workspace.seedOffset[sample]
 				workspace.statistics.push(Math.abs(x * previousNormal.x + y * previousNormal.y - previous.rho))
 			}
 
@@ -644,11 +759,11 @@ function fitLongitudinalCentroids(workspace: StreakDetectionWorkspace, origin: R
 		let centerY = 0
 
 		for (let sample = first; sample <= last; sample++) {
-			if (!workspace.longitudinalSupported[sample]) continue
+			if (workspace.seedSupported[sample] !== SAMPLE_SUPPORTED) continue
 
-			const x = origin.x + tangentX * sample * sampleStep + normalX * workspace.longitudinalOffset[sample]
-			const y = origin.y + tangentY * sample * sampleStep + normalY * workspace.longitudinalOffset[sample]
-			let weight = Math.min(weightCap, workspace.longitudinalWeight[sample])
+			const x = origin.x + tangentX * sample * sampleStep + normalX * workspace.seedOffset[sample]
+			const y = origin.y + tangentY * sample * sampleStep + normalY * workspace.seedOffset[sample]
+			let weight = Math.min(weightCap, workspace.seedWeight[sample])
 
 			if (previous && previousNormal) {
 				const residual = Math.abs(x * previousNormal.x + y * previousNormal.y - previous.rho)
@@ -670,11 +785,11 @@ function fitLongitudinalCentroids(workspace: StreakDetectionWorkspace, origin: R
 		let yy = 0
 
 		for (let sample = first; sample <= last; sample++) {
-			if (!workspace.longitudinalSupported[sample]) continue
+			if (workspace.seedSupported[sample] !== SAMPLE_SUPPORTED) continue
 
-			const x = origin.x + tangentX * sample * sampleStep + normalX * workspace.longitudinalOffset[sample]
-			const y = origin.y + tangentY * sample * sampleStep + normalY * workspace.longitudinalOffset[sample]
-			let weight = Math.min(weightCap, workspace.longitudinalWeight[sample])
+			const x = origin.x + tangentX * sample * sampleStep + normalX * workspace.seedOffset[sample]
+			const y = origin.y + tangentY * sample * sampleStep + normalY * workspace.seedOffset[sample]
+			let weight = Math.min(weightCap, workspace.seedWeight[sample])
 
 			if (previous && previousNormal) {
 				const residual = Math.abs(x * previousNormal.x + y * previousNormal.y - previous.rho)
@@ -713,7 +828,7 @@ function measureStreakPhotometry(prepared: PreparedStreakImage, start: Readonly<
 
 	const halfWidth = Math.min(operationalStreakHalfWidth(prepared, maximumWidth), Math.max(1, Math.ceil(width * 1.5)))
 	const { workspace } = prepared
-	chargeStreakWork(prepared, budget, estimateStreakCorridorWork(start, end, halfWidth))
+	if (!chargeStreakWork(prepared, budget, estimateStreakCorridorWork(start, end, halfWidth))) return undefined
 
 	let flux = 0
 	let peakSignal = 0
@@ -737,7 +852,7 @@ function measureStreakPhotometry(prepared: PreparedStreakImage, start: Readonly<
 
 	forEachStreakCorridorPixel(prepared, start, end, angle, halfWidth, (x, y, index, normal, longitudinal) => {
 		const mask = workspace.mask[index]
-		if (mask & STREAK_MASK_INVALID) return
+		if (mask & STREAK_MASK_INVALID || (mask & STREAK_MASK_COMPACT && longitudinal > TIP_LENGTH && longitudinal < length - TIP_LENGTH)) return
 		validSamples++
 		if (mask & STREAK_MASK_SATURATED) saturatedSamples++
 		const signal = workspace.signal[index]
@@ -813,14 +928,17 @@ function measureStreakPhotometry(prepared: PreparedStreakImage, start: Readonly<
 // Estimates transverse FWHM from signed profiles accumulated over unique corridor pixels.
 function measureStreakWidth(prepared: PreparedStreakImage, start: Readonly<Point>, end: Readonly<Point>, angle: number, maximumWidth: number, thresholdSigma: number, budget: StreakWorkBudget): number | undefined {
 	const halfWidth = operationalStreakHalfWidth(prepared, maximumWidth)
-	chargeStreakWork(prepared, budget, estimateStreakCorridorWork(start, end, halfWidth))
+	if (!chargeStreakWork(prepared, budget, estimateStreakCorridorWork(start, end, halfWidth))) return undefined
 	const binCount = 2 * halfWidth + 1
 	const profile = prepared.workspace.transverseSignal.fill(0, 0, binCount)
 	const noiseVariance = prepared.workspace.transverseNoise.fill(0, 0, binCount)
 	prepared.workspace.statistics.reset()
 
-	forEachStreakCorridorPixel(prepared, start, end, angle, halfWidth, (x, y, index, normal) => {
-		if (prepared.workspace.mask[index] & STREAK_MASK_INVALID) return
+	const length = Math.hypot(end.x - start.x, end.y - start.y)
+
+	forEachStreakCorridorPixel(prepared, start, end, angle, halfWidth, (x, y, index, normal, longitudinal) => {
+		const mask = prepared.workspace.mask[index]
+		if (mask & STREAK_MASK_INVALID || (mask & STREAK_MASK_COMPACT && longitudinal > TIP_LENGTH && longitudinal < length - TIP_LENGTH)) return
 		const bin = Math.round(normal) + halfWidth
 		if (bin < 0 || bin >= binCount) return
 		const signal = prepared.workspace.signal[index]
@@ -859,25 +977,37 @@ function measureStreakWidth(prepared: PreparedStreakImage, start: Readonly<Point
 	return Math.max(1, 2 * Math.sqrt(2 * Math.log(2)) * Math.sqrt(variance))
 }
 
-// Charges one coarse stage estimate before its pixel loop can monopolize the event loop.
-function chargeStreakWork(prepared: PreparedStreakImage, budget: StreakWorkBudget, work: number): void {
-	if (budget.work + work > MAXIMUM_STREAK_REFINEMENT_WORK) throw new RangeError('streak refinement exceeds the bounded work budget')
+// Charges one coarse stage estimate before its pixel loop can monopolize the event loop. Returns false, admitting
+// nothing more, once the budget would be exceeded.
+function chargeStreakWork(prepared: PreparedStreakImage, budget: StreakWorkBudget, work: number): boolean {
+	if (budget.exhausted || budget.work + work > MAXIMUM_STREAK_REFINEMENT_WORK) return exhaustStreakBudget(prepared, budget)
 	budget.work += work
 	prepared.workspace.state.refinementWork = budget.work
+	return true
 }
 
-// Admits one fitted run to the expensive final-support and photometry stages.
-function chargeSupportedRun(prepared: PreparedStreakImage, budget: StreakWorkBudget): void {
-	if (budget.supportedRuns >= MAXIMUM_STREAK_SUPPORTED_RUNS) throw new RangeError('streak refinement exceeds the supported-run budget')
+// Admits one fitted run to the expensive final-support and photometry stages. Returns false once the run limit is
+// reached.
+function chargeSupportedRun(prepared: PreparedStreakImage, budget: StreakWorkBudget): boolean {
+	if (budget.exhausted || budget.supportedRuns >= MAXIMUM_STREAK_SUPPORTED_RUNS) return exhaustStreakBudget(prepared, budget)
 	budget.supportedRuns++
 	prepared.workspace.state.supportedRuns = budget.supportedRuns
+	return true
 }
 
-// Admits one compatible pair to a full merge refit.
-function chargeMergeRefit(prepared: PreparedStreakImage, budget: StreakWorkBudget): void {
-	if (budget.mergeRefits >= MAXIMUM_STREAK_MERGE_REFITS) throw new RangeError('streak refinement exceeds the merge-refit budget')
+// Admits one compatible pair to a full merge refit. Returns false once the refit limit is reached.
+function chargeMergeRefit(prepared: PreparedStreakImage, budget: StreakWorkBudget): boolean {
+	if (budget.exhausted || budget.mergeRefits >= MAXIMUM_STREAK_MERGE_REFITS) return exhaustStreakBudget(prepared, budget)
 	budget.mergeRefits++
 	prepared.workspace.state.mergeRefits = budget.mergeRefits
+	return true
+}
+
+// Marks the refinement budget as exhausted, in the budget and in the workspace state, and returns false.
+function exhaustStreakBudget(prepared: PreparedStreakImage, budget: StreakWorkBudget): false {
+	budget.exhausted = true
+	prepared.workspace.state.refinementTruncated = true
+	return false
 }
 
 // Conservatively bounds raster work for the unique-pixel corridor iterator.
@@ -892,7 +1022,7 @@ function estimateInitialCandidateScanWork(prepared: PreparedStreakImage, candida
 	const clipped = clipStreakLineToArea(candidate.angle, candidate.rho, { left: 0, top: 0, right: prepared.grid.width, bottom: prepared.grid.height })
 	if (!clipped) return 0
 	const length = Math.hypot(clipped[1].x - clipped[0].x, clipped[1].y - clipped[0].y)
-	const sampleCount = Math.min(prepared.workspace.longitudinalSignal.length, Math.floor(length) + 1)
+	const sampleCount = Math.min(prepared.workspace.seedSupported.length, Math.floor(length) + 1)
 	return sampleCount >= 2 ? sampleCount * (2 * halfWidth + 1) : 0
 }
 

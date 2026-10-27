@@ -102,9 +102,10 @@ for (const crossingDegrees of [5, 8, 12]) {
 	})
 }
 
-for (const [name, on, off] of [
-	['half-duty', 8, 8],
-	['quarter-duty', 4, 12],
+// Dashes as short as the 4 px quarter-duty ones are as round as a star, so the compact-source test is disabled for them.
+for (const [name, on, off, minCoherence] of [
+	['half-duty', 8, 8, undefined],
+	['quarter-duty', 4, 12, 0],
 ] as const) {
 	test(`detects one long ${name} dashed streak and reports its coverage`, () => {
 		const frame = image(240, 96)
@@ -112,7 +113,7 @@ for (const [name, on, off] of [
 		const segmentLength = on + off
 		for (let start = 0; start < 200; start += segmentLength) intervals.push({ start: start / 200, end: Math.min(1, (start + on) / 200) })
 		renderSyntheticStreak(frame, { start: { x: 20, y: 48 }, end: { x: 220, y: 48 }, width: 3, intensity: 0.8, profile: { type: 'segments', intervals } })
-		const detections = detectStreaks(frame, { minLength: 140, maxWidth: 8, mergeGap: off + 2, backgroundCellSize: 32 })
+		const detections = detectStreaks(frame, { minLength: 140, maxWidth: 8, mergeGap: off + 2, backgroundCellSize: 32, minCoherence })
 		expect(detections.length).toBe(1)
 		expect(detections[0].length).toBeGreaterThan(190)
 		const expectedCoverage = on / segmentLength
@@ -133,4 +134,37 @@ test('does not bridge randomly displaced short fragments into a long streak', ()
 	] as const)
 		renderLine(frame, startX, y, startX + 12, y + 2, 3, 0.8)
 	expect(detectStreaks(frame, { minLength: 140, maxWidth: 8, mergeGap: 20, backgroundCellSize: 32 })).toEqual([])
+})
+
+test('reports exactly two non-parallel streaks without fragments of later runs or rotated merge artifacts', () => {
+	const frame = image(512, 384)
+	let state = 7
+	for (let index = 0; index < frame.raw.length; index++) {
+		state = (state * 1103515245 + 12345) % 2147483648
+		frame.raw[index] += (state / 2147483648 - 0.5) * 0.004
+	}
+	renderLine(frame, 60, 80, 420, 200, 2.83, 0.15)
+	renderLine(frame, 100, 330, 300, 250, 2.83, 0.15)
+	const detected = detectStreaks(frame)
+	expect(detected.length).toBe(2)
+	for (const [startX, startY, endX, endY] of [
+		[60, 80, 420, 200],
+		[100, 330, 300, 250],
+	] as const) {
+		const [left, right] =
+			startX < endX
+				? [
+						{ x: startX, y: startY },
+						{ x: endX, y: endY },
+					]
+				: [
+						{ x: endX, y: endY },
+						{ x: startX, y: startY },
+					]
+		const streak = detected.find((candidate) => Math.abs(candidate.center.x - (startX + endX) / 2) < 3 && Math.abs(candidate.center.y - (startY + endY) / 2) < 3)
+		expect(streak).toBeDefined()
+		expect(Math.hypot(streak!.start.x - left.x, streak!.start.y - left.y)).toBeLessThan(3)
+		expect(Math.hypot(streak!.end.x - right.x, streak!.end.y - right.y)).toBeLessThan(3)
+		expect(streak!.width).toBeLessThan(4)
+	}
 })

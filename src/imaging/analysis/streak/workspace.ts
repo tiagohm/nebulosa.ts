@@ -13,6 +13,13 @@ export const MINIMUM_STREAK_BACKGROUND_CELL_SIZE = 8
 // Default retained oriented-edge capacity under candidate pressure.
 export const DEFAULT_MAXIMUM_STREAK_EDGE_POINTS = 131_072
 
+// Radius of the square structure-tensor window of the compact-source test (markStreakCompactSources in preprocess.ts), in native-plane pixels: a 7×7 window covers
+// the core of a typical star, whose gradients point every way, and a 7-pixel stretch of a straight trail.
+export const STREAK_COHERENCE_RADIUS = 3
+
+// Distance, in native-plane pixels, by which the compact-source marks grow into the faint wings around each source.
+export const STREAK_COMPACT_DILATION = 1
+
 // Fixed transverse-profile capacity for the detector's maximum 256-pixel FWHM.
 export const STREAK_TRANSVERSE_PROFILE_CAPACITY = 515
 
@@ -52,6 +59,9 @@ export interface StreakDetectionWorkspaceState {
 	supportedRuns: number
 	// Compatible detection pairs admitted to a full merge refit.
 	mergeRefits: number
+	// Whether the refinement stopped at its bounded work budget in the latest call, leaving weaker candidates, runs, or
+	// merges unprocessed; the streaks measured until then are returned.
+	refinementTruncated: boolean
 }
 
 // Caller-reusable fixed-capacity storage for the complete detector pipeline.
@@ -116,7 +126,7 @@ export interface StreakDetectionWorkspace {
 	readonly scratch: Float64Array
 	// Integrated signal at each sampled longitudinal position.
 	readonly longitudinalSignal: Float64Array
-	// Flux centroid offset normal to the seed line at each longitudinal position, in plane pixels.
+	// Flux centroid offset normal to the seed line at each longitudinal position, in plane pixels. The final support scan reuses it for the flux including compact samples.
 	readonly longitudinalOffset: Float64Array
 	// Bounded fit weight at each longitudinal position.
 	readonly longitudinalWeight: Float64Array
@@ -124,7 +134,7 @@ export interface StreakDetectionWorkspace {
 	readonly longitudinalNormalFirst: Float64Array
 	// Capped positive-signal second normal moment for each longitudinal bin.
 	readonly longitudinalNormalSecond: Float64Array
-	// Capped positive-signal first longitudinal moment for each longitudinal bin.
+	// Capped positive-signal first longitudinal moment for each longitudinal bin. The final support scan reuses it for the valid count including compact samples.
 	readonly longitudinalPositionFirst: Float64Array
 	// Capped positive-signal second longitudinal moment for each longitudinal bin.
 	readonly longitudinalPositionSecond: Float64Array
@@ -132,6 +142,18 @@ export interface StreakDetectionWorkspace {
 	readonly longitudinalPositionNormal: Float64Array
 	// Boolean support classification at each longitudinal position.
 	readonly longitudinalSupported: Uint8Array
+	// Flux centroid offset normal to a Hough seed line at each of its samples, in plane pixels. The seed scan keeps its
+	// own buffers so the final-axis scans and photometry of one run never overwrite the samples of the next run.
+	readonly seedOffset: Float64Array
+	// Bounded fit weight at each sample of a Hough seed line.
+	readonly seedWeight: Float64Array
+	// Boolean support classification at each sample of a Hough seed line.
+	readonly seedSupported: Uint8Array
+	// Ring of the gradient products xx, xy, yy and a validity count of the 2 STREAK_COHERENCE_RADIUS + 1 plane rows of the
+	// structure-tensor window, interleaved by pixel.
+	readonly coherenceRows: Float64Array
+	// Column sums of coherenceRows over the rows of the window, interleaved like it.
+	readonly coherenceColumns: Float64Array
 	// Signed residual accumulated by transverse offset during width measurement.
 	readonly transverseSignal: Float64Array
 	// Local residual-noise variance accumulated by transverse offset.
@@ -208,8 +230,13 @@ export function createStreakDetectionWorkspace(width: number, height: number, op
 		longitudinalPositionSecond: new Float64Array(longitudinalCapacity),
 		longitudinalPositionNormal: new Float64Array(longitudinalCapacity),
 		longitudinalSupported: new Uint8Array(longitudinalCapacity),
+		seedOffset: new Float64Array(longitudinalCapacity),
+		seedWeight: new Float64Array(longitudinalCapacity),
+		seedSupported: new Uint8Array(longitudinalCapacity),
+		coherenceRows: new Float64Array((2 * STREAK_COHERENCE_RADIUS + 1) * 4 * width),
+		coherenceColumns: new Float64Array(4 * width),
 		transverseSignal: new Float64Array(STREAK_TRANSVERSE_PROFILE_CAPACITY),
 		transverseNoise: new Float64Array(STREAK_TRANSVERSE_PROFILE_CAPACITY),
-		state: { edgeCount: 0, candidateCount: 0, edgesTruncated: false, houghCoarseEdgeWork: 0, houghRefinementEdgeWork: 0, houghActiveAngles: 0, houghRhoWork: 0, refinementWork: 0, supportedRuns: 0, mergeRefits: 0 },
+		state: { edgeCount: 0, candidateCount: 0, edgesTruncated: false, houghCoarseEdgeWork: 0, houghRefinementEdgeWork: 0, houghActiveAngles: 0, houghRhoWork: 0, refinementWork: 0, supportedRuns: 0, mergeRefits: 0, refinementTruncated: false },
 	}
 }

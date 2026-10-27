@@ -119,7 +119,7 @@ test('rejects multiplicative work explosions and clamps width work to the frame'
 	expect(Math.abs(frameBounded[0].width / narrow[0].width - 1)).toBeLessThan(0.01)
 })
 
-test('rejects candidate sets whose initial and final refinement stages exceed the budget', () => {
+test('admits only the candidates whose refinement fits the budget and reports the truncation', () => {
 	const width = 1024
 	const height = 768
 	const frame = image(width, height)
@@ -131,8 +131,9 @@ test('rejects candidate sets whose initial and final refinement stages exceed th
 		frame.raw[index] = (state >>> 0) / 0x1_0000_0000
 	}
 	const workspace = createStreakDetectionWorkspace(width, height, { maximumCandidates: 128, maximumEdgePoints: 512 })
-	expect(() => detectStreaks(frame, { backgroundCellSize: 32, thresholdSigma: 0, gradientSigma: 0, maxWidth: 256, maxCandidates: 128 }, workspace)).toThrow('bounded work budget')
-	const priorSinglePassEstimate = workspace.state.candidateCount * (Math.ceil(Math.hypot(width, height)) + 1) * 513
-	expect(priorSinglePassEstimate).toBeLessThan(100_000_000)
-	expect(workspace.state.refinementWork).toBe(0)
+	const streaks = detectStreaks(frame, { backgroundCellSize: 32, thresholdSigma: 0, gradientSigma: 0, maxWidth: 256, maxCandidates: 128, minCoherence: 0 }, workspace)
+	expect(Array.isArray(streaks)).toBeTrue()
+	expect(workspace.state.refinementTruncated).toBeTrue()
+	expect(workspace.state.refinementWork).toBeGreaterThan(0)
+	expect(workspace.state.refinementWork).toBeLessThanOrEqual(100_000_000)
 })

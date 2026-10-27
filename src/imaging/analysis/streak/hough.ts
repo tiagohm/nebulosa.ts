@@ -2,7 +2,7 @@ import { PI, PIOVERTWO } from '../../../core/constants'
 import { validateInRange, validatePositiveInteger } from '../../../core/validation'
 import type { Angle } from '../../../math/units/angle'
 import { normalizeStreakAngle, streakAxialAngleDistance } from './geometry'
-import { type PreparedStreakImage, STREAK_MASK_INVALID, streakLocalNoiseAtPixel } from './preprocess'
+import { type PreparedStreakImage, STREAK_MASK_COMPACT, STREAK_MASK_INVALID, streakLocalNoiseAtPixel } from './preprocess'
 import type { StreakDetectionWorkspace } from './workspace'
 
 // Sparse orientation-gated Hough seeding for straight streaks. Edge arrays are structure-of-arrays,
@@ -289,7 +289,7 @@ function orientationWindowEdgeCount(edges: StreakEdgePoints, workspace: StreakDe
 	return count
 }
 
-// Visits every qualifying Sobel edge without allocating per-pixel records.
+// Visits every qualifying Sobel edge without allocating per-pixel records; samples of compact sources are skipped.
 function forEachEligibleEdge(prepared: PreparedStreakImage, thresholdSigma: number, gradientSigma: number, angleStep: number, angleCount: number, visit: (x: number, y: number, weight: number, bin: number) => void): void {
 	const { signal, mask } = prepared.workspace
 	const { width, height } = prepared.grid
@@ -298,7 +298,7 @@ function forEachEligibleEdge(prepared: PreparedStreakImage, thresholdSigma: numb
 	for (let y = 1; y < height - 1; y++) {
 		for (let x = 1; x < width - 1; x++) {
 			const center = y * width + x
-			if (mask[center] & STREAK_MASK_INVALID) continue
+			if (mask[center] & (STREAK_MASK_INVALID | STREAK_MASK_COMPACT)) continue
 			const noise = streakLocalNoiseAtPixel(prepared, x, y)
 			const signalThreshold = noise > 0 ? thresholdSigma * noise : numericalFloor
 			const gradientThreshold = noise > 0 ? gradientSigma * noise * 4 : numericalFloor * 4
@@ -306,7 +306,8 @@ function forEachEligibleEdge(prepared: PreparedStreakImage, thresholdSigma: numb
 
 			for (let offsetY = -1; offsetY <= 1; offsetY++) {
 				const row = center + offsetY * width
-				for (let offsetX = -1; offsetX <= 1; offsetX++) positive = Math.max(positive, signal[row + offsetX])
+				// A compact source next to the sample must not lend it its brightness.
+				for (let offsetX = -1; offsetX <= 1; offsetX++) if ((mask[row + offsetX] & STREAK_MASK_COMPACT) === 0) positive = Math.max(positive, signal[row + offsetX])
 			}
 
 			if (!(positive > signalThreshold)) continue

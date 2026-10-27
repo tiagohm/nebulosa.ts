@@ -4,7 +4,7 @@ import type { Image } from '../../model/types'
 import { CFA_ANALYSIS_PLANES, imagePlaneGeometry, type ImageAnalysisPlane, type ImagePlaneGeometry, MONO_ANALYSIS_PLANES, resolveAnalysisArea, RGB_ANALYSIS_PLANES } from '../plane'
 import { ROBUST_SAMPLE_CAPACITY, type RobustReservoir } from '../robust'
 import type { StreakDetectionOptions } from './types'
-import { createStreakDetectionWorkspace, MINIMUM_STREAK_BACKGROUND_CELL_SIZE, type StreakDetectionWorkspace } from './workspace'
+import { createStreakDetectionWorkspace, MINIMUM_STREAK_BACKGROUND_CELL_SIZE, STREAK_COHERENCE_RADIUS, STREAK_COMPACT_DILATION, type StreakDetectionWorkspace } from './workspace'
 
 // Native-plane extraction and robust coarse background subtraction for normalized astronomical images.
 // The input image remains unchanged; one selected plane is copied once and then transformed in place.
@@ -14,6 +14,17 @@ export const STREAK_MASK_INVALID = 1
 
 // Mask bit marking a finite sample at or above a caller-supplied saturation threshold.
 export const STREAK_MASK_SATURATED = 2
+
+// Mask bit marking a significant sample of a compact source, such as a star, whose local gradients have no common
+// orientation (see markStreakCompactSources); such samples neither vote for lines nor support or measure a streak.
+export const STREAK_MASK_COMPACT = 4
+
+// Variance of one Sobel derivative of unit-variance white noise: the kernel weights (1, 2, 1) on both sides square-sum
+// to 12. The expected noise energy of the structure tensor per pixel and axis is this times the noise variance.
+const SOBEL_NOISE_GAIN = 12
+
+// Mask bit used only while markStreakCompactSources dilates its marks; always clear outside it.
+const DILATION_SCRATCH = 128
 
 // Preprocessed native-plane view and noise model consumed by edge extraction and refinement.
 export interface PreparedStreakImage {
@@ -155,7 +166,166 @@ export function preprocessStreakImage(image: Image, options: Readonly<StreakDete
 	workspace.state.refinementWork = 0
 	workspace.state.supportedRuns = 0
 	workspace.state.mergeRefits = 0
+	workspace.state.refinementTruncated = false
 	return { area, plane, grid, workspace, backgroundCellSize, backgroundColumns, backgroundRows, globalBackground, globalNoise, residualFloor: noiseFloor, saturationLevel: options.saturationLevel }
+}
+
+// Marks the compact sources of a prepared plane with STREAK_MASK_COMPACT and returns how many samples were marked. A
+// sample is marked when its residual exceeds thresholdSigma local noise sigmas and the coherence of the structure tensor
+// of the Sobel gradients in the (2 STREAK_COHERENCE_RADIUS + 1)² window around it is below minCoherence (in [0, 1]):
+// the gradients of a star point every way (coherence near 0), those along a straight trail share one normal
+// (coherence near 1). The expected isotropic noise energy is removed from the tensor diagonal first, so a faint trail
+// keeps the coherence of its signal instead of that of the noise. Gradients touching an invalid sample or the plane
+// border are left out. The marks then grow by STREAK_COMPACT_DILATION into the faint wings of each source, and the
+// returned count includes them. A minCoherence of 0 marks nothing. Reads the residual and the noise model, and only adds mask
+// bits; O(plane pixels) with fixed workspace rows.
+export function markStreakCompactSources(prepared: PreparedStreakImage, thresholdSigma: number, minCoherence: number): number {
+	if (!(minCoherence > 0)) return 0
+
+	const { workspace } = prepared
+	const { width, height } = prepared.grid
+	const { signal, mask, coherenceRows: rows, coherenceColumns: columns } = workspace
+	const size = 2 * STREAK_COHERENCE_RADIUS + 1
+	const numericalFloor = prepared.residualFloor
+	const channels = 4
+	let marked = 0
+
+	// Writes the gradient products xx, xy, yy, and a validity count of one plane row into its ring slot and adds them to
+	// the column sums.
+	const enter = (y: number) => {
+		const slot = (y % size) * width * channels
+
+		for (let x = 0; x < width; x++) {
+			const offset = slot + x * channels
+			let xx = 0
+			let xy = 0
+			let yy = 0
+			let count = 0
+
+			if (x > 0 && x + 1 < width && y > 0 && y + 1 < height) {
+				const center = y * width + x
+				const up = center - width
+				const down = center + width
+
+				if (((mask[up - 1] | mask[up] | mask[up + 1] | mask[center - 1] | mask[center] | mask[center + 1] | mask[down - 1] | mask[down] | mask[down + 1]) & STREAK_MASK_INVALID) === 0) {
+					const gx = -signal[up - 1] + signal[up + 1] - 2 * signal[center - 1] + 2 * signal[center + 1] - signal[down - 1] + signal[down + 1]
+					const gy = -signal[up - 1] - 2 * signal[up] - signal[up + 1] + signal[down - 1] + 2 * signal[down] + signal[down + 1]
+					xx = gx * gx
+					xy = gx * gy
+					yy = gy * gy
+					count = 1
+				}
+			}
+
+			rows[offset] = xx
+			rows[offset + 1] = xy
+			rows[offset + 2] = yy
+			rows[offset + 3] = count
+			columns[x * channels] += xx
+			columns[x * channels + 1] += xy
+			columns[x * channels + 2] += yy
+			columns[x * channels + 3] += count
+		}
+	}
+
+	// Removes the products of a plane row, still in its ring slot, from the column sums.
+	const leave = (y: number) => {
+		const slot = (y % size) * width * channels
+		for (let x = 0; x < width * channels; x++) columns[x] -= rows[slot + x]
+	}
+
+	columns.fill(0, 0, width * channels)
+	for (let y = 0; y < Math.min(STREAK_COHERENCE_RADIUS, height); y++) enter(y)
+
+	for (let y = 0; y < height; y++) {
+		// The slot of the leaving row is the one the entering row reuses, so it is removed first.
+		if (y - STREAK_COHERENCE_RADIUS - 1 >= 0) leave(y - STREAK_COHERENCE_RADIUS - 1)
+		if (y + STREAK_COHERENCE_RADIUS < height) enter(y + STREAK_COHERENCE_RADIUS)
+
+		let xx = 0
+		let xy = 0
+		let yy = 0
+		let count = 0
+		for (let x = 0; x < Math.min(STREAK_COHERENCE_RADIUS, width); x++) {
+			xx += columns[x * channels]
+			xy += columns[x * channels + 1]
+			yy += columns[x * channels + 2]
+			count += columns[x * channels + 3]
+		}
+
+		for (let x = 0; x < width; x++) {
+			const entering = x + STREAK_COHERENCE_RADIUS
+			const leaving = x - STREAK_COHERENCE_RADIUS - 1
+
+			if (entering < width) {
+				xx += columns[entering * channels]
+				xy += columns[entering * channels + 1]
+				yy += columns[entering * channels + 2]
+				count += columns[entering * channels + 3]
+			}
+
+			if (leaving >= 0) {
+				xx -= columns[leaving * channels]
+				xy -= columns[leaving * channels + 1]
+				yy -= columns[leaving * channels + 2]
+				count -= columns[leaving * channels + 3]
+			}
+
+			const index = y * width + x
+			if (mask[index] & STREAK_MASK_INVALID) continue
+			const noise = streakLocalNoiseAtPixel(prepared, x, y)
+			if (!(signal[index] > (noise > 0 ? thresholdSigma * noise : numericalFloor))) continue
+
+			const noiseEnergy = SOBEL_NOISE_GAIN * noise * noise * count
+			const cleanXX = Math.max(0, xx - noiseEnergy)
+			const cleanYY = Math.max(0, yy - noiseEnergy)
+			const trace = cleanXX + cleanYY
+			const coherence = trace > 0 ? ((cleanXX - cleanYY) ** 2 + 4 * xy * xy) / (trace * trace) : 0
+
+			if (coherence < minCoherence) mask[index] |= STREAK_MASK_COMPACT
+		}
+	}
+
+	// Grows the marks by STREAK_COMPACT_DILATION into the faint wings of each source, below the significance threshold but
+	// bright enough to widen a corridor profile or bridge a gap: along rows into a scratch bit, then across rows.
+	const radius = STREAK_COMPACT_DILATION
+
+	for (let y = 0; y < height; y++) {
+		const row = y * width
+		let previous = -radius - 1
+
+		for (let x = 0; x < width; x++) {
+			if (mask[row + x] & STREAK_MASK_COMPACT) previous = x
+			if (x - previous <= radius) mask[row + x] |= DILATION_SCRATCH
+		}
+
+		previous = width + radius
+		for (let x = width - 1; x >= 0; x--) {
+			if (mask[row + x] & STREAK_MASK_COMPACT) previous = x
+			if (previous - x <= radius) mask[row + x] |= DILATION_SCRATCH
+		}
+	}
+
+	for (let y = 0; y < height; y++) {
+		const first = Math.max(0, y - radius)
+		const last = Math.min(height - 1, y + radius)
+
+		for (let x = 0; x < width; x++) {
+			for (let near = first; near <= last; near++) {
+				if (mask[near * width + x] & DILATION_SCRATCH) {
+					mask[y * width + x] |= STREAK_MASK_COMPACT
+					break
+				}
+			}
+		}
+	}
+
+	for (let index = 0; index < width * height; index++) {
+		mask[index] &= ~DILATION_SCRATCH
+		if (mask[index] & STREAK_MASK_COMPACT) marked++
+	}
+
+	return marked
 }
 
 // Estimates horizontal and vertical residual sigma in one cell during one pixel traversal.

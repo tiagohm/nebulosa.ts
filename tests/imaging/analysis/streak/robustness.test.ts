@@ -2,7 +2,9 @@ import { expect, test } from 'bun:test'
 import { PI, PIOVERFOUR, PIOVERTWO } from '../../../../src/core/constants'
 import { detectStreaks } from '../../../../src/imaging/analysis/streak/detector'
 import { streakAxialAngleDistance } from '../../../../src/imaging/analysis/streak/geometry'
-import { preprocessStreakImage, STREAK_MASK_INVALID } from '../../../../src/imaging/analysis/streak/preprocess'
+import { markStreakCompactSources, preprocessStreakImage, STREAK_MASK_COMPACT, STREAK_MASK_INVALID } from '../../../../src/imaging/analysis/streak/preprocess'
+import { DEFAULT_STREAK_DETECTION_OPTIONS } from '../../../../src/imaging/analysis/streak/types'
+import { STREAK_COHERENCE_RADIUS, STREAK_COMPACT_DILATION } from '../../../../src/imaging/analysis/streak/workspace'
 import type { Image } from '../../../../src/imaging/model/types'
 import { renderSyntheticStreak } from '../../../../src/imaging/synthetic/streak'
 
@@ -153,6 +155,7 @@ test('keeps photometry approximately invariant across orientation', () => {
 		fluxes.push(streak.flux)
 		signalToNoise.push(streak.snr ?? 0)
 		const prepared = preprocessStreakImage(frame, { backgroundCellSize: 24 })
+		markStreakCompactSources(prepared, DEFAULT_STREAK_DETECTION_OPTIONS.thresholdSigma, DEFAULT_STREAK_DETECTION_OPTIONS.minCoherence)
 		const tangentX = Math.cos(streak.angle)
 		const tangentY = Math.sin(streak.angle)
 		const forward = (streak.end.x - streak.start.x) * tangentX + (streak.end.y - streak.start.y) * tangentY >= 0
@@ -167,13 +170,41 @@ test('keeps photometry approximately invariant across orientation', () => {
 				const longitudinal = offsetX * tangentX + offsetY * tangentY
 				const normal = -offsetX * tangentY + offsetY * tangentX
 				const index = y * frame.metadata.width + x
-				if (longitudinal >= -0.5 && longitudinal <= length + 0.5 && Math.abs(normal) <= radius && (prepared.workspace.mask[index] & STREAK_MASK_INVALID) === 0 && prepared.workspace.signal[index] > 0) positivePixels++
+				if (longitudinal >= -0.5 && longitudinal <= length + 0.5 && Math.abs(normal) <= radius && (prepared.workspace.mask[index] & STREAK_MASK_INVALID) === 0 && prepared.workspace.signal[index] > 0) {
+					// Compact samples count only within the tips, which the compact-source test cannot tell from a star.
+					const tip = STREAK_COHERENCE_RADIUS + STREAK_COMPACT_DILATION
+					if ((prepared.workspace.mask[index] & STREAK_MASK_COMPACT) === 0 || longitudinal <= tip || longitudinal >= length - tip) positivePixels++
+				}
 			}
 		}
 		expect(streak.supportPixels).toBe(positivePixels)
 	}
 	expect(Math.max(...fluxes) / Math.min(...fluxes)).toBeLessThan(1.2)
 	expect(Math.max(...signalToNoise) / Math.min(...signalToNoise)).toBeLessThan(1.25)
+})
+
+test('finds a streak among crowded stars, whose edges would otherwise outvote it', () => {
+	const width = 320
+	const height = 240
+	const frame = image(width, height)
+	addGaussianNoise(frame, 0.003, 0x2545f491)
+	let state = 0x2545f491
+	const next = () => {
+		state ^= state << 13
+		state ^= state >>> 17
+		state ^= state << 5
+		return (state >>> 0) / 0x1_0000_0000
+	}
+	for (let index = 0; index < 600; index++) addStar(frame, next() * width, next() * height, 0.9 + next() * 0.8, 0.05 + next() ** 2 * 0.8)
+	renderSyntheticStreak(frame, { start: { x: 40, y: 200 }, end: { x: 280, y: 60 }, width: 2.5, intensity: 0.2 })
+	const angle = Math.atan2(60 - 200, 280 - 40) + PI
+	const alongStreak = (streak: { angle: number; center: { x: number; y: number } }) => streakAxialAngleDistance(streak.angle, angle) < PI / 90 && Math.abs(streak.center.x - 160) < 8 && Math.abs(streak.center.y - 130) < 8
+
+	const streaks = detectStreaks(frame)
+	expect(streaks.filter(alongStreak).length).toBe(1)
+	expect(streaks.find(alongStreak)!.length).toBeGreaterThan(220)
+	expect(streaks.find(alongStreak)!.width).toBeLessThan(5)
+	expect(detectStreaks(frame, { minCoherence: 0 }).filter(alongStreak)).toEqual([])
 })
 
 test('uses measured width and residual local noise for final photometry', () => {

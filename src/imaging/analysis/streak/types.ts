@@ -80,7 +80,11 @@ export interface StreakDetectionOptions {
 	readonly mergeGap?: number
 	// Maximum perpendicular center-line separation for merging, in received-image pixels.
 	readonly mergeDistance?: number
-	// Known saturation threshold in the original raw sample scale.
+	// Smallest structure-tensor coherence, in [0, 1], of a significant sample that may belong to a streak; samples of compact
+	// sources such as stars, whose local gradients have no common orientation, fall below it and neither vote nor support
+	// a streak. 0 keeps every sample.
+	readonly minCoherence?: number
+	// Known saturation threshold in the normalized sample scale of the image, compared with its samples.
 	readonly saturationLevel?: number
 	// Whether detections truncated by the ROI boundary may be returned.
 	readonly allowBorderClipping?: boolean
@@ -104,5 +108,6 @@ export const DEFAULT_STREAK_DETECTION_OPTIONS: Required<Omit<StreakDetectionOpti
 	mergeAngleTolerance: PI / 90,
 	mergeGap: 12,
 	mergeDistance: 3,
+	minCoherence: 0.2,
 	allowBorderClipping: true,
 }
