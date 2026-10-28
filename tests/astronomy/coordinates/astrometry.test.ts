@@ -1,13 +1,13 @@
 import { expect, test } from 'bun:test'
 // oxfmt-ignore
-import { cirsToIcrs, cirsToObserved, distance, equatorial, icrsToCirs, icrsToObserved, lightTime, lightTimeSolution, observedToCirs, parallacticAngle, phaseAngle, type PositionAndVelocity, type PositionAndVelocityMut, type PositionAndVelocityOverTime, type PositionOverTime, refractedAltitude, relativePositionAndVelocity, separationFrom, topocentricDirection, unrefractedAltitude, zeroPositionAndVelocity } from '../../../src/astronomy/coordinates/astrometry'
+import { cirsToIcrs, cirsToObserved, distance, equatorial, icrsToCirs, icrsToObserved, lightTime, lightTimeSolution, observedToCirs, parallacticAngle, phaseAngle, type PositionAndVelocity, type PositionAndVelocityMut, type PositionAndVelocityOverTime, type PositionOverTime, refractedAltitude, relativePositionAndVelocity, separationFrom, topocentricDirection, geocentricToTopocentric, unrefractedAltitude, zeroPositionAndVelocity } from '../../../src/astronomy/coordinates/astrometry'
 import { eraEpv00 } from '../../../src/astronomy/coordinates/erfa/earth'
 import { eraEors, eraPnm06a, eraS06, eraS2c } from '../../../src/astronomy/coordinates/erfa/erfa'
 import { Ellipsoid, geodeticLocation } from '../../../src/astronomy/observer/location'
-import { tdb, Timescale, timeShift, timeSubtract, timeYMDHMS, tt } from '../../../src/astronomy/time/time'
+import { tdb, Timescale, timeShift, timeSubtract, timeUnix, timeYMDHMS, tt } from '../../../src/astronomy/time/time'
 import { PIOVERTWO } from '../../../src/core/constants'
 import { type MutVec3, vecX, vecY, vecZ, vecZero } from '../../../src/math/linear-algebra/vec3'
-import { deg, toArcsec, toDeg } from '../../../src/math/units/angle'
+import { deg, parseAngle, toArcsec, toDeg } from '../../../src/math/units/angle'
 import { meter } from '../../../src/math/units/distance'
 
 test('distance is the position vector length in AU', () => {
@@ -371,4 +371,21 @@ test('unrefractedAltitude inverts near-horizon apparent altitudes', () => {
 		expect(trueAltitude).toBeLessThan(0)
 		expect(Math.abs(toArcsec(refractedAltitude(trueAltitude) - apparent))).toBeLessThan(1)
 	}
+})
+
+test('topocentric position moves a geocentric position by the parallax of the site', () => {
+	// 2017 YJ66 on JD 2461055.5 (UTC) as the IMCCE SkyBoT cone search answered on 2026-10-28 from the geocenter (code 500,
+	// 1.49629486858 AU away) and from the Paris Observatory (code 007: 2°20′11.4874″ E, 48°50′11.32″ N, 67 m).
+	const time = timeUnix((2461055.5 - 2440587.5) * 86400, true)
+	const paris = geodeticLocation(deg(2.336524278), deg(48.836477778), meter(67), Ellipsoid.WGS84)
+	const [ra, dec] = geocentricToTopocentric(parseAngle('09 59 43.2242', true)!, parseAngle('+11 58 59.134')!, 1.49629486858, paris, time)
+
+	expect(toArcsec(Math.abs(ra - parseAngle('09 59 43.3703', true)!) * Math.cos(dec))).toBeLessThan(0.02)
+	expect(toArcsec(Math.abs(dec - parseAngle('+11 58 55.492')!))).toBeLessThan(0.02)
+
+	// A far body barely moves, and the right ascension stays in [0, 2π).
+	const [farRa, farDec] = geocentricToTopocentric(1, 0.2, 1e6, paris, time)
+	expect(farRa).toBeCloseTo(1, 9)
+	expect(farDec).toBeCloseTo(0.2, 9)
+	expect(geocentricToTopocentric(1e-12, 0, 1, paris, time)[0]).toBeGreaterThanOrEqual(0)
 })

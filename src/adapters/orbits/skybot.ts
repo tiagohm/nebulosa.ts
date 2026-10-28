@@ -10,6 +10,11 @@ import type { Distance } from '../../math/units/distance'
 // three-digit filter), asks for the basic JSON output, and converts every record once to radians, AU, and days: the
 // positions are astrometric J2000 equatorial (EQJ2000), as the service computes them. The response, a third-party
 // payload, is validated when it is parsed; nothing else is.
+//
+// The service sees the objects from an observatory known by its IAU code only: although its documentation describes a
+// geographic observer ("+latitude, longitude, altitude"), every interface of the service refuses one as an unknown
+// observer code. A position seen from any other site is the geocentric one moved by the parallax of that site
+// (geocentricToTopocentric of astronomy/coordinates/astrometry), from the geocentric distance the service gives.
 
 // Base URL of the SkyBoT web services.
 export const SKYBOT_BASE_URL = 'https://ssp.imcce.fr/webservices/skybot/api/'
@@ -106,7 +111,7 @@ export function coneSearchUrl(time: Temporal | Time, rightAscension: Angle, decl
 		'-mime': 'json',
 		'-output': 'basic',
 		'-observer': options.observer ?? GEOCENTER,
-		'-objFilter': objectFilter(options.objects ?? { asteroids: true, planets: true, comets: true }),
+		'-objFilter': options.objects === undefined ? '111' : objectFilter(options.objects),
 		'-from': 'Nebulosa',
 	})
 

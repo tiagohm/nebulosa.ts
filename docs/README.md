@@ -6827,6 +6827,24 @@ console.log(toDeg(unrefractedAltitude(refractedAltitude(deg(10))))) // 10.0000 �
 console.log(toDeg(refractedAltitude(deg(10), { pressure: 700, temperature: -5 }))) // 10.0642 — degrees, thinner and colder air
 ```
 
+### Topocentric Parallax
+
+`geocentricToTopocentric(rightAscension, declination, distance, location, time)` (`src/astronomy/coordinates/astrometry.ts`) moves a geocentric astrometric position (ICRS/GCRS axes, radians) of a body `distance` AU from the geocenter to a site on the Earth (`GeographicPosition`) at an instant (`Time`), and returns `[rightAscension, declination]` in radians, the right ascension in `[0, 2π)`. It subtracts the site's geocentric position, rotated from ITRS to the GCRS axes, from the body's geocentric vector. Only the parallax is applied, about a degree at the Moon's distance and 8.8″ at 1 AU: the light time between the geocenter and the site (at most 21 ms) is neglected, and the result stays astrometric, without the site's diurnal aberration. It suits a geocentric prediction that carries the body's distance, such as the answer of a remote service; seen from the Paris Observatory, it agrees with the SkyBoT cone search's own topocentric answer to a few hundredths of an arcsecond.
+
+```ts
+import { geocentricToTopocentric } from 'nebulosa/src/astronomy/coordinates/astrometry'
+import { Ellipsoid, geodeticLocation } from 'nebulosa/src/astronomy/observer/location'
+import { timeUnix } from 'nebulosa/src/astronomy/time/time'
+import { deg, formatDEC, formatRA, hour } from 'nebulosa/src/math/units/angle'
+import { meter } from 'nebulosa/src/math/units/distance'
+
+// A main-belt asteroid 1.5 AU from the geocenter, seen from São Paulo on 2026-01-15 at 0h UTC.
+const site = geodeticLocation(deg(-46.63), deg(-23.55), meter(760), Ellipsoid.WGS84)
+const time = timeUnix(Date.UTC(2026, 0, 15) / 1000, true)
+const [ra, dec] = geocentricToTopocentric(hour(9.9953), deg(11.9831), 1.4963, site, time)
+console.log(formatRA(ra), formatDEC(dec))
+```
+
 ### Transit Altitude and Hour Angle
 
 For a target of known declination, the geometry of the diurnal circle gives two quick planning numbers without any time scale or ephemeris: the altitude at upper transit, which is the highest the target gets, and the hour angle at which it crosses a chosen altitude, which sets the time it spends above that altitude. Both assume a fixed declination and ignore refraction unless you fold it into the target altitude.
@@ -20882,13 +20900,19 @@ await simbadQuery(adql, { timeout: 0 })
 
 ### SkyBoT Cone Search
 
-`coneSearch(time, rightAscension, declination, radius, options?, signal?)` (`src/adapters/orbits/skybot.ts`) asks the SkyBoT cone search of the IMCCE (`SKYBOT_BASE_URL`, `https://ssp.imcce.fr/webservices/skybot/api/`) which known solar-system objects are within `radius` of a J2000 center at an instant, and returns them as `SkybotObject` records. `time` is a Unix millisecond timestamp (UTC) or a library `Time`, both sent as a Julian day; the center and the radius are radians, sent in degrees. `options.observer` is the IAU/MPC code of the observatory the positions are seen from (`GEOCENTER`, `500`, by default, which is the only way to ask for a geocentric search; the service takes no latitude and longitude), `options.objects` chooses asteroids, planets, and comets (all by default), and `options.maxPositionError` drops the objects whose position is more uncertain (radians; the service keeps those within 120″ by default, and 0 keeps all). `signal` aborts the request. The service accepts a radius up to `SKYBOT_MAX_RADIUS` (10°) and epochs from `SKYBOT_MIN_EPOCH` to `SKYBOT_MAX_EPOCH` (Julian days 2411320 to 2473540, 1889 to 2060); the request is sent as given, so a caller checks them first. A field without objects answers an empty list; an HTTP failure or a malformed answer rejects with an `Error`. Answers take seconds, more for a large or crowded field.
+`coneSearch(time, rightAscension, declination, radius, options?, signal?)` (`src/adapters/orbits/skybot.ts`) asks the SkyBoT cone search of the IMCCE (`SKYBOT_BASE_URL`, `https://ssp.imcce.fr/webservices/skybot/api/`) which known solar-system objects are within `radius` of a J2000 center at an instant, and returns them as `SkybotObject` records. `time` is a Unix millisecond timestamp (UTC) or a library `Time`, both sent as a Julian day; the center and the radius are radians, sent in degrees. `options.observer` is the IAU/MPC code of the observatory the positions are seen from (`GEOCENTER`, `500`, by default). Although the service documents a geographic observer, every interface of it refuses one as an unknown code, so a search from any other site asks for geocentric positions and moves them with `geocentricToTopocentric` ([Topocentric Parallax](#topocentric-parallax)), `options.objects` chooses asteroids, planets, and comets (all by default), and `options.maxPositionError` drops the objects whose position is more uncertain (radians; the service keeps those within 120″ by default, and 0 keeps all). `signal` aborts the request. The service accepts a radius up to `SKYBOT_MAX_RADIUS` (10°) and epochs from `SKYBOT_MIN_EPOCH` to `SKYBOT_MAX_EPOCH` (Julian days 2411320 to 2473540, 1889 to 2060); the request is sent as given, so a caller checks them first. A field without objects answers an empty list; an HTTP failure or a malformed answer rejects with an `Error`. Answers take seconds, more for a large or crowded field.
 
 Each `SkybotObject` has its `number` (numbered objects only), `name` (or provisional designation), dynamical `class` (such as `MB>Inner`, `NEA>Apollo`, `Centaur`), astrometric J2000 `rightAscension` and `declination` (radians), and, when the service gives them, the predicted visual `magnitude`, the `positionError` and the `distanceFromCenter` (radians), the sky motion `motionRightAscension` (times the cosine of the declination) and `motionDeclination` (radians per day), and the `distance` from the observer and the `heliocentricDistance` (AU). `parseSkybotResponse(body)` converts the parsed basic JSON output and checks its shape; `coneSearchUrl(...)` returns the request URL.
 
+A geocentric `SkybotObject` that has its `distance` can be seen from any site with `geocentricToTopocentric` of [Topocentric Parallax](#topocentric-parallax).
+
 ```ts
 import { coneSearch } from 'nebulosa/src/adapters/orbits/skybot'
+import { geocentricToTopocentric } from 'nebulosa/src/astronomy/coordinates/astrometry'
+import { Ellipsoid, geodeticLocation } from 'nebulosa/src/astronomy/observer/location'
+import { timeUnix } from 'nebulosa/src/astronomy/time/time'
 import { deg, hour, toDeg } from 'nebulosa/src/math/units/angle'
+import { meter } from 'nebulosa/src/math/units/distance'
 
 // Asteroids and comets within 15′ of RA 10h, Dec +12° on 2026-01-15 at 0h UTC, seen from the geocenter.
 const objects = await coneSearch(Date.UTC(2026, 0, 15), hour(10), deg(12), deg(0.25), { objects: { asteroids: true, planets: false, comets: true } })
@@ -20896,6 +20920,11 @@ for (const object of objects) console.log(object.number ?? '', object.name, obje
 
 // The same field seen from an observatory by its MPC code, keeping only positions known within 10″.
 await coneSearch(Date.UTC(2026, 0, 15), hour(10), deg(12), deg(0.25), { observer: 'I41', maxPositionError: deg(10 / 3600) })
+
+// The geocentric positions seen from a site that has no observatory code.
+const site = geodeticLocation(deg(-46.63), deg(-23.55), meter(760), Ellipsoid.WGS84)
+const at = timeUnix(Date.UTC(2026, 0, 15) / 1000, true)
+for (const object of objects) if (object.distance !== undefined) console.log(object.name, geocentricToTopocentric(object.rightAscension, object.declination, object.distance, site, at))
 ```
 
 ### Small-Body Identification

@@ -1,4 +1,5 @@
 import { AU_M, DAYSEC, ELLIPSOID_PARAMETERS, PIOVERTWO, SPEED_OF_LIGHT } from '../../core/constants'
+import { matTransposeMulVec } from '../../math/linear-algebra/mat3'
 import { type MutVec3, type Vec3, vecAngle, vecLength, vecMinus, vecZero } from '../../math/linear-algebra/vec3'
 import { type Angle, normalizeAngle } from '../../math/units/angle'
 import type { Distance } from '../../math/units/distance'
@@ -6,18 +7,20 @@ import type { Pressure } from '../../math/units/pressure'
 import type { Temperature } from '../../math/units/temperature'
 import type { Velocity } from '../../math/units/velocity'
 import { Ellipsoid, type GeographicCoordinate, type GeographicPosition } from '../observer/location'
-import { pmAngles, type Time, timeShift, tt, ut1 } from '../time/time'
+import { gcrsToItrsRotationMatrix, pmAngles, type Time, timeShift, tt, ut1 } from '../time/time'
 import type { CartesianCoordinate, EquatorialCoordinate, SphericalCoordinate } from './coordinate'
-import { type EraAstrom, eraApci13, eraApco13, eraApio13, eraAtciqz, eraAticq, eraAtioq, eraAtoiq, eraC2s, eraEo06a, eraP2s, eraRefco } from './erfa/erfa'
+import { type EraAstrom, eraApci13, eraApco13, eraApio13, eraAtciqz, eraAticq, eraAtioq, eraAtoiq, eraC2s, eraEo06a, eraP2s, eraRefco, eraS2c } from './erfa/erfa'
 import { frameAt, type Frame } from './frame'
+import { itrs } from './itrs'
 
 // High-level astrometric place transforms built on the ERFA "apc/atio" pipeline: ICRS<->CIRS,
 // CIRS<->observed (azimuth/altitude), and ICRS->observed, plus the scalar helpers (distance,
 // light time, equatorial coordinates, parallactic angle, angular separation, atmospheric
-// refraction, and analytic spherical coordinates with rates). Positions are AU, velocities
-// AU/day, and angles radians unless noted; refraction uses pressure in hPa and temperature in
-// Celsius. The observed transforms require an EOP-aware Time and an observing location, and
-// share ERFA's bounded refraction model so forward/inverse round trips stay consistent.
+// refraction, the parallax of a site on a geocentric position, and analytic spherical coordinates
+// with rates). Positions are AU, velocities AU/day, and angles radians unless noted; refraction
+// uses pressure in hPa and temperature in Celsius. The observed transforms require an EOP-aware
+// Time and an observing location, and share ERFA's bounded refraction model so forward/inverse
+// round trips stay consistent.
 
 // Barycentric/heliocentric position (AU) and velocity (AU/day) pair, in ICRS/BCRS axes.
 // Readonly access does not imply owned storage; lifetime is defined by its producer.
@@ -316,6 +319,19 @@ function solveLightTime(target: PositionAndVelocityOverTime, observer: PositionA
 export function topocentricDirection(target: PositionAndVelocityOverTime, observer: PositionAndVelocityOverTime, time: Time, iterations: number, out: MutVec3 = vecZero()): Vec3 {
 	solveLightTime(target, observer, time, iterations, out)
 	return out
+}
+
+// Moves a geocentric astrometric position (ICRS/GCRS axes, radians) of a body `distance` AU from the geocenter to a
+// site on the Earth at an instant: the geocentric vector minus the site's geocentric position, rotated from ITRS to the
+// GCRS axes. Returns [right ascension in [0, 2π), declination] in radians. Only the parallax is applied: the light time
+// between the geocenter and the site (at most 21 ms) is neglected, and the result stays astrometric, without the site's
+// diurnal aberration. The parallax reaches about a degree at the Moon's distance and 8.8″ at 1 AU. Useful for a
+// geocentric prediction, such as a remote service's, that carries the body's distance.
+export function geocentricToTopocentric(rightAscension: Angle, declination: Angle, distance: Distance, time: Time, location: GeographicPosition = time.location!): readonly [Angle, Angle] {
+	const direction = eraS2c(rightAscension, declination)
+	const site = matTransposeMulVec(gcrsToItrsRotationMatrix(time), itrs(location))
+	const [ra, dec] = eraC2s(direction[0] * distance - site[0], direction[1] * distance - site[1], direction[2] * distance - site[2])
+	return [normalizeAngle(ra), dec]
 }
 
 // Solves retarded target geometry by sampling the observer once at reception and
