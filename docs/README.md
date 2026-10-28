@@ -20880,6 +20880,24 @@ await simbadQuery(adql, { signal: controller.signal })
 await simbadQuery(adql, { timeout: 0 })
 ```
 
+### SkyBoT Cone Search
+
+`coneSearch(time, rightAscension, declination, radius, options?, signal?)` (`src/adapters/orbits/skybot.ts`) asks the SkyBoT cone search of the IMCCE (`SKYBOT_BASE_URL`, `https://ssp.imcce.fr/webservices/skybot/api/`) which known solar-system objects are within `radius` of a J2000 center at an instant, and returns them as `SkybotObject` records. `time` is a Unix millisecond timestamp (UTC) or a library `Time`, both sent as a Julian day; the center and the radius are radians, sent in degrees. `options.observer` is the IAU/MPC code of the observatory the positions are seen from (`GEOCENTER`, `500`, by default, which is the only way to ask for a geocentric search; the service takes no latitude and longitude), `options.objects` chooses asteroids, planets, and comets (all by default), and `options.maxPositionError` drops the objects whose position is more uncertain (radians; the service keeps those within 120″ by default, and 0 keeps all). `signal` aborts the request. The service accepts a radius up to `SKYBOT_MAX_RADIUS` (10°) and epochs from `SKYBOT_MIN_EPOCH` to `SKYBOT_MAX_EPOCH` (Julian days 2411320 to 2473540, 1889 to 2060); the request is sent as given, so a caller checks them first. A field without objects answers an empty list; an HTTP failure or a malformed answer rejects with an `Error`. Answers take seconds, more for a large or crowded field.
+
+Each `SkybotObject` has its `number` (numbered objects only), `name` (or provisional designation), dynamical `class` (such as `MB>Inner`, `NEA>Apollo`, `Centaur`), astrometric J2000 `rightAscension` and `declination` (radians), and, when the service gives them, the predicted visual `magnitude`, the `positionError` and the `distanceFromCenter` (radians), the sky motion `motionRightAscension` (times the cosine of the declination) and `motionDeclination` (radians per day), and the `distance` from the observer and the `heliocentricDistance` (AU). `parseSkybotResponse(body)` converts the parsed basic JSON output and checks its shape; `coneSearchUrl(...)` returns the request URL.
+
+```ts
+import { coneSearch } from 'nebulosa/src/adapters/orbits/skybot'
+import { deg, hour, toDeg } from 'nebulosa/src/math/units/angle'
+
+// Asteroids and comets within 15′ of RA 10h, Dec +12° on 2026-01-15 at 0h UTC, seen from the geocenter.
+const objects = await coneSearch(Date.UTC(2026, 0, 15), hour(10), deg(12), deg(0.25), { objects: { asteroids: true, planets: false, comets: true } })
+for (const object of objects) console.log(object.number ?? '', object.name, object.class, object.magnitude, toDeg(object.positionError ?? 0) * 3600)
+
+// The same field seen from an observatory by its MPC code, keeping only positions known within 10″.
+await coneSearch(Date.UTC(2026, 0, 15), hour(10), deg(12), deg(0.25), { observer: 'I41', maxPositionError: deg(10 / 3600) })
+```
+
 ### Small-Body Identification
 
 `identify(dateTime, longitude, latitude, elevation, fovRa, fovDec, fovRaWidth?, fovDecWidth?, magLimit?, magRequired?)` (`src/adapters/orbits/sbd.ts`) asks the `sb_ident` service of JPL (the two-pass identification, with the first pass suppressed so that only the refined table is returned) which asteroids and comets are inside a field of view at a given time as seen from an observing site, and returns the parsed JSON. `dateTime` is a Unix millisecond timestamp (sent as `YYYY-MM-DD_HH:mm:ss`, in UTC) or a library `Time` (sent as its Julian day number plus its fraction); `longitude` and `latitude` locate the site (radians, east positive), `elevation` is a `Distance` (AU) sent in kilometers, `fovRa` and `fovDec` are the center of the field (radians, the right ascension being sent as `hh-mm-ss.ss` and the declination as `dd-mm-ss.ss` with `M` for the minus sign), `fovRaWidth` and `fovDecWidth` are the half-widths of the field (radians, 1 degree by default; the declination one defaults to the right-ascension one), `magLimit` is the limiting visual magnitude (18 by default) and `magRequired` (true by default) asks that only bodies with a known magnitude are listed (it is not sent as true when the limit is 30 or more). The answer is the `SmallBodyIdentifySecondPass` with `n_second_pass`, the column names `fields_second` and `data_second_pass`, the rows of text of the service, each row with the columns that the names give in order (name, position, distance and rates, magnitude, and the like). The numbers are as published and are not parsed, and the HTTP status is not checked.
