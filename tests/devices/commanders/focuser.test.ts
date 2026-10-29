@@ -1,10 +1,11 @@
 import { afterAll, afterEach, beforeEach, expect, spyOn, test } from 'bun:test'
 import { FocuserCommander } from '../../../src/devices/commanders/focuser'
 import { IndiClientHandlerSet } from '../../../src/devices/indi/client'
-import type { Focuser } from '../../../src/devices/indi/device'
+import { CLIENT, type Client, DEFAULT_FOCUSER, type Focuser } from '../../../src/devices/indi/device'
 import { FocuserManager } from '../../../src/devices/indi/manager/focuser'
 import { ClientSimulator } from '../../../src/devices/indi/simulator/client'
 import { FocuserSimulator } from '../../../src/devices/indi/simulator/focuser'
+import type { PropertyState } from '../../../src/devices/indi/types'
 import { DeviceLifecycle } from '../../../src/devices/orchestration/device.lifecycle'
 import { OperationCoordinator, failedOperationResult } from '../../../src/devices/orchestration/operation'
 import { ResourceArbiter, resourceKey } from '../../../src/devices/orchestration/resource'
@@ -266,4 +267,43 @@ test('stops observing the manager once disposed', () => {
 	} finally {
 		removeHandler.mockRestore()
 	}
+})
+
+test('moves a relative-only focuser on its virtual position', async () => {
+	const manager = new FocuserManager()
+	using commander = new FocuserCommander(manager)
+	// Driver without an absolute position that reports every relative move Busy and then Ok.
+	const driver: Client = {
+		type: 'INDI',
+		id: 'relative',
+		description: '',
+		getProperties() {},
+		enableBlob() {},
+		sendText() {},
+		sendSwitch() {},
+		sendNumber(vector) {
+			if (vector.name !== 'REL_FOCUS_POSITION') return
+			const report = (state: PropertyState) => manager.numberVector(driver, { device: vector.device, name: 'REL_FOCUS_POSITION', state, elements: { FOCUS_RELATIVE_POSITION: { name: 'FOCUS_RELATIVE_POSITION', value: vector.elements.FOCUS_RELATIVE_POSITION } } }, 'setNumberVector')
+			setTimeout(() => report('Busy'), 10)
+			setTimeout(() => report('Ok'), 20)
+		},
+		[Symbol.dispose]() {},
+	}
+	const focuser = structuredClone(DEFAULT_FOCUSER)
+	focuser.id = Bun.randomUUIDv7()
+	focuser.name = 'Relative Focuser'
+	focuser.connected = true
+	Object.defineProperty(focuser, CLIENT, { value: driver })
+	manager.add(focuser)
+	manager.numberVector(driver, { device: focuser.name, name: 'REL_FOCUS_POSITION', permission: 'rw', state: 'Idle', elements: { FOCUS_RELATIVE_POSITION: { name: 'FOCUS_RELATIVE_POSITION', format: '%g', min: 0, max: 10000, step: 1, value: 0 } } }, 'defNumberVector')
+
+	expect(await commander.moveTo(operationCoordinator, focuser, 50500)).toMatchObject({ ok: true })
+	expect(focuser.position.value).toBe(50500)
+
+	expect(await commander.moveIn(operationCoordinator, focuser, 1500)).toMatchObject({ ok: true })
+	expect(focuser.position.value).toBe(49000)
+
+	expect(await commander.syncTo(operationCoordinator, focuser, 30000)).toMatchObject({ ok: true })
+	expect(focuser.position.value).toBe(30000)
+	await waitUntil(() => isFree(focuser))
 })
