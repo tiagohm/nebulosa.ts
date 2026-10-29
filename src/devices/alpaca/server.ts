@@ -2093,7 +2093,8 @@ export class AlpacaServer {
 		return makeAlpacaResponse(undefined)
 	}
 
-	// Moves the focuser: absolute target for absolute focusers, otherwise relative in/out steps by sign.
+	// Moves the focuser: absolute target for absolute focusers, otherwise signed relative steps, positive outward
+	// (increasing position) as in ASCOM.
 	#focuserMove(id: number, data: { Position: string }) {
 		const { device } = this.#focuser(id)
 		const position = +data.Position
@@ -2101,9 +2102,9 @@ export class AlpacaServer {
 		if (isAbsoluteFocuser(device)) {
 			this.options.focuser?.moveTo(device, position)
 		} else if (position > 0) {
-			this.options.focuser?.moveIn(device, position)
+			this.options.focuser?.moveOut(device, position)
 		} else if (position < 0) {
-			this.options.focuser?.moveOut(device, -position)
+			this.options.focuser?.moveIn(device, -position)
 		}
 
 		return makeAlpacaResponse(undefined)
