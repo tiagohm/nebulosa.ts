@@ -6829,7 +6829,7 @@ console.log(toDeg(refractedAltitude(deg(10), { pressure: 700, temperature: -5 })
 
 ### Topocentric Parallax
 
-`geocentricToTopocentric(rightAscension, declination, distance, location, time)` (`src/astronomy/coordinates/astrometry.ts`) moves a geocentric astrometric position (ICRS/GCRS axes, radians) of a body `distance` AU from the geocenter to a site on the Earth (`GeographicPosition`) at an instant (`Time`), and returns `[rightAscension, declination]` in radians, the right ascension in `[0, 2π)`. It subtracts the site's geocentric position, rotated from ITRS to the GCRS axes, from the body's geocentric vector. Only the parallax is applied, about a degree at the Moon's distance and 8.8″ at 1 AU: the light time between the geocenter and the site (at most 21 ms) is neglected, and the result stays astrometric, without the site's diurnal aberration. It suits a geocentric prediction that carries the body's distance, such as the answer of a remote service; seen from the Paris Observatory, it agrees with the SkyBoT cone search's own topocentric answer to a few hundredths of an arcsecond.
+`geocentricToTopocentric(rightAscension, declination, distance, time, location)` (`src/astronomy/coordinates/astrometry.ts`) moves a geocentric astrometric position (ICRS/GCRS axes, radians) of a body `distance` AU from the geocenter to a site on the Earth (`GeographicPosition`) at an instant (`Time`), and returns `[rightAscension, declination]` in radians, the right ascension in `[0, 2π)`. It subtracts the site's geocentric position, rotated from ITRS to the GCRS axes, from the body's geocentric vector. Only the parallax is applied, about a degree at the Moon's distance and 8.8″ at 1 AU: the light time between the geocenter and the site (at most 21 ms) is neglected, and the result stays astrometric, without the site's diurnal aberration. It suits a geocentric prediction that carries the body's distance, such as the answer of a remote service; seen from the Paris Observatory, it agrees with the SkyBoT cone search's own topocentric answer to a few hundredths of an arcsecond.
 
 ```ts
 import { geocentricToTopocentric } from 'nebulosa/src/astronomy/coordinates/astrometry'
@@ -6841,7 +6841,7 @@ import { meter } from 'nebulosa/src/math/units/distance'
 // A main-belt asteroid 1.5 AU from the geocenter, seen from São Paulo on 2026-01-15 at 0h UTC.
 const site = geodeticLocation(deg(-46.63), deg(-23.55), meter(760), Ellipsoid.WGS84)
 const time = timeUnix(Date.UTC(2026, 0, 15) / 1000, true)
-const [ra, dec] = geocentricToTopocentric(hour(9.9953), deg(11.9831), 1.4963, site, time)
+const [ra, dec] = geocentricToTopocentric(hour(9.9953), deg(11.9831), 1.4963, time, site)
 console.log(formatRA(ra), formatDEC(dec))
 ```
 
@@ -20926,7 +20926,7 @@ await coneSearch(Date.UTC(2026, 0, 15), hour(10), deg(12), deg(0.25), { observer
 // The geocentric positions seen from a site that has no observatory code.
 const site = geodeticLocation(deg(-46.63), deg(-23.55), meter(760), Ellipsoid.WGS84)
 const at = timeUnix(Date.UTC(2026, 0, 15) / 1000, true)
-for (const object of objects) if (object.distance !== undefined) console.log(object.name, geocentricToTopocentric(object.rightAscension, object.declination, object.distance, site, at))
+for (const object of objects) if (object.distance !== undefined) console.log(object.name, geocentricToTopocentric(object.rightAscension, object.declination, object.distance, at, site))
 ```
 
 ### Small-Body Identification
