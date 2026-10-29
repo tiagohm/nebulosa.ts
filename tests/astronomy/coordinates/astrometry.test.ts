@@ -377,15 +377,15 @@ test('topocentric position moves a geocentric position by the parallax of the si
 	// 2017 YJ66 on JD 2461055.5 (UTC) as the IMCCE SkyBoT cone search answered on 2026-10-28 from the geocenter (code 500,
 	// 1.49629486858 AU away) and from the Paris Observatory (code 007: 2°20′11.4874″ E, 48°50′11.32″ N, 67 m).
 	const time = timeUnix((2461055.5 - 2440587.5) * 86400, true)
-	const paris = geodeticLocation(deg(2.336524278), deg(48.836477778), meter(67), Ellipsoid.WGS84)
-	const [ra, dec] = geocentricToTopocentric(parseAngle('09 59 43.2242', true)!, parseAngle('+11 58 59.134')!, 1.49629486858, paris, time)
+	time.location = geodeticLocation(deg(2.336524278), deg(48.836477778), meter(67), Ellipsoid.WGS84)
+	const [ra, dec] = geocentricToTopocentric(parseAngle('09 59 43.2242', true)!, parseAngle('+11 58 59.134')!, 1.49629486858, time)
 
 	expect(toArcsec(Math.abs(ra - parseAngle('09 59 43.3703', true)!) * Math.cos(dec))).toBeLessThan(0.02)
 	expect(toArcsec(Math.abs(dec - parseAngle('+11 58 55.492')!))).toBeLessThan(0.02)
 
 	// A far body barely moves, and the right ascension stays in [0, 2π).
-	const [farRa, farDec] = geocentricToTopocentric(1, 0.2, 1e6, paris, time)
+	const [farRa, farDec] = geocentricToTopocentric(1, 0.2, 1e6, time)
 	expect(farRa).toBeCloseTo(1, 9)
 	expect(farDec).toBeCloseTo(0.2, 9)
-	expect(geocentricToTopocentric(1e-12, 0, 1, paris, time)[0]).toBeGreaterThanOrEqual(0)
+	expect(geocentricToTopocentric(1e-12, 0, 1, time)[0]).toBeGreaterThanOrEqual(0)
 })

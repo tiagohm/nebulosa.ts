@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, spyOn, test } from 'bun:test'
 import { AlpacaApi } from '../../../src/devices/alpaca/api'
 import { AlpacaServer } from '../../../src/devices/alpaca/server'
 // oxfmt-ignore
@@ -967,6 +967,24 @@ describe('focuser', () => {
 		expectOk(await api.focuser.move(ID, FOCUSER_INITIAL_POSITION + 20))
 		await waitUntil(() => focuser.position.value === FOCUSER_INITIAL_POSITION + 20)
 		expectOk(await api.focuser.getPosition(ID), FOCUSER_INITIAL_POSITION + 20)
+	})
+
+	test('move by signed steps outward on a relative focuser', async () => {
+		const moveIn = spyOn(focuserManager, 'moveIn').mockImplementation(() => {})
+		const moveOut = spyOn(focuserManager, 'moveOut').mockImplementation(() => {})
+		focuser.emulatedAbsoluteMove = true
+
+		try {
+			expectOk(await api.focuser.isAbsolute(ID), false)
+			expectOk(await api.focuser.move(ID, 30))
+			expectOk(await api.focuser.move(ID, -20))
+			expect(moveOut).toHaveBeenCalledWith(focuser, 30)
+			expect(moveIn).toHaveBeenCalledWith(focuser, 20)
+		} finally {
+			focuser.emulatedAbsoluteMove = false
+			moveIn.mockRestore()
+			moveOut.mockRestore()
+		}
 	})
 })
 

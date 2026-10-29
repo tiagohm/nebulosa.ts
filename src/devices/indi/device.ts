@@ -332,16 +332,26 @@ export interface Wheel extends Device {
 }
 
 // Focuser device: absolute/relative move, reverse, sync, driver backlash compensation (steps), and position (steps); also a
-// thermometer.
+// thermometer. Absolute and relative moves are both available whenever the driver publishes either one, the missing one
+// being emulated by the manager.
 export interface Focuser extends Device, Thermometer {
 	readonly type: 'focuser'
 	moving: boolean
+	// Position in steps: the one the driver reports, or the virtual counter the manager keeps while emulatedAbsoluteMove.
 	readonly position: MinMaxValueProperty
+	// Whether moves to an absolute position are available, natively or emulated.
 	canAbsoluteMove: boolean
+	// Whether moves by a relative amount are available, natively or emulated.
 	canRelativeMove: boolean
+	// Whether the driver has no absolute position (ABS_FOCUS_POSITION), so absolute moves are sent as relative ones and
+	// position is a virtual counter the manager keeps from the relative moves it commands.
+	emulatedAbsoluteMove: boolean
+	// Whether the driver has no relative move (REL_FOCUS_POSITION), so relative moves are sent as absolute targets.
+	emulatedRelativeMove: boolean
 	canAbort: boolean
 	canReverse: boolean
 	reversed: boolean
+	// Whether the position can be redefined without moving: natively, or on the virtual counter while emulatedAbsoluteMove.
 	canSync: boolean
 	// Whether the driver publishes a writable backlash compensation of its own (FOCUS_BACKLASH_TOGGLE).
 	hasBacklash: boolean
@@ -712,6 +722,8 @@ export const DEFAULT_FOCUSER: Focuser = {
 	position: structuredClone(DEFAULT_MIN_MAX_VALUE_PROPERTY),
 	canAbsoluteMove: false,
 	canRelativeMove: false,
+	emulatedAbsoluteMove: false,
+	emulatedRelativeMove: false,
 	canAbort: false,
 	canReverse: false,
 	reversed: false,

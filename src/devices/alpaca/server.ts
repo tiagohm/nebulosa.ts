@@ -2036,8 +2036,9 @@ export class AlpacaServer {
 
 	// Focuser
 
+	// A focuser whose position is only the virtual counter of the manager is exported as relative, as its driver is.
 	#focuserCanAbsolute(id: number) {
-		return makeAlpacaResponse(this.#focuser(id).device.canAbsoluteMove)
+		return makeAlpacaResponse(isAbsoluteFocuser(this.#focuser(id).device))
 	}
 
 	// Bulk DeviceState array for a focuser: motion flag, position (0 for relative-only focusers), and temp.
@@ -2045,7 +2046,7 @@ export class AlpacaServer {
 		const { device } = this.#focuser(id)
 		const res = new Array<AlpacaStateItem>(4)
 		res[0] = { Name: 'IsMoving', Value: device.moving }
-		res[1] = { Name: 'Position', Value: device.canAbsoluteMove ? device.position.value : 0 }
+		res[1] = { Name: 'Position', Value: isAbsoluteFocuser(device) ? device.position.value : 0 }
 		res[2] = { Name: 'Temperature', Value: device.temperature }
 		res[3] = { Name: 'TimeStamp', Value: '' }
 		return makeAlpacaResponse(res)
@@ -2092,17 +2093,18 @@ export class AlpacaServer {
 		return makeAlpacaResponse(undefined)
 	}
 
-	// Moves the focuser: absolute target for absolute focusers, otherwise relative in/out steps by sign.
+	// Moves the focuser: absolute target for absolute focusers, otherwise signed relative steps, positive outward
+	// (increasing position) as in ASCOM.
 	#focuserMove(id: number, data: { Position: string }) {
 		const { device } = this.#focuser(id)
 		const position = +data.Position
 
-		if (device.canAbsoluteMove) {
+		if (isAbsoluteFocuser(device)) {
 			this.options.focuser?.moveTo(device, position)
 		} else if (position > 0) {
-			this.options.focuser?.moveIn(device, position)
+			this.options.focuser?.moveOut(device, position)
 		} else if (position < 0) {
-			this.options.focuser?.moveOut(device, -position)
+			this.options.focuser?.moveIn(device, -position)
 		}
 
 		return makeAlpacaResponse(undefined)
@@ -2524,6 +2526,12 @@ function weatherSensorElapsedSince(manager: WeatherManager | undefined, device: 
 	if (at === undefined || temperature === undefined) return undefined
 
 	return Math.min(at, temperature)
+}
+
+// Whether a focuser reports a real absolute position: its driver publishes one, rather than the manager keeping a
+// virtual counter that an ASCOM client must not take for the position of the device.
+function isAbsoluteFocuser(focuser: Focuser) {
+	return focuser.canAbsoluteMove && !focuser.emulatedAbsoluteMove
 }
 
 // Case-insensitive boolean parse of an Alpaca 'True'/'False' form value.
