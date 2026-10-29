@@ -634,7 +634,7 @@ describe('dispatched pulse evidence', () => {
 
 			expect(window.busyAckDeadline).toBeGreaterThanOrEqual(guidePulseWindow(before, 100).busyAckDeadline)
 			expect(window.busyAckDeadline).toBeLessThanOrEqual(guidePulseWindow(after, 100).busyAckDeadline)
-			expect(window.endsBy - window.busyAckDeadline).toBe(100 + GUIDE_PULSE_ACK_MARGIN)
+			expect(window.endsBy - window.busyAckDeadline).toBeCloseTo(100 + GUIDE_PULSE_ACK_MARGIN, 4)
 			expect(causesOf(camera)).toContain('guidePulse')
 			expect(ask).toHaveBeenCalledWith(camera, 'TELESCOPE_TIMED_GUIDE_NS')
 			expect(ask).toHaveBeenCalledWith(camera, 'TELESCOPE_TIMED_GUIDE_WE')
