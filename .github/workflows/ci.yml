@@ -58,7 +58,7 @@ jobs:
               uses: actions/checkout@v7
               with:
                   persist-credentials: false
-                  fetch-depth: 2
+                  fetch-depth: ${{ matrix.os == 'ubuntu-24.04' && '50' || '1' }}
 
             - name: Setup Bun
               uses: oven-sh/setup-bun@v2
@@ -86,7 +86,15 @@ jobs:
 
             - name: Run Tests
               if: ${{ matrix.os == 'ubuntu-24.04' }}
-              run: bun test --bail --timeout 30000 --parallel --pass-with-no-tests --changed=HEAD~ --timings=timings.json
+              shell: bash
+              env:
+                  TEST_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
+              run: |
+                  args=()
+                  if [[ -n "$TEST_BASE_REF" ]] && git cat-file -e "${TEST_BASE_REF}^{commit}" 2>/dev/null; then
+                      args+=("--changed=$TEST_BASE_REF")
+                  fi
+                  bun test --bail --timeout 30000 --parallel --pass-with-no-tests "${args[@]}" --timings=timings.json
 
             - name: Run Native Tests
               run: bun test --bail --timeout 30000 libwcs.test.ts jpeg.test.ts libastrometry.test.ts
