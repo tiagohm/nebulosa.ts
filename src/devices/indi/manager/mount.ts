@@ -1,8 +1,9 @@
 import { observedToCirs } from '../../../astronomy/coordinates/astrometry'
 import { eclipticToEquatorial, equatorialFromJ2000, galacticToEquatorial } from '../../../astronomy/coordinates/coordinate'
+import { eraEo06a } from '../../../astronomy/coordinates/erfa/erfa'
 import type { GeographicCoordinate } from '../../../astronomy/observer/location'
 import { formatTemporal, parseTemporal } from '../../../astronomy/time/temporal'
-import { type Time, timeNow } from '../../../astronomy/time/time'
+import { type Time, timeNow, tt } from '../../../astronomy/time/time'
 import { TAU } from '../../../core/constants'
 import { type Angle, deg, hour, normalizeAngle, normalizePI, parseAngle, toDeg, toHour } from '../../../math/units/angle'
 import { meter, toMeter } from '../../../math/units/distance'
@@ -38,7 +39,8 @@ const ALIGNMENT_SUBSYSTEM_ACTIVE = 'ALIGNMENT SUBSYSTEM ACTIVE'
 // coordinate that every mount command takes. String components are parsed as sexagesimal, with JNOW and
 // J2000 right ascension read in hours. J2000 and galactic targets are precessed to the date, ecliptic
 // targets use the true obliquity of the date, and ALTAZ targets are observed positions at the mount's
-// reported site with default refraction. time defaults to the current UTC instant. Returns a fresh
+// reported site with default refraction, referred to the equinox through the equation of the origins.
+// time defaults to the current UTC instant. Returns a fresh
 // [rightAscension, declination] tuple in radians, with right ascension normalized to [0, TAU).
 export function mountTargetEquatorial(mount: Mount, target: MountTargetCoordinate<string | Angle>, time: Time = timeNow(true)): [Angle, Angle] {
 	const { type } = target
@@ -49,6 +51,9 @@ export function mountTargetEquatorial(mount: Mount, target: MountTargetCoordinat
 		Object.assign(equatorial, equatorialFromJ2000(...equatorial, time))
 	} else if (type === 'ALTAZ') {
 		Object.assign(equatorial, observedToCirs(...equatorial, time, undefined, mount.geographicCoordinate))
+		// CIRS right ascension counts from the CIO, while mount commands count from the equinox of date.
+		const { day, fraction } = tt(time)
+		equatorial[0] -= eraEo06a(day, fraction)
 	} else if (type === 'ECLIPTIC') {
 		Object.assign(equatorial, eclipticToEquatorial(...equatorial, time))
 	} else if (type === 'GALACTIC') {

@@ -1,5 +1,7 @@
 import { describe, expect, test } from 'bun:test'
+import { refractedAltitude } from '../../../../src/astronomy/coordinates/astrometry'
 import { equatorialFromJ2000, equatorialToJ2000, galacticToEquatorial } from '../../../../src/astronomy/coordinates/coordinate'
+import { geodeticLocation, localSiderealTime } from '../../../../src/astronomy/observer/location'
 import { timeJulianYear } from '../../../../src/astronomy/time/time'
 import { CLIENT, DEFAULT_MOUNT } from '../../../../src/devices/indi/device'
 import { MountManager, mountTargetEquatorial } from '../../../../src/devices/indi/manager/mount'
@@ -57,6 +59,31 @@ test('resolves mount targets into a normalized equinox-of-date coordinate', () =
 	expect(normalizeAngle(j2000RightAscension)).toBeCloseTo(hour(5), 9)
 	expect(j2000Declination).toBeCloseTo(deg(23), 9)
 	expect(precessed[0]).not.toBeCloseTo(hour(5), 4)
+})
+
+test('resolves an observed target to the equinox-of-date position that lies at its altitude and azimuth', () => {
+	const site = geodeticLocation(deg(-46), deg(-23), 0)
+	const mount = { ...structuredClone(DEFAULT_MOUNT), geographicCoordinate: site }
+	const time = timeJulianYear(2026)
+	const sinLatitude = Math.sin(site.latitude)
+	const cosLatitude = Math.cos(site.latitude)
+
+	for (const [azimuth, altitude] of [
+		[deg(120), deg(60)],
+		[deg(300), deg(35)],
+	]) {
+		const [rightAscension, declination] = mountTargetEquatorial(mount, { type: 'ALTAZ', ALTAZ: { x: azimuth, y: altitude } }, time)
+
+		// The hour angle from the apparent sidereal time is the equinox-based one, independent of the CIRS path.
+		const hourAngle = localSiderealTime(time, site) - rightAscension
+		const sinAltitude = sinLatitude * Math.sin(declination) + cosLatitude * Math.cos(declination) * Math.cos(hourAngle)
+		const east = -Math.cos(declination) * Math.sin(hourAngle)
+		const north = cosLatitude * Math.sin(declination) - sinLatitude * Math.cos(declination) * Math.cos(hourAngle)
+
+		// One arcsecond, which leaves out polar motion and the diurnal aberration of the reduction.
+		expect(refractedAltitude(Math.asin(sinAltitude))).toBeCloseTo(altitude, 5)
+		expect(normalizeAngle(Math.atan2(east, north))).toBeCloseTo(azimuth, 5)
+	}
 })
 
 test('selects tracking for goto when the driver advertises it', () => {
