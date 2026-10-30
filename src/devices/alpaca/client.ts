@@ -1,6 +1,6 @@
 import { AlpacaCameraApi, AlpacaCoverCalibratorApi, AlpacaDomeApi, type AlpacaDeviceApi, AlpacaFilterWheelApi, AlpacaFocuserApi, AlpacaManagementApi, AlpacaObservingConditionsApi, AlpacaRotatorApi, AlpacaSafetyMonitorApi, AlpacaTelescopeApi } from './api'
 // oxfmt-ignore
-import { type AlpacaAxisRate, type AlpacaCameraSensorType, type AlpacaCameraState, type AlpacaConfiguredDevice, type AlpacaDeviceType, AlpacaDomeShutterState, AlpacaException, type AlpacaRequestResult, type AlpacaStateItem, type AlpacaTelescopeEquatorialCoordinateType, type AlpacaTelescopePierSide, type AlpacaTelescopeTrackingRate, alpacaImageElementTypeToBitpix, type ImageBytesMetadata } from './types'
+import { type AlpacaAxisRate, type AlpacaCameraSensorType, type AlpacaCameraState, type AlpacaConfiguredDevice, type AlpacaDeviceType, AlpacaDomeShutterState, AlpacaException, type AlpacaRequestResult, type AlpacaStateItem, AlpacaTelescopeAlignmentMode, type AlpacaTelescopeEquatorialCoordinateType, type AlpacaTelescopePierSide, type AlpacaTelescopeTrackingRate, alpacaImageElementTypeToBitpix, type ImageBytesMetadata } from './types'
 import { equatorialFromJ2000, equatorialToJ2000 } from '../../astronomy/coordinates/coordinate'
 import { SIDEREAL_RATE } from '../../core/constants'
 import { computeRemainingBytes, FITS_BLOCK_SIZE, FITS_HEADER_CARD_SIZE, type FitsHeader, FitsKeywordWriter } from '../../io/formats/fits/fits'
@@ -1211,6 +1211,8 @@ interface AlpacaClientTelescopeState extends AlpacaClientDeviceState {
 	readonly TrackingRates?: readonly AlpacaTelescopeTrackingRate[]
 	TrackingRate?: AlpacaTelescopeTrackingRate
 	readonly CanSetSideOfPier: boolean
+	// Alignment mode of the mount, read once at connection.
+	readonly AlignmentMode?: AlpacaTelescopeAlignmentMode
 	readonly SideOfPier?: AlpacaTelescopePierSide
 	UTCDate?: string
 	LastUTCDateUpdate: number
@@ -1232,7 +1234,7 @@ class AlpacaTelescope extends AlpacaDevice {
 	// https://ascom-standards.org/newdocs/telescope.html#Telescope.DeviceState
 	// oxfmt-ignore
 	protected readonly state: AlpacaClientTelescopeState = { Connected: false, Step: 0, CanTrack: false, CanHome: false, CanPark: false, CanMovePrimaryAxis: false, CanMoveSecondaryAxis: false, CanPulseGuide: false, CanSlew: false, CanSync: false, CanSetGuideRate: false, CanSetSideOfPier: false, Tracking: false, AtPark: false, IsPulseGuiding: false, Slewing: false, LastUTCDateUpdate: 0, EquatorialSystem: 1 }
-	protected readonly initialEndpoints = ['CanHome', 'CanPark', 'CanMovePrimaryAxis', 'CanMoveSecondaryAxis', 'CanPulseGuide', 'CanTrack', 'CanSlew', 'CanSync', 'CanSetGuideRate', 'SlewRates', 'TrackingRates', 'CanSetSideOfPier', 'EquatorialSystem'] as const
+	protected readonly initialEndpoints = ['CanHome', 'CanPark', 'CanMovePrimaryAxis', 'CanMoveSecondaryAxis', 'CanPulseGuide', 'CanTrack', 'CanSlew', 'CanSync', 'CanSetGuideRate', 'SlewRates', 'TrackingRates', 'CanSetSideOfPier', 'AlignmentMode', 'EquatorialSystem'] as const
 	protected readonly deviceStateEndpoints = ['AtPark', 'Declination', 'IsPulseGuiding', 'RightAscension', 'SideOfPier', 'Slewing', 'Tracking'] as const
 	protected readonly runningEndpoints = ['TrackingRate', 'GuideRateRA', 'GuideRateDEC', 'Latitude', 'Longitude', 'Elevation', 'UTCDate'] as const
 
@@ -1249,6 +1251,7 @@ class AlpacaTelescope extends AlpacaDevice {
 	readonly #geographicCoordinate = makeNumberVector('', 'GEOGRAPHIC_COORD', 'Location', MAIN_CONTROL, 'rw', ['LAT', 'Latitude (deg)', 0, -90, 90, 0.1, '%12.8f'], ['LONG', 'Longitude (deg)', 0, 0, 360, 0.1, '%12.8f'], ['ELEV', 'Elevation (m)', 0, -200, 10000, 1, '%.1f'])
 	readonly #park = makeSwitchVector('', 'TELESCOPE_PARK', 'Parking', MAIN_CONTROL, 'OneOfMany', 'rw', ['PARK', 'Park', false], ['UNPARK', 'Unpark', true])
 	readonly #pierSide = makeSwitchVector('', 'TELESCOPE_PIER_SIDE', 'Pier Side', MAIN_CONTROL, 'AtMostOne', 'ro', ['PIER_EAST', 'East', false], ['PIER_WEST', 'West', false])
+	readonly #mountType = makeSwitchVector('', 'TELESCOPE_MOUNT_TYPE', 'Mount Type', MAIN_CONTROL, 'OneOfMany', 'ro', ['ALTAZ', 'Alt/Az', false], ['EQ_FORK', 'Fork (Eq)', false], ['EQ_GEM', 'GEM', false])
 	readonly #guideRate = makeNumberVector('', 'GUIDE_RATE', 'Guiding Rate', MAIN_CONTROL, 'ro', ['GUIDE_RATE_WE', 'W/E Rate', 0.5, 0, 1, 0.1, '%.8f'], ['GUIDE_RATE_NS', 'N/E Rate', 0.5, 0, 1, 0.1, '%.0f'])
 	readonly #guideNS = makeNumberVector('', 'TELESCOPE_TIMED_GUIDE_NS', 'Guide N/S', MAIN_CONTROL, 'rw', ['TIMED_GUIDE_N', 'North (ms)', 0, 0, 60000, 1, '%.0f'], ['TIMED_GUIDE_S', 'South (ms)', 0, 0, 60000, 1, '%.0f'])
 	readonly #guideWE = makeNumberVector('', 'TELESCOPE_TIMED_GUIDE_WE', 'Guide W/E', MAIN_CONTROL, 'rw', ['TIMED_GUIDE_W', 'West (ms)', 0, 0, 60000, 1, '%.0f'], ['TIMED_GUIDE_E', 'East (ms)', 0, 0, 60000, 1, '%.0f'])
@@ -1279,6 +1282,7 @@ class AlpacaTelescope extends AlpacaDevice {
 		this.#geographicCoordinate.device = this.name
 		this.#park.device = this.name
 		this.#pierSide.device = this.name
+		this.#mountType.device = this.name
 		this.#guideRate.device = this.name
 		this.#guideNS.device = this.name
 		this.#guideWE.device = this.name
@@ -1298,6 +1302,7 @@ class AlpacaTelescope extends AlpacaDevice {
 		this.registerEndpoint('TrackingRates', () => api.getTrackingRates(this.id), false)
 		this.registerEndpoint('TrackingRate', () => api.getTrackingRate(this.id), false, 60)
 		this.registerEndpoint('CanSetSideOfPier', () => api.canSetSideOfPier(this.id), false)
+		this.registerEndpoint('AlignmentMode', () => api.getAlignmentMode(this.id), false)
 		this.registerEndpoint('Latitude', () => api.getSiteLatitude(this.id), false, 60)
 		this.registerEndpoint('Longitude', () => api.getSiteLongitude(this.id), false, 60)
 		this.registerEndpoint('Elevation', () => api.getSiteElevation(this.id), false, 60)
@@ -1393,6 +1398,14 @@ class AlpacaTelescope extends AlpacaDevice {
 			this.#publishGeographicCoordinate()
 
 			this.sendDefProperty(this.#pierSide)
+
+			// A mount that fails to report it stays unknown, since a driver is not required to answer.
+			if (this.state.AlignmentMode !== undefined) {
+				this.#mountType.elements.ALTAZ.value = this.state.AlignmentMode === AlpacaTelescopeAlignmentMode.ALTAZ
+				this.#mountType.elements.EQ_FORK.value = this.state.AlignmentMode === AlpacaTelescopeAlignmentMode.POLAR
+				this.#mountType.elements.EQ_GEM.value = this.state.AlignmentMode === AlpacaTelescopeAlignmentMode.GERMAN_POLAR
+				this.sendDefProperty(this.#mountType)
+			}
 
 			this.disableEndpoints(...this.initialEndpoints)
 

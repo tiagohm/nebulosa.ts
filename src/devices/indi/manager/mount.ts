@@ -456,6 +456,12 @@ export class MountManager extends DeviceManager<Mount> {
 				}
 
 				return
+			case 'TELESCOPE_MOUNT_TYPE':
+				if (handleTextValue(device, 'mountType', elements.ALTAZ?.value === true ? 'ALTAZ' : elements.EQ_FORK?.value === true ? 'EQ_FORK' : elements.EQ_GEM?.value === true ? 'EQ_GEM' : 'UNKNOWN')) {
+					this.updated(device, 'mountType', message.state)
+				}
+
+				return
 			case 'TELESCOPE_PARK':
 				handleParkable(this, device, message, tag)
 				return
@@ -687,6 +693,9 @@ export class MountManager extends DeviceManager<Mount> {
 			resetDeviceValue(this, device, 'hasPierSide', DEFAULT_MOUNT.hasPierSide)
 			resetDeviceValue(this, device, 'canSetPierSide', DEFAULT_MOUNT.canSetPierSide)
 			resetDeviceValue(this, device, 'pierSide', DEFAULT_MOUNT.pierSide)
+		}
+		if (full || name === 'TELESCOPE_MOUNT_TYPE') {
+			resetDeviceValue(this, device, 'mountType', DEFAULT_MOUNT.mountType)
 		}
 		if (full || name === 'TELESCOPE_PARK') {
 			resetDeviceValue(this, device, 'canPark', DEFAULT_MOUNT.canPark)

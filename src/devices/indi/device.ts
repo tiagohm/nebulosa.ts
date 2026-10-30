@@ -23,8 +23,8 @@ export type CameraTransferFormat = 'FITS' | 'XISF' | 'NATIVE'
 // Side of the pier a German equatorial mount is on (NEITHER = unknown/not applicable).
 export type PierSide = 'EAST' | 'WEST' | 'NEITHER'
 
-// Mount mechanical type.
-export type MountType = 'ALTAZ' | 'EQ_FORK' | 'EQ_GEM'
+// Mount mechanical type. UNKNOWN is a mount that has not reported it; do not read it as equatorial.
+export type MountType = 'UNKNOWN' | 'ALTAZ' | 'EQ_FORK' | 'EQ_GEM'
 
 // Sidereal/solar/lunar/King/custom tracking rate selector.
 export type TrackMode = 'SIDEREAL' | 'SOLAR' | 'LUNAR' | 'KING' | 'CUSTOM'
@@ -589,7 +589,7 @@ export const DEFAULT_MOUNT: Mount = {
 	canMoveNS: false,
 	canMoveWE: false,
 	slewRates: [],
-	mountType: 'EQ_GEM',
+	mountType: 'UNKNOWN',
 	trackModes: [],
 	trackMode: 'SIDEREAL',
 	hasPierSide: false,

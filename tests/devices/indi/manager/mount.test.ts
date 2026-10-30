@@ -86,6 +86,31 @@ test('resolves an observed target to the equinox-of-date position that lies at i
 	}
 })
 
+test('reads the mechanical type the driver reports and forgets it with the property', () => {
+	const manager = new MountManager()
+	const mount = setupTestMount(manager)
+	expect(mount.mountType === 'UNKNOWN').toBeTrue()
+
+	const vector = (element: string): DefSwitchVector =>
+		({
+			device: mount.name,
+			name: 'TELESCOPE_MOUNT_TYPE',
+			permission: 'ro',
+			rule: 'OneOfMany',
+			state: 'Idle',
+			elements: { ALTAZ: defSwitch('ALTAZ', element === 'ALTAZ'), EQ_FORK: defSwitch('EQ_FORK', element === 'EQ_FORK'), EQ_GEM: defSwitch('EQ_GEM', element === 'EQ_GEM') },
+		}) as never
+
+	manager.switchVector(recordingClient, vector('ALTAZ'), 'defSwitchVector')
+	expect(mount.mountType === 'ALTAZ').toBeTrue()
+
+	manager.switchVector(recordingClient, vector('EQ_FORK'), 'defSwitchVector')
+	expect(mount.mountType === 'EQ_FORK').toBeTrue()
+
+	manager.delProperty(recordingClient, { device: mount.name, name: 'TELESCOPE_MOUNT_TYPE' })
+	expect(mount.mountType === 'UNKNOWN').toBeTrue()
+})
+
 test('selects tracking for goto when the driver advertises it', () => {
 	const manager = new MountManager()
 	const mount = setupTestMount(manager)
