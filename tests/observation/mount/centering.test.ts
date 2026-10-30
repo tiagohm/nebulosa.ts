@@ -17,7 +17,7 @@ import { bufferSource } from '../../../src/io/io'
 import { type Angle, deg, normalizeAngle, toArcsec, toDeg } from '../../../src/math/units/angle'
 import type { CameraCaptureHooks, CameraCapturer, CameraCaptureResult } from '../../../src/observation/capture/capture'
 // oxfmt-ignore
-import { type CenteringCaptureOptions, type CenteringFrame, type CenteringOptions, type CenteringResult, type CenteringServices, type CenteringSolver, type CenteringTarget, centerTarget, centeringCaptureRequest, exposureMidpoint } from '../../../src/observation/mount/centering'
+import { type CenteringCaptureOptions, type CenteringCorrection, type CenteringFrame, type CenteringMeasurement, type CenteringOptions, type CenteringResult, type CenteringServices, type CenteringSolver, type CenteringStep, type CenteringTarget, centerTarget, centeringCaptureRequest, centeringStalled, exposureMidpoint } from '../../../src/observation/mount/centering'
 import type { CameraCaptureStart } from '../../../src/observation/capture/types'
 import { applyPointingOffset, computePointingError } from '../../../src/observation/mount/pointing'
 import { isBinaryTestSkipped, waitUntil } from '../../util'
@@ -261,6 +261,134 @@ describe('centering loop', () => {
 		expect(calls).toBe(3)
 		expect(sky.commands).toEqual([])
 		for (const attempt of [1, 2, 3]) expect(existsSync(join(directory, `aux.${attempt}.fit`))).toBeFalse()
+	})
+
+	test('no correction allowed only measures: nothing is commanded, even far from the target', async () => {
+		const sky = new FakeMount([TARGET.rightAscension, TARGET.declination], deg(5), 0)
+		const { run, starts } = harness(sky, skySolver(sky))
+		const result = await run({ maximumCorrections: 0 })
+
+		expect(result).toMatchObject({ ok: false, reason: 'unexpectedState' })
+		expect(starts).toHaveLength(1)
+		expect(sky.commands).toEqual([])
+	})
+
+	test('measuring repeats a frame without a solution and still commands nothing', async () => {
+		const sky = new FakeMount([TARGET.rightAscension, TARGET.declination], 0, 0)
+		const results = [undefined, tanSolution(...sky.sky())]
+		const { run, starts } = harness(sky, () => Promise.resolve(results.shift()))
+
+		expect(await run({ maximumCorrections: 0 })).toMatchObject({ ok: true, value: { attempts: 2 } })
+		expect(starts).toHaveLength(2)
+		expect(sky.commands).toEqual([])
+	})
+
+	test('the corrections are bounded apart from the attempts', async () => {
+		const sky = new FakeMount([TARGET.rightAscension, TARGET.declination], deg(1), 0)
+		sky.stuck = true
+		const { run, starts } = harness(sky, skySolver(sky))
+
+		expect(await run({ maximumAttempts: 6, maximumCorrections: 2 })).toMatchObject({ ok: false, reason: 'unexpectedState' })
+		expect(sky.commands).toHaveLength(2)
+		expect(starts).toHaveLength(3)
+	})
+
+	test('frames in a row without a solution end the centering before its attempts run out', async () => {
+		const sky = new FakeMount([TARGET.rightAscension, TARGET.declination], deg(1), 0)
+		const { run, starts } = harness(sky, () => Promise.resolve(undefined))
+
+		expect(await run({ maximumAttempts: 6, maximumUnsolved: 2 })).toMatchObject({ ok: false, reason: 'commandFailed' })
+		expect(starts).toHaveLength(2)
+		expect(sky.commands).toEqual([])
+	})
+
+	test('a solved frame resets the frames without a solution in a row', async () => {
+		const sky = new FakeMount([TARGET.rightAscension, TARGET.declination], deg(10 / 60), 0)
+		const results: (PlateSolution | undefined)[] = [undefined, tanSolution(...sky.sky()), undefined]
+		const solver: CenteringSolver = () => Promise.resolve(results.length > 0 ? results.shift() : tanSolution(...sky.sky()))
+		const { run } = harness(sky, solver)
+
+		expect(await run({ maximumAttempts: 4, maximumUnsolved: 2 })).toMatchObject({ ok: true, value: { attempts: 4 } })
+		expect(sky.commands).toHaveLength(1)
+	})
+
+	test('corrections that do not shrink the distance end the centering at the stall limit', async () => {
+		const sky = new FakeMount([TARGET.rightAscension, TARGET.declination], deg(1), 0)
+		sky.stuck = true
+		const { run, starts } = harness(sky, skySolver(sky))
+
+		expect(await run({ maximumAttempts: 6, stallLimit: 2 })).toMatchObject({ ok: false, reason: 'unexpectedState', error: 'the distance to the target did not shrink in 2 corrections' })
+		expect(starts).toHaveLength(3)
+		expect(sky.commands).toHaveLength(2)
+	})
+
+	test('a shrinking distance resets the stall', () => {
+		expect(centeringStalled(undefined, 1)).toBeFalse()
+		expect(centeringStalled(2, 1)).toBeFalse()
+		expect(centeringStalled(1, 1)).toBeTrue()
+		expect(centeringStalled(1, 2)).toBeTrue()
+	})
+
+	test('the observer sees every step and measurement, and the last measurement of a failure', async () => {
+		const sky = new FakeMount([TARGET.rightAscension, TARGET.declination], deg(1), deg(-1))
+		sky.stuck = true
+		const { services, run } = harness(sky, skySolver(sky))
+		const steps: string[] = []
+		const measurements: CenteringMeasurement[] = []
+		Object.assign(services, { observer: { step: (step: CenteringStep, attempt: number) => steps.push(`${step} ${attempt}`), measured: (measurement: CenteringMeasurement) => measurements.push(measurement) } })
+
+		expect(await run({ maximumAttempts: 2 })).toMatchObject({ ok: false, reason: 'unexpectedState' })
+		expect(steps).toEqual(['exposing 1', 'solving 1', 'correcting 1', 'settling 1', 'exposing 2', 'solving 2'])
+		expect(measurements.map(({ attempt }) => attempt)).toEqual([1, 2])
+		expect(toDeg(measurements[1].dx!)).toBeCloseTo(1, 3)
+		expect(toDeg(measurements[1].dy!)).toBeCloseTo(-1, 3)
+		expect(toDeg(measurements[1].separation!)).toBeCloseTo(Math.SQRT2, 3)
+	})
+
+	test('a frame without a solution is measured with its attempt alone', async () => {
+		const sky = new FakeMount([TARGET.rightAscension, TARGET.declination], 0, 0)
+		const { services, run } = harness(sky, () => Promise.resolve(undefined))
+		const measurements: CenteringMeasurement[] = []
+		Object.assign(services, { observer: { measured: (measurement: CenteringMeasurement) => measurements.push(measurement) } })
+
+		await run({ maximumAttempts: 1 })
+		expect(measurements).toEqual([{ attempt: 1 }])
+	})
+
+	test('a correction the observer refuses commands nothing and fails with its text', async () => {
+		const sky = new FakeMount([TARGET.rightAscension, TARGET.declination], deg(10 / 60), 0)
+		const { services, run } = harness(sky, skySolver(sky))
+		const corrections: CenteringCorrection[] = []
+		const beforeCorrection = (correction: CenteringCorrection) => {
+			corrections.push(correction)
+			return 'below the horizon'
+		}
+		Object.assign(services, { observer: { beforeCorrection } })
+
+		expect(await run({ syncMount: false })).toMatchObject({ ok: false, reason: 'unexpectedState', error: 'below the horizon' })
+		expect(sky.commands).toEqual([])
+		expect(corrections).toHaveLength(1)
+		const expected = applyPointingOffset(TARGET.rightAscension, TARGET.declination, -deg(10 / 60), 0)
+		expect(arcsec(angularDistance(corrections[0].rightAscension, corrections[0].declination, expected.rightAscension, expected.declination))).toBeLessThan(3)
+	})
+
+	test('a refused correction with sync neither syncs nor slews', async () => {
+		const sky = new FakeMount([TARGET.rightAscension, TARGET.declination], deg(10 / 60), 0)
+		const { services, run } = harness(sky, skySolver(sky))
+		Object.assign(services, { observer: { beforeCorrection: () => 'refused' } })
+
+		expect(await run({ syncMount: true })).toMatchObject({ ok: false, error: 'refused' })
+		expect(sky.commands).toEqual([])
+	})
+
+	test('the capture listener of the observer reaches every auxiliary capture', async () => {
+		const sky = new FakeMount([TARGET.rightAscension, TARGET.declination], 0, 0)
+		const { services, run, starts } = harness(sky, skySolver(sky))
+		const captureListener = () => {}
+		Object.assign(services, { observer: { captureListener } })
+
+		await run()
+		expect(starts[0].hooks?.listener).toBe(captureListener)
 	})
 
 	test('camera and mount failures end the centering with their failure', async () => {
@@ -579,6 +707,20 @@ describe('on the simulator rig', () => {
 		// Removed after each solve (default 'delete').
 		expect(existsSync(join(directory, 'real.1.fit'))).toBeFalse()
 		expect(existsSync(join(directory, 'real.2.fit'))).toBeFalse()
+		await waitUntil(() => !mount.slewing, 5000, 10)
+	})
+
+	test('a correction of 30″, the smallest kind a centering sends, completes on the simulated mount', async () => {
+		const { mount, camera } = rig.devices()
+		await resetSimulatorRig(rig, rig.devices().focuser.position.value)
+		const solver: CenteringSolver = async (frame) => {
+			const [rightAscension, declination] = await stampedCenter(frame.path)
+			const sky = applyPointingOffset(rightAscension, declination, deg(30 / 3600), 0)
+			return tanSolution(sky.rightAscension, sky.declination)
+		}
+		const options = { ...OPTIONS_RIG, tolerance: deg(10 / 3600), slew: { timeout: 10000 } }
+
+		expect(await centerTarget(rig.coordinator, mount, camera, rigTarget(), options, servicesOf(solver, 'small'))).toMatchObject({ ok: true, value: { attempts: 2 } })
 		await waitUntil(() => !mount.slewing, 5000, 10)
 	})
 

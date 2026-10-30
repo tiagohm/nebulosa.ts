@@ -9,6 +9,7 @@ import { failedOperationResult, type OperationContext, type OperationResult, typ
 import { type AbortableDelay, abortReason, awaitCooperativeJob, type CooperativeJobHealth, type CooperativeJobOutcome } from '../../devices/orchestration/operation.wait'
 import { type Angle, toDeg } from '../../math/units/angle'
 import type { CameraCapturer } from '../capture/capture'
+import type { CameraCaptureListener } from '../capture/reporter'
 import { type CameraCaptureStart, type CameraCaptureClock, DEFAULT_CAMERA_CAPTURE_START, type CameraFrameEvent, exposureTimeInMilliseconds } from '../capture/types'
 import { applyPointingOffset, computePointingError } from './pointing'
 
@@ -25,7 +26,9 @@ import { applyPointingOffset, computePointingError } from './pointing'
 // compared directly with the ICRS center of the solution. A correction sends the mount, in J2000 converted at the wall
 // instant of the injected clock, to the target after a sync to the solved center, or without sync from the position it
 // reports moved against the measured error. Sky offsets use the tangent basis, never a right-ascension difference
-// divided by the cosine of the declination.
+// divided by the cosine of the declination. With no correction allowed it only measures, commanding nothing. A caller
+// follows and gates the loop through an observer, and runs it inside an operation of its own, which holds the devices
+// between the commands, by passing that operation's context as the scope.
 //
 // Conventions: angles in radians, configured durations in seconds turned into milliseconds only at the clock or the
 // commander, wall instants in Unix ms. Each iteration allocates its capture request and a few small objects.
@@ -40,6 +43,15 @@ export interface CenteringOptions {
 	readonly tolerance: Angle
 	// Capture-and-solve iterations, the first one included; safe integer ≥ 1.
 	readonly maximumAttempts: number
+	// Corrections allowed, each a sync or slew followed by a new measurement; safe integer ≥ 0. Zero only measures and
+	// never commands the mount. Default `maximumAttempts - 1`.
+	readonly maximumCorrections?: number
+	// Frames in a row without a solution, at one position, before the centering fails; safe integer ≥ 1. Default:
+	// bounded only by `maximumAttempts`.
+	readonly maximumUnsolved?: number
+	// Corrections in a row that did not shrink the measured distance before the centering fails; safe integer ≥ 1.
+	// Default: bounded only by `maximumCorrections`.
+	readonly stallLimit?: number
 	// Mechanical settle after each corrective slew, in seconds; finite ≥ 0.
 	readonly settle: number
 	// Syncs the mount to the solved center before each corrective slew to the target; without it the slew goes to
@@ -90,6 +102,43 @@ export interface CenteringFrame {
 // ICRS center of a TAN/TAN-SIP solution with known dimensions), or undefined when the frame did not solve.
 export type CenteringSolver = (frame: CenteringFrame, signal: AbortSignal) => Promise<PlateSolution | undefined>
 
+// Step a centering is entering, reported before it starts.
+export type CenteringStep = 'exposing' | 'solving' | 'correcting' | 'settling'
+
+// Outcome of one capture-and-solve iteration. Every field past `attempt` is absent when the frame did not solve.
+export interface CenteringMeasurement {
+	// Iteration, 1-based.
+	readonly attempt: number
+	// Solution of the frame.
+	readonly solution?: PlateSolution
+	// Great-circle distance between the solved center and the target, in radians.
+	readonly separation?: Angle
+	// Eastward offset of the solved center from the target on the plane tangent at the target, in radians.
+	readonly dx?: number
+	// Northward offset of the solved center from the target on the plane tangent at the target, in radians.
+	readonly dy?: number
+}
+
+// Correction a centering is about to command.
+export interface CenteringCorrection extends Required<Omit<CenteringMeasurement, 'solution'>> {
+	// Right ascension the mount will be sent to, J2000, in radians.
+	readonly rightAscension: Angle
+	// Declination the mount will be sent to, J2000, in radians.
+	readonly declination: Angle
+}
+
+// Observer of a centering. Its callbacks run synchronously inside the loop, so they must not await or command devices.
+export interface CenteringObserver {
+	// Receives each step before it starts.
+	readonly step?: (step: CenteringStep, attempt: number) => void
+	// Receives each measurement before it is judged, so the last one is known however the centering ends.
+	readonly measured?: (measurement: CenteringMeasurement) => void
+	// Receives the events of each auxiliary capture.
+	readonly captureListener?: CameraCaptureListener
+	// Last decision before a correction: a text refuses it, nothing is commanded and the centering fails with that text.
+	readonly beforeCorrection?: (correction: CenteringCorrection) => string | undefined
+}
+
 // Services of a centering.
 export interface CenteringServices {
 	// Sync and corrective slews.
@@ -105,6 +154,8 @@ export interface CenteringServices {
 	// Health of the solver across the centerings of its owner; a faulted solver is never called again. Absent treats
 	// each centering alone.
 	readonly solverHealth?: CooperativeJobHealth
+	// Observer of the steps, the measurements and the corrections.
+	readonly observer?: CenteringObserver
 }
 
 // Outcome of a successful centering.
@@ -125,17 +176,22 @@ export interface CenteringResult {
 // `MountCommandOptions.time` read from the clock, then the mechanical settle. A frame
 // without a solution (undefined, non-finite or a rejected solve) consumes its attempt without commanding anything.
 // Failures: the capture or mount failure as is; 'timeout' when a solve timed out; 'commandFailed' when no attempt
-// solved; 'unexpectedState' when the last solution is still off target or the solver is faulted; the reason of the
-// operation signal when cancelled. Never rejects.
+// solved or `maximumUnsolved` frames in a row did not; 'unexpectedState' when the last solution is still off target
+// with no attempt or correction left, the distance stalled for `stallLimit` corrections, the observer refused a
+// correction, or the solver is faulted; the reason of the operation signal when cancelled. Never rejects.
 export async function centerTarget(scope: OperationScope, mount: Mount, camera: Camera, target: CenteringTarget, options: CenteringOptions, services: CenteringServices): Promise<OperationResult<CenteringResult>> {
 	return await scope.start<CenteringResult>('centering', [], (context) => centeringLoop(context, mount, camera, target, options, services)).result
 }
 
 // Iterations of one centering inside its operation.
 async function centeringLoop(context: OperationContext, mount: Mount, camera: Camera, target: CenteringTarget, options: CenteringOptions, services: CenteringServices): Promise<OperationResult<CenteringResult>> {
-	const { tolerance, maximumAttempts, settle, syncMount } = options
-	const { mountCommander, clock } = services
+	const { tolerance, maximumAttempts, maximumCorrections = maximumAttempts - 1, maximumUnsolved, stallLimit, settle, syncMount } = options
+	const { mountCommander, clock, observer } = services
 	let unsolved = 0
+	let unsolvedInARow = 0
+	let corrections = 0
+	let stalled = 0
+	let previous: Angle | undefined
 
 	for (let attempt = 1; attempt <= maximumAttempts; attempt++) {
 		const solved = await captureAndSolve(context, mount, camera, attempt, options, services)
@@ -145,35 +201,55 @@ async function centeringLoop(context: OperationContext, mount: Mount, camera: Ca
 
 		if (solution === undefined) {
 			unsolved++
+			unsolvedInARow++
+			observer?.measured?.({ attempt })
 			if (attempt === maximumAttempts) return failedOperationResult('commandFailed', `no plate solution in ${unsolved} of ${maximumAttempts} attempts`)
+			if (unsolvedInARow === maximumUnsolved) return failedOperationResult('commandFailed', `no plate solution in ${unsolvedInARow} frames in a row`)
 			continue
 		}
 
+		unsolvedInARow = 0
+
 		const separation = angularDistance(target.rightAscension, target.declination, solution.rightAscension, solution.declination)
+		const { dx, dy } = computePointingError(target.rightAscension, target.declination, solution.rightAscension, solution.declination)
+		observer?.measured?.({ attempt, solution, separation, dx, dy })
+
 		if (separation <= tolerance) return successfulOperationResult({ attempts: attempt, separation, solution })
-		if (attempt === maximumAttempts) return failedOperationResult('unexpectedState', `still ${(toDeg(separation) * 3600).toFixed(1)}″ from the target after ${maximumAttempts} attempts`)
+		if (attempt === maximumAttempts || corrections === maximumCorrections) return failedOperationResult('unexpectedState', `still ${(toDeg(separation) * 3600).toFixed(1)}″ from the target after ${attempt} attempts`)
+
+		stalled = centeringStalled(previous, separation) ? stalled + 1 : 0
+		if (stalled === stallLimit) return failedOperationResult('unexpectedState', `the distance to the target did not shrink in ${stalled} corrections`)
+		previous = separation
 
 		// One conversion instant for the whole correction, read from the wall clock of the caller.
 		const time = timeUnix(clock.wallNow() / 1000)
-		let destination = j2000(target.rightAscension, target.declination)
+		let destination = { rightAscension: target.rightAscension, declination: target.declination }
 
-		if (syncMount) {
-			const synced = await mountCommander.sync(context, mount, j2000(solution.rightAscension, solution.declination), { time })
-			if (!synced.ok) return synced
-		} else {
+		if (!syncMount) {
 			if (!mount.hasEquatorialCoordinate) return failedOperationResult('unexpectedState', `mount ${mount.name} publishes no position to correct from`)
 			// Where the mount believes it points, in J2000 at the instant of the slew below.
 			const [rightAscension, declination] = equatorialToJ2000(mount.equatorialCoordinate.rightAscension, mount.equatorialCoordinate.declination, time)
 			// The sky stands at the measured error from what the mount reports, so the mount is sent from where it believes
 			// it is by the offset that brings the solved center onto the target, both in the tangent basis.
-			const error = computePointingError(target.rightAscension, target.declination, solution.rightAscension, solution.declination)
-			const corrected = applyPointingOffset(rightAscension, declination, -error.dx, -error.dy)
-			destination = j2000(corrected.rightAscension, corrected.declination)
+			destination = applyPointingOffset(rightAscension, declination, -dx, -dy)
+		}
+
+		const refused = observer?.beforeCorrection?.({ attempt, separation, dx, dy, ...destination })
+		if (refused !== undefined) return failedOperationResult('unexpectedState', refused)
+
+		observer?.step?.('correcting', attempt)
+
+		if (syncMount) {
+			const synced = await mountCommander.sync(context, mount, j2000(solution.rightAscension, solution.declination), { time })
+			if (!synced.ok) return synced
 		}
 
 		// The tolerance below the measured error makes the commander slew instead of answering "already there".
-		const slewed = await mountCommander.goTo(context, mount, destination, { ...options.slew, tolerance, time })
+		const slewed = await mountCommander.goTo(context, mount, j2000(destination.rightAscension, destination.declination), { ...options.slew, tolerance, time })
 		if (!slewed.ok) return slewed
+
+		corrections++
+		observer?.step?.('settling', attempt)
 
 		const settled = await clock.delay(settle * 1000, context.signal)
 		if (!settled.ok) return settled
@@ -182,20 +258,30 @@ async function centeringLoop(context: OperationContext, mount: Mount, camera: Ca
 	return failedOperationResult('unexpectedState', 'no centering attempt ran')
 }
 
+// Returns whether a measurement taken after a correction is no closer to the target than the one before it, both in
+// radians. `previous` is undefined for the first measurement of a centering, which follows no correction.
+export function centeringStalled(previous: Angle | undefined, separation: Angle) {
+	return previous !== undefined && separation >= previous
+}
+
 // Captures the auxiliary frame of `attempt` and solves it cooperatively; resolves the finite solution, undefined when
 // the frame did not solve, or the failure of the capture, of the solve timeout, of a faulted solver or of the
 // cancellation. The file is disposed of only after the solve ended, whatever its outcome.
 async function captureAndSolve(context: OperationContext, mount: Mount, camera: Camera, attempt: number, options: CenteringOptions, services: CenteringServices): Promise<OperationResult<PlateSolution | undefined>> {
-	const { cameraCapturer, solver, clock, solverHealth } = services
+	const { cameraCapturer, solver, clock, solverHealth, observer } = services
 	const path = services.auxiliaryPath(attempt)
 	const request = centeringCaptureRequest(options.capture, path, mount)
 
 	try {
-		const captured = await cameraCapturer.start(context, camera, request, { clock }).result
+		observer?.step?.('exposing', attempt)
+
+		const captured = await cameraCapturer.start(context, camera, request, { clock, listener: observer?.captureListener }).result
 		if (!captured.ok) return captured
 
 		const { frames } = captured.value
 		if (frames.length !== 1) return failedOperationResult('unexpectedState', `an auxiliary capture produced ${frames.length} frames`)
+
+		observer?.step?.('solving', attempt)
 
 		const frame: CenteringFrame = { path, observedAt: exposureMidpoint(frames[0], request) }
 		const outcome = await awaitCooperativeJob((signal) => solver(frame, signal), { signal: context.signal, timeout: options.solveTimeout * 1000, abortGrace: options.abortGrace * 1000, delay: clock.delay, health: solverHealth })
