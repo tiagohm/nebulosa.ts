@@ -105,6 +105,8 @@ export interface ObserverVectorElementsOptions extends Pick<ReadCsvOptions, 'ski
 	vectorCorrection?: VectorCorrection
 	timeZone?: string | number // +00:00 or UTC offset in minutes
 	timeOfPeriapsisType?: TimeOfPeriapsisType
+	// Extra HTTP headers of every request of the call, such as the User-Agent JPL asks of automated clients.
+	headers?: HeadersInit
 }
 
 // Orbit anomaly specified by perihelion distance and time.
@@ -340,6 +342,7 @@ const DEFAULT_OVE_OPTIONS: Required<ObserverVectorElementsOptions> = {
 	skipFirstLine: true,
 	timeZone: '',
 	timeOfPeriapsisType: 'ABSOLUTE',
+	headers: {},
 }
 
 // Requests an observer-table ephemeris (apparent/astrometric quantities) for `input` (a target name,
@@ -372,7 +375,7 @@ export async function vector(input: string | ObserverWithOsculatingElements | Ob
 	makeParametersFromStartAndStopTime(parameters, startTime, endTime)
 	makeParametersFromOptions(parameters, options)
 	parameters.CSV_FORMAT = 'YES'
-	const response = await makeRequestAndGetResponse(parameters, 'text', signal)
+	const response = await makeRequestAndGetResponse(parameters, 'text', signal, options.headers)
 	const identification = identifyTable(await response.text())
 	if (identification?.kind === 'ephemeris') return parseEphemerisTable(identification, options)
 	return await makeRequestAndGetResponseWithRetry(input, startTime, parameters, options, signal)
@@ -399,7 +402,7 @@ export async function spkFile(id: number, startTime: Temporal | Time, endTime: T
 }
 
 async function makeRequestAndGetResponseWithRetry(input: string | ObserverWithOsculatingElements | ObserverWithTLE, time: Temporal | Time, parameters: HorizonsQueryParameters, options: ObserverVectorElementsOptions, signal?: AbortSignal) {
-	const response = await makeRequestAndGetResponse(parameters, 'text', signal)
+	const response = await makeRequestAndGetResponse(parameters, 'text', signal, options.headers)
 	const identification = identifyTable(await response.text())
 
 	if (identification?.kind === 'ephemeris') return parseEphemerisTable(identification, options)
@@ -413,7 +416,7 @@ async function makeRequestAndGetResponseWithRetry(input: string | ObserverWithOs
 				else input += `CAP<${toJulianDay(time).toFixed(1)};`
 			}
 			makeParametersFromInput(parameters, input)
-			const response = await makeRequestAndGetResponse(parameters, 'text', signal)
+			const response = await makeRequestAndGetResponse(parameters, 'text', signal, options.headers)
 			const identification = identifyTable(await response.text())
 			if (identification?.kind === 'ephemeris') return parseEphemerisTable(identification, options)
 		}
@@ -573,9 +576,9 @@ function formatTimeZone(minutes: number) {
 }
 
 // Builds the request URL from the parameters and fetches the response in the given format.
-function makeRequestAndGetResponse(parameters: HorizonsQueryParameters, format: OutputFormat, signal?: AbortSignal) {
+function makeRequestAndGetResponse(parameters: HorizonsQueryParameters, format: OutputFormat, signal?: AbortSignal, headers?: HeadersInit) {
 	const query = makeQueryFromParameters(parameters)
-	return fetch(`${HORIZONS_BASE_URL}?format=${format}&${query}`, signal !== undefined ? { signal } : undefined)
+	return fetch(`${HORIZONS_BASE_URL}?format=${format}&${query}`, { signal, headers })
 }
 
 // Marker line beginning the ephemeris data block in the text response.

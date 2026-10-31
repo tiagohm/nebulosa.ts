@@ -1,11 +1,107 @@
 import { describe, expect, test } from 'bun:test'
-import { closeApproaches, identify, search } from '../../../src/adapters/orbits/sbd'
+import { assertSupportedSignature, type CloseApproachCatalogQuery, closeApproaches, closeApproachesUrl, identify, parseCloseApproaches, search, SmallBodyResponseError } from '../../../src/adapters/orbits/sbd'
 import { temporalFromDate } from '../../../src/astronomy/time/temporal'
 import { deg, parseAngle } from '../../../src/math/units/angle'
 import { kilometer } from '../../../src/math/units/distance'
 import { isNetworkTestSkipped } from '../../util'
 
 const SKIP = isNetworkTestSkipped()
+
+// Trimmed from cad.api responses of 2026-10-31.
+const SIGNATURE = { source: 'NASA/JPL SBDB Close Approach Data API', version: '1.5' }
+const ALL_BODIES_FIELDS = ['des', 'orbit_id', 'jd', 'cd', 'dist', 'dist_min', 'dist_max', 'v_rel', 'v_inf', 't_sigma_f', 'body', 'h', 'diameter', 'diameter_sigma', 'fullname'] as const
+const APOPHIS = ['99942', '220', '2462240.407091969', '2029-Apr-13 21:46', '0.000254090910419299', '0.000254068999976389', '0.000254112821017663', '7.42253895678452', '5.84135589753103', '< 00:01', 'Earth', '19.09', '0.34', '0.04', ' 99942 Apophis (2004 MN4)']
+const COMET_FIELDS = ['des', 'orbit_id', 'jd', 'cd', 'dist', 'dist_min', 'dist_max', 'v_rel', 'v_inf', 't_sigma_f', 'h'] as const
+const COMET = ['323P', 'K253/2', '2451556.417454654', '2000-Jan-12 22:01', '0.060435122020183', '0.0587478883696102', '0.0623104136716796', '41.4723570563974', '41.4712939669654', '03:53', null] as unknown as string[]
+const CATALOG_QUERY: CloseApproachCatalogQuery = { selector: 'catalog', dateMin: '2026-11-01', dateMax: '2026-11-30', body: 'Earth', distanceMax: 10, distanceUnit: 'LD', sort: 'date', limit: 50, offset: 0 }
+
+describe('close approach url', () => {
+	test('lifts the NEO filter, states every default, and takes the last day whole', () => {
+		const url = new URL(closeApproachesUrl(CATALOG_QUERY))
+		expect(url.pathname).toBe('/cad.api')
+		expect(Object.fromEntries(url.searchParams)).toEqual({ diameter: 'true', fullname: 'true', 'date-min': '2026-11-01', 'date-max': '2026-11-30T23:59:59', body: 'Earth', 'dist-max': '10LD', sort: 'date', limit: '50', neo: 'false' })
+	})
+
+	test('sends the filters asked for and nothing else', () => {
+		const { searchParams } = new URL(closeApproachesUrl({ ...CATALOG_QUERY, body: 'ALL', distanceMax: 0.05, distanceUnit: 'au', neoOnly: true, phaOnly: true, kind: 'a', hMin: 18, hMax: 0, sort: '-dist', offset: 50 }))
+		expect(searchParams.get('neo')).toBe('true')
+		expect(searchParams.get('pha')).toBe('true')
+		expect(searchParams.get('kind')).toBe('a')
+		expect(searchParams.get('h-min')).toBe('18')
+		expect(searchParams.get('h-max')).toBe('0')
+		expect(searchParams.get('dist-max')).toBe('0.05')
+		expect(searchParams.get('sort')).toBe('-dist')
+		expect(searchParams.get('limit-from')).toBe('50')
+		expect(searchParams.get('body')).toBe('ALL')
+	})
+
+	test('never sends the NEO filter for one object, which CAD refuses', () => {
+		const { searchParams } = new URL(closeApproachesUrl({ selector: 'spk', spkId: '20099942', dateMin: '2020-01-01', dateMax: '2039-12-31', body: 'ALL', distanceMax: 100, distanceUnit: 'au', sort: 'date', limit: 50, offset: 0 }))
+		expect(searchParams.get('spk')).toBe('20099942')
+		expect(searchParams.get('dist-max')).toBe('100')
+		expect(searchParams.has('neo')).toBeFalse()
+	})
+})
+
+describe('close approach parser', () => {
+	test('reads a row by column name, keeping the published time and dropping the alignment of the name', () => {
+		const { total, rows, signature } = parseCloseApproaches({ signature: SIGNATURE, count: 1, total: 13, fields: ALL_BODIES_FIELDS, data: [APOPHIS] })
+		expect(signature).toEqual(SIGNATURE)
+		expect(total).toBe(13)
+		expect(rows).toEqual([
+			{
+				designation: '99942',
+				fullName: '99942 Apophis (2004 MN4)',
+				orbitId: '220',
+				body: 'Earth',
+				jd: '2462240.407091969',
+				calendarDate: '2029-Apr-13 21:46',
+				distance: 0.000254090910419299,
+				distanceMin: 0.000254068999976389,
+				distanceMax: 0.000254112821017663,
+				relativeVelocity: 7.42253895678452,
+				infiniteVelocity: 5.84135589753103,
+				timeUncertainty: '< 00:01',
+				absoluteMagnitude: 19.09,
+				diameter: 0.34,
+				diameterSigma: 0.04,
+			},
+		])
+	})
+
+	test('the order of the columns does not matter', () => {
+		const order = ALL_BODIES_FIELDS.map((_, index) => index).toReversed()
+		const page = parseCloseApproaches({ signature: SIGNATURE, count: 1, total: 1, fields: order.map((index) => ALL_BODIES_FIELDS[index]), data: [order.map((index) => APOPHIS[index])] })
+		expect(page).toEqual(parseCloseApproaches({ signature: SIGNATURE, count: 1, total: 1, fields: ALL_BODIES_FIELDS, data: [APOPHIS] }))
+	})
+
+	test('a value CAD does not publish is absent, never zero', () => {
+		const [row] = parseCloseApproaches({ signature: SIGNATURE, count: 1, total: 186, fields: COMET_FIELDS, data: [COMET] }).rows
+		expect(row.designation).toBe('323P')
+		expect(row.absoluteMagnitude).toBeUndefined()
+		expect(row.diameter).toBeUndefined()
+		expect(row.body).toBeUndefined()
+		expect(row.fullName).toBeUndefined()
+	})
+
+	test('a page past the end has no table and keeps the total', () => {
+		expect(parseCloseApproaches({ signature: SIGNATURE, count: 0, total: 53 })).toEqual({ signature: SIGNATURE, total: 53, rows: [] })
+		expect(parseCloseApproaches({ signature: SIGNATURE, count: 0, total: 0 }).rows).toBeEmpty()
+	})
+
+	test('accepts a new minor version and refuses another major one', () => {
+		expect(parseCloseApproaches({ signature: { ...SIGNATURE, version: '1.9' }, count: 0, total: 0 }).total).toBe(0)
+		expect(() => parseCloseApproaches({ signature: { ...SIGNATURE, version: '2.0' }, count: 0, total: 0 })).toThrow(expect.objectContaining({ kind: 'unsupportedVersion', version: '2.0' }))
+		expect(() => assertSupportedSignature(undefined)).toThrow(SmallBodyResponseError)
+	})
+
+	test('refuses a table it cannot trust', () => {
+		const malformed = expect.objectContaining({ kind: 'malformed' })
+		expect(() => parseCloseApproaches({ signature: SIGNATURE, count: 1, total: 1, fields: ALL_BODIES_FIELDS.slice(1), data: [APOPHIS.slice(1)] })).toThrow(malformed)
+		expect(() => parseCloseApproaches({ signature: SIGNATURE, count: 1, total: 1, fields: ALL_BODIES_FIELDS, data: [APOPHIS.slice(1)] })).toThrow(malformed)
+		expect(() => parseCloseApproaches({ signature: SIGNATURE, count: 1, total: 1, fields: ALL_BODIES_FIELDS, data: [APOPHIS.with(4, 'n/a')] })).toThrow(malformed)
+	})
+})
 
 describe.skipIf(SKIP)('search', () => {
 	test('single record', async () => {
@@ -138,5 +234,13 @@ describe.skipIf(SKIP)('close approaches', () => {
 		expect(response.fields).toHaveLength(14)
 		expect(response.data.length).toBeGreaterThanOrEqual(0)
 		// expect(response.data.map((e) => e[0])).toContainValues(asteroids)
+	})
+
+	test('every approach of one object, paged, with the last day whole', async () => {
+		const response = await fetch(closeApproachesUrl({ selector: 'spk', spkId: '20099942', dateMin: '2029-04-13', dateMax: '2029-04-13', body: 'ALL', distanceMax: 100, distanceUnit: 'au', sort: 'date', limit: 1, offset: 0 }))
+		const page = parseCloseApproaches(await response.json())
+		expect(page.total).toBe(1)
+		expect(page.rows[0].fullName).toBe('99942 Apophis (2004 MN4)')
+		expect(page.rows[0].body).toBe('Earth')
 	})
 })
