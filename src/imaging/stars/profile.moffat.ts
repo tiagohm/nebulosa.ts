@@ -241,6 +241,16 @@ export function fitEllipticalMoffat(image: Image, input: MoffatFitInput, workspa
 	return publicFit(parameters, rms, iterations, input)
 }
 
+// Evaluates an accepted fit at a pixel position (x, y), in pixels with integer pixel centers, and returns the modeled
+// sample with its fitted background, in image sample units, so a measured sample can be compared with it directly. A
+// round fit has no orientation (theta absent) and its nearly equal axes are evaluated along the image axes. Allocates
+// one small object per call, so sample a bounded set of positions, not a whole frame.
+export function moffatProfileValue(fit: SuccessfulMoffatProfileFit, x: number, y: number): number {
+	const theta = fit.theta ?? 0
+	const { background, amplitude, centerX, centerY, alphaMajor, alphaMinor, beta } = fit
+	return moffatValueAndJacobian(x, y, { background, amplitude, centerX, centerY, inverseAlphaX2: 1 / (alphaMajor * alphaMajor), inverseAlphaY2: 1 / (alphaMinor * alphaMinor), cosTheta: Math.cos(theta), sinTheta: Math.sin(theta), betaMinusOne: beta - 1, beta })
+}
+
 // Validates finite image geometry and moment-derived initialization before nonlinear fitting.
 function validInput(image: Image, input: MoffatFitInput): boolean {
 	const { width, height, stride, channels } = image.metadata

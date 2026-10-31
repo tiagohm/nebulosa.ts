@@ -360,6 +360,30 @@ test('detect stars keeps a faint field when a few stars are much brighter', () =
 	}
 })
 
+test('detect stars drops a faint star after a score gap unless the trim is off', () => {
+	const size = 120
+	const raw = new Float32Array(size * size).fill(0.1)
+	const positions = [
+		[25, 25, 0.8],
+		[90, 25, 0.8],
+		[25, 90, 0.8],
+		[90, 90, 0.8],
+		[58, 58, 0.012],
+	] as const
+
+	for (const [x, y, peak] of positions) {
+		for (let py = 0; py < size; py++) for (let px = 0; px < size; px++) raw[py * size + px] += peak * Math.exp(-((px - x) ** 2 + (py - y) ** 2) / (2 * 1.5 ** 2))
+	}
+
+	const random = mulberry32(5)
+	for (let i = 0; i < raw.length; i++) raw[i] += (random() - 0.5) * 0.002
+
+	const image: Image = { raw, header: {}, metadata: { width: size, height: size, channels: 1, pixelCount: size * size, pixelSizeInBytes: 4, bitpix: -32, stride: size, strideInBytes: size * 4, bayer: undefined } }
+
+	expect(starNear(detectStars(image), 58, 58, 1.5)).toBeUndefined()
+	expect(starNear(detectStars(image, { scoreGapTrim: false }), 58, 58, 1.5)).toBeDefined()
+})
+
 test('detect stars rejects hot-pixel clumps that a 3x3 mean would turn into stars', () => {
 	const width = 128
 	const height = 128

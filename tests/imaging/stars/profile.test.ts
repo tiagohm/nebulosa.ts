@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test'
 import { PI, PIOVERFOUR } from '../../../src/core/constants'
 import type { Image } from '../../../src/imaging/model/types'
 import { detectStarProfiles, measureStarProfile, measureStarProfiles } from '../../../src/imaging/stars/profile'
+import { moffatProfileValue } from '../../../src/imaging/stars/profile.moffat'
 import { Bitpix } from '../../../src/io/formats/fits/fits'
 import { erfc } from '../../../src/math/numerical/statistics'
 
@@ -172,6 +173,33 @@ test('fits an elliptical Moffat profile at pixel centers', () => {
 	expect(profile.moffat.beta).toBeCloseTo(beta, 2)
 	expect(profile.theta).toBeCloseTo(theta, 2)
 	expect(profile.moffat.rms).toBeLessThan(1e-5)
+})
+
+// Reproduces the samples of the star a fit recovered, background included, whatever the orientation.
+test('evaluates an accepted Moffat fit at pixel positions', () => {
+	const stars = [
+		[3.2, 1.8, 0.65],
+		[2.6, 2.6, 0],
+	] as const
+
+	for (const [alphaMajor, alphaMinor, theta] of stars) {
+		const source = image(81, 81)
+		addMoffat(source, 40.3, 39.7, alphaMajor, alphaMinor, theta, 2.4, 0.65)
+
+		const { moffat } = measureStarProfile(source, { x: 40, y: 40 }, { model: 'moffat', initialRadius: 5, maximumRadius: 20, minSNR: 0 })
+
+		expect(moffat?.success).toBeTrue()
+		if (!moffat?.success) return
+
+		for (const [x, y] of [
+			[40, 40],
+			[37, 42],
+			[46, 35],
+			[20, 60],
+		] as const) {
+			expect(moffatProfileValue(moffat, x, y)).toBeCloseTo(source.raw[y * 81 + x], 4)
+		}
+	}
 })
 
 // Falls back to the valid moment profile when one Moffat component cannot represent a blend.

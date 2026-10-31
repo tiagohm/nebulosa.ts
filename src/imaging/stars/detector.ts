@@ -58,6 +58,9 @@ export interface DetectStarOptions {
 	// its sky annulus, until the star fits; a star that does not fit at this radius, or whose grown
 	// aperture leaves the image, is dropped, and candidates inside a grown aperture are not measured again.
 	readonly maximumRadius?: number
+	// Whether the dim tail after a large score gap is dropped as the noise floor of a frame; true by default. The gap
+	// says nothing in a small region of a frame, where a few bright stars would drop a real faint one, so turn it off there.
+	readonly scoreGapTrim?: boolean
 }
 
 // Integral images for fast box statistics: [running sum, running sum of squares, padded width].
@@ -213,7 +216,7 @@ function median3x3(image: Image) {
 
 // Detects stars in an image and returns them sorted by descending flux (up to maxStars), filtered by
 // minSNR and optionally pruned with the PHD2 search-box uniqueness filter.
-export function detectStars(image: Image, { maxStars = 500, searchRegion = 0, minSNR = 0, maximumRadius = STAR_SIGNAL_RADIUS }: Partial<DetectStarOptions> = DEFAULT_DETECT_STARS_OPTIONS): DetectedStar[] {
+export function detectStars(image: Image, { maxStars = 500, searchRegion = 0, minSNR = 0, maximumRadius = STAR_SIGNAL_RADIUS, scoreGapTrim = true }: Partial<DetectStarOptions> = DEFAULT_DETECT_STARS_OPTIONS): DetectedStar[] {
 	const intensity = starAnalysisImage(image)
 	if (intensity === undefined) return []
 	image = intensity
@@ -350,7 +353,7 @@ export function detectStars(image: Image, { maxStars = 500, searchRegion = 0, mi
 	}
 
 	// Keep only the strongest coherent score cluster when the frame has a clear star-to-noise break.
-	trimStarsByScoreGap(stars)
+	if (scoreGapTrim) trimStarsByScoreGap(stars)
 
 	let i = 0
 	const res = new Array<DetectedStar>(stars.size)
