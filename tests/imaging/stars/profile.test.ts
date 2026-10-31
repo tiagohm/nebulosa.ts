@@ -4,6 +4,7 @@ import type { Image } from '../../../src/imaging/model/types'
 import { detectStarProfiles, measureStarProfile, measureStarProfiles } from '../../../src/imaging/stars/profile'
 import { moffatProfileValue } from '../../../src/imaging/stars/profile.moffat'
 import { Bitpix } from '../../../src/io/formats/fits/fits'
+import { mulberry32 } from '../../../src/math/numerical/random'
 import { erfc } from '../../../src/math/numerical/statistics'
 
 // Creates a normalized mono image suitable for deterministic star-profile measurements.
@@ -398,6 +399,67 @@ test('measures a defocused Gaussian HFD with default aperture growth', () => {
 	expect(profile.hfd).toBeCloseTo(expectedFwhm, 0)
 	expect(profile.fwhm).toBeGreaterThan(expectedFwhm - 1)
 	expect(profile.fwhm).toBeLessThan(expectedFwhm + 0.5)
+})
+
+// Adds uniform noise of a peak-to-peak range, so a sky is not the flat one no real frame has.
+function addNoise(image: Image, range: number, seed: number): void {
+	const random = mulberry32(seed)
+	for (let i = 0; i < image.raw.length; i++) image.raw[i] += (random() - 0.5) * range
+}
+
+// Keeps the aperture of a faint star: the positive noise of its outer band is not light, and following it would take
+// in the neighbors and carry the centroid away.
+test('keeps a faint star on a noisy sky from growing into its neighbors', () => {
+	for (let seed = 1; seed <= 10; seed++) {
+		const source = image(129, 129)
+		addGaussian(source, 64, 64, 1.5, 1.5, 0, 0.05)
+		addGaussian(source, 94, 56, 1.5, 1.5, 0, 0.4)
+		addGaussian(source, 40, 85, 1.5, 1.5, 0, 0.3)
+		addGaussian(source, 85, 94, 1.5, 1.5, 0, 0.6)
+		addNoise(source, 0.01, seed)
+
+		const profile = measureStarProfile(source, { x: 64, y: 64 }, { minSNR: 0 })
+
+		expect(Math.hypot(profile.x - 64, profile.y - 64)).toBeLessThan(0.5)
+		expect(profile.hfd).toBeLessThan(5)
+		expect(profile.valid).toBeTrue()
+		expect(profile.flags).not.toContain('clipped')
+	}
+})
+
+// Still follows a star that does continue past the aperture, on the same kind of sky.
+test('grows over a defocused Gaussian on a noisy sky', () => {
+	const sigma = 10
+	const expectedHfd = 2 * Math.sqrt(2 * Math.LN2) * sigma
+	const source = image(129, 129)
+	addGaussian(source, 64, 64, sigma, sigma, 0, 0.6)
+	addNoise(source, 0.01, 3)
+
+	const profile = measureStarProfile(source, { x: 64, y: 64 }, { minSNR: 0 })
+
+	expect(profile.hfd).toBeCloseTo(expectedHfd, -0.5)
+	expect(Math.hypot(profile.x - 64, profile.y - 64)).toBeLessThan(0.5)
+	expect(profile.flags).not.toContain('clipped')
+})
+
+// Grows off the flat face of a defocused star, where the sky annulus of a small aperture lies on the star itself and
+// the outer band shows no light.
+test('grows over the flat face of a defocused star', () => {
+	const radius = 12
+	const source = image(129, 129)
+
+	for (let y = 0; y < 129; y++) {
+		for (let x = 0; x < 129; x++) {
+			if (Math.hypot(x - 64, y - 64) <= radius) source.raw[y * 129 + x] += 0.3
+		}
+	}
+
+	addNoise(source, 0.004, 5)
+
+	const profile = measureStarProfile(source, { x: 64, y: 64 }, { minSNR: 0 })
+
+	expect(profile.hfd).toBeCloseTo(radius * Math.SQRT2, -0.5)
+	expect(profile.flags).not.toContain('clipped')
 })
 
 // Does not publish a truncated curve of growth as a valid HFD when growth passes run out.

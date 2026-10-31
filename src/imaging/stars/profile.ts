@@ -4,7 +4,7 @@ import { medianBySelectionOf, medianOf, STANDARD_DEVIATION_SCALE } from '../../m
 import type { Angle } from '../../math/units/angle'
 import type { Image, ImageChannelOrGray } from '../model/types'
 import { grayscale } from '../processing/geometry'
-import { addToCurveOfGrowth, curveOfGrowthBinCount, type DetectStarOptions, detectStars, halfFluxDiameter } from './detector'
+import { addToCurveOfGrowth, curveOfGrowthBinCount, type DetectStarOptions, detectStars, halfFluxDiameter, STAR_GROWTH_SIGNIFICANCE } from './detector'
 import { createMoffatFitWorkspace, fitEllipticalMoffat, type MoffatFitWorkspace, type MoffatProfileFit } from './profile.moffat'
 import { starMomentShape } from './shape'
 
@@ -28,7 +28,7 @@ const DEFAULT_MIN_SNR = 3
 const DEFAULT_BORDER_MARGIN = 4
 // Default allowed fraction of saturated signal-aperture samples.
 const DEFAULT_MAXIMUM_SATURATED_FRACTION = 0
-// Largest permitted positive signal fraction in the outer one-pixel aperture band before growing the ROI.
+// Smallest fraction of the flux in the outer one-pixel aperture band that still counts as light beyond the aperture.
 const OUTER_FLUX_FRACTION = 0.01
 // Minimum eccentricity that makes a major-axis direction meaningful.
 const MIN_ORIENTATION_ECCENTRICITY = 0.05
@@ -153,8 +153,14 @@ interface SignalMeasurement {
 	readonly peak: number
 	// Fraction of aperture samples at or above the saturation threshold.
 	readonly saturatedFraction: number
-	// Positive signal in the outer one-pixel aperture band in image sample units.
-	readonly outerFlux: number
+	// Signed signal of the outer one-pixel aperture band in image sample units; noise averages out of it.
+	readonly outerSignal: number
+	// Number of finite samples in the outer one-pixel aperture band.
+	readonly outerPixels: number
+	// Signed signal of the whole aperture in image sample units; noise averages out of it.
+	readonly netSignal: number
+	// Number of finite samples in the aperture.
+	readonly finitePixels: number
 	// Whether a non-finite signal-aperture sample was ignored.
 	readonly nonFinite: boolean
 }
@@ -318,7 +324,10 @@ function measureSignal(image: Image, x: number, y: number, radius: number, backg
 	let peak = 0
 	let saturated = 0
 	let refinedAperturePixels = 0
-	let outerFlux = 0
+	let outerSignal = 0
+	let outerPixels = 0
+	let netSignal = 0
+	let finitePixels = 0
 	const outerRadius = Math.max(0, radius - 1)
 	const outerRadiusSq = outerRadius * outerRadius
 
@@ -339,6 +348,14 @@ function measureSignal(image: Image, x: number, y: number, radius: number, backg
 			}
 			if (value >= saturationLevel) saturated++
 			const signal = value - background
+			netSignal += signal
+			finitePixels++
+
+			if (distanceSq >= outerRadiusSq) {
+				outerSignal += signal
+				outerPixels++
+			}
+
 			if (signal <= 0) continue
 
 			refinedFlux += signal
@@ -346,7 +363,6 @@ function measureSignal(image: Image, x: number, y: number, radius: number, backg
 			momentXY += signal * dx * dy
 			momentYY += signal * dySq
 			if (signal > peak) peak = signal
-			if (distanceSq >= outerRadiusSq) outerFlux += signal
 			addToCurveOfGrowth(scratch.bins, Math.sqrt(distanceSq), signal)
 		}
 	}
@@ -373,9 +389,25 @@ function measureSignal(image: Image, x: number, y: number, radius: number, backg
 		theta: shape.theta,
 		peak,
 		saturatedFraction: saturated / refinedAperturePixels,
-		outerFlux,
+		outerSignal,
+		outerPixels,
+		netSignal,
+		finitePixels,
 		nonFinite,
 	}
+}
+
+// Whether a star continues past its aperture: the signed signal of the outer band holds a real part of the flux and
+// stands out of the sky noise. The noise of a real sky is not light, and it would keep the positive samples of the band
+// above any fraction of the flux of all but bright stars.
+function hasLightBeyond({ outerSignal, outerPixels, flux }: SignalMeasurement, deviation: number): boolean {
+	return outerSignal > flux * OUTER_FLUX_FRACTION && outerSignal > STAR_GROWTH_SIGNIFICANCE * deviation * Math.sqrt(outerPixels)
+}
+
+// Whether the aperture stands out of its sky annulus at all; it does not when the annulus lies on the flat face of a
+// larger star, or there is no star.
+function standsOutOfSky({ netSignal, finitePixels }: SignalMeasurement, deviation: number): boolean {
+	return netSignal > STAR_GROWTH_SIGNIFICANCE * deviation * Math.sqrt(finitePixels)
 }
 
 // Detects a separated secondary local maximum that makes the single-star aperture plausibly blended.
@@ -432,7 +464,7 @@ function profileFromMeasurement(width: number, height: number, sourceIndex: numb
 	const minor = measurement.minorVariance !== undefined ? GAUSSIAN_FWHM_FACTOR * Math.sqrt(measurement.minorVariance) : undefined
 	const fwhm = major !== undefined && minor !== undefined ? Math.sqrt(major * minor) : undefined
 	const borderDistance = Math.min(measurement.x, measurement.y, width - 1 - measurement.x, height - 1 - measurement.y)
-	if (reachedBorder && (measurement.outerFlux > measurement.flux * OUTER_FLUX_FRACTION || borderDistance < options.initialRadius || (major !== undefined && borderDistance < 0.5 * major))) addFlag(flags, 'clipped')
+	if (reachedBorder && (hasLightBeyond(measurement, background.deviation) || borderDistance < options.initialRadius || (major !== undefined && borderDistance < 0.5 * major))) addFlag(flags, 'clipped')
 
 	if (major === undefined || minor === undefined || measurement.eccentricity === undefined || measurement.elongation === undefined) addFlag(flags, 'degenerateShape')
 
@@ -521,7 +553,7 @@ function measureStarProfileFromGrayscale(image: Image, star: Readonly<Point>, op
 		const minor = measurement.minorVariance !== undefined ? GAUSSIAN_FWHM_FACTOR * Math.sqrt(measurement.minorVariance) : undefined
 		const fwhm = major !== undefined && minor !== undefined ? Math.sqrt(major * minor) : undefined
 		const desiredRadius = fwhm !== undefined ? clamp(Math.ceil(Math.max(DEFAULT_INITIAL_RADIUS, fwhm * 2)), options.initialRadius, options.maximumRadius) : radius
-		const settled = measurement.outerFlux <= measurement.flux * OUTER_FLUX_FRACTION
+		const settled = standsOutOfSky(measurement, background.deviation) && !hasLightBeyond(measurement, background.deviation)
 		reachedBorder ||= measurement.x - radius <= 0 || measurement.y - radius <= 0 || measurement.x + radius >= width - 1 || measurement.y + radius >= height - 1
 		finalBackground = background
 		finalMeasurement = measurement
@@ -529,7 +561,7 @@ function measureStarProfileFromGrayscale(image: Image, star: Readonly<Point>, op
 		const shifted = Math.hypot(measurement.x - x, measurement.y - y)
 		x = measurement.x
 		y = measurement.y
-		const nextRadius = !settled ? Math.min(options.maximumRadius, Math.max(desiredRadius, radius + 2)) : desiredRadius
+		const nextRadius = settled ? radius : Math.min(options.maximumRadius, Math.max(desiredRadius, radius + 2))
 
 		if (shifted <= 0.05 && nextRadius === radius) break
 		// Do not publish an unmeasured aperture: blend checks and Moffat fits must use the last measured radius.

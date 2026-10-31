@@ -131,7 +131,7 @@ const STAR_HFD_BIN_WIDTH = 0.25
 const STAR_HFD_SAMPLE_HALF_WIDTH = 0.5
 // Significance, in standard errors, that makes an adaptive aperture grow: of the mean signal of its
 // edge band above the sky, or of its sky annulus above the distant sky.
-const STAR_GROWTH_SIGNIFICANCE = 4
+export const STAR_GROWTH_SIGNIFICANCE = 4
 // Standard error of the median of normal samples relative to that of their mean, sqrt(PI / 2).
 const MEDIAN_STANDARD_ERROR_SCALE = Math.sqrt(Math.PI / 2)
 // Number of samples of the distant sky circle of an adaptive aperture. 32 gives a median standard error
