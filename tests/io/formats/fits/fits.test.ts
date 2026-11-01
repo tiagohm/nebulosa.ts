@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import fs from 'fs/promises'
 import { readImageFromBuffer, readImageFromFits, readImageFromPath } from '../../../../src/imaging/model/image'
 import { fileHandleSource } from '../../../../src/io/file'
-import { FITS_BLOCK_SIZE, FITS_HEADER_CARD_SIZE, type FitsHdu, type FitsHeader, type FitsHeaderCard, FitsImageReader, FitsImageWriter, FitsKeywordReader, FitsKeywordWriter, isFits, readFits, writeFits } from '../../../../src/io/formats/fits/fits'
+import { FITS_BLOCK_SIZE, FITS_HEADER_CARD_SIZE, type FitsHdu, type FitsHeader, type FitsHeaderCard, FitsImageReader, FitsImageRowWriter, FitsImageWriter, FitsKeywordReader, FitsKeywordWriter, isFits, readFits, writeFits } from '../../../../src/io/formats/fits/fits'
 import { KEYWORDS } from '../../../../src/io/formats/fits/headers'
 import { computeHduDataSize, declinationKeyword, type FitsMetadataDiagnostic, finiteMetadataKeyword, heightKeyword, observationDateKeyword, parseFitsDateTimeFields, rightAscensionKeyword, textMetadataKeyword, widthKeyword } from '../../../../src/io/formats/fits/util'
 import { base64Sink, bufferSink, bufferSource } from '../../../../src/io/io'
@@ -915,4 +915,78 @@ test('metadata keywords distinguish absent from invalid values', () => {
 	expect([finiteMetadataKeyword(header, 'C', diagnostics), finiteMetadataKeyword(header, 'D', diagnostics), finiteMetadataKeyword(header, 'E', diagnostics)]).toEqual([undefined, undefined, undefined])
 	expect(diagnostics.map((e) => `${e.kind}:${e.keyword}`)).toEqual(['invalid:C', 'invalid:D', 'invalid:E'])
 	expect([textMetadataKeyword(header, 'B'), textMetadataKeyword(header, 'F'), textMetadataKeyword(header, 'G'), textMetadataKeyword(header, 'Z')]).toEqual(['2.5', undefined, '7', undefined])
+})
+
+describe('row access', () => {
+	// Writes a plain FITS file of the stored codes and returns its parsed HDU and source.
+	async function fitsOf(header: FitsHeader, raw: Float64Array) {
+		const buffer = Buffer.alloc(FITS_BLOCK_SIZE * 8)
+		const sink = bufferSink(buffer)
+		await writeFits(sink, [{ header, raw }], { type: false })
+		const source = bufferSource(buffer)
+		const fits = await readFits(source)
+		return { hdu: fits!.hdus[0], source }
+	}
+
+	test('reads any rows of one channel in digital numbers through BZERO and BSCALE', async () => {
+		const header: FitsHeader = { SIMPLE: true, BITPIX: 16, NAXIS: 3, NAXIS1: 3, NAXIS2: 4, NAXIS3: 2, BZERO: 1000, BSCALE: 2 }
+		const raw = Float64Array.from({ length: 24 }, (_, i) => (1000 + i * 10) / 65535)
+		const { hdu, source } = await fitsOf(header, raw)
+		const reader = new FitsImageReader(hdu)
+		const whole = new Float64Array(24)
+		expect(await reader.read(source, whole, 'digital')).toBeTrue()
+
+		const output = new Float64Array(6)
+		expect(reader.rowAddressable).toBeTrue()
+		expect(await reader.readRows(source, output, 1, 2, 1, 'digital')).toBeTrue()
+		// Interleaved channel 1 of rows 1 and 2.
+		for (let i = 0; i < 6; i++) expect(output[i]).toBe(whole[(3 + i) * 2 + 1])
+	})
+
+	test('reports a truncated source', async () => {
+		const header: FitsHeader = { SIMPLE: true, BITPIX: -32, NAXIS: 2, NAXIS1: 2, NAXIS2: 2 }
+		const { hdu, source } = await fitsOf(header, new Float64Array(4))
+		const reader = new FitsImageReader({ ...hdu, data: { ...hdu.data, offset: FITS_BLOCK_SIZE * 8 - 4 } })
+		expect(await reader.readRows(source, new Float32Array(4), 0, 2)).toBeFalse()
+	})
+
+	test('refuses rows of a tile-compressed image', async () => {
+		const header: FitsHeader = { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: 2, NAXIS2: 1 }
+		const buffer = Buffer.alloc(FITS_BLOCK_SIZE * 8)
+		await writeFits(bufferSink(buffer), [{ header, raw: new Float32Array([0, 1]) }], { type: 'RICE_1' })
+		const source = bufferSource(buffer)
+		const fits = await readFits(source)
+		const reader = new FitsImageReader(fits!.hdus[1])
+		expect(reader.rowAddressable).toBeFalse()
+		expect(reader.readRows(source, new Float32Array(2), 0, 1)).rejects.toThrow('not addressable')
+	})
+
+	test('streams floating-point rows in physical units with no normalization', async () => {
+		const buffer = Buffer.alloc(FITS_BLOCK_SIZE * 4)
+		const sink = bufferSink(buffer)
+		const header: FitsHeader = { BITPIX: -32, NAXIS1: 2, NAXIS2: 2, IMAGETYP: 'Master Dark' }
+		const writer = new FitsImageRowWriter(sink, header)
+		await writer.begin()
+		await writer.write(new Float32Array([-12.5, 1000]))
+		await writer.write(new Float32Array([65535, 70000, 0]), 2)
+		await writer.end()
+
+		const source = bufferSource(buffer)
+		const fits = await readFits(source)
+		const image = await readImageFromFits(fits!, source, { sampleScale: 'digital', raw: 32 })
+
+		expect(Array.from(image!.raw)).toEqual([-12.5, 1000, 65535, 70000])
+		expect(image!.header.IMAGETYP).toBe('Master Dark')
+		expect(image!.header.BZERO).toBeUndefined()
+	})
+
+	test('refuses an integer BITPIX and an incomplete image', async () => {
+		const sink = bufferSink(Buffer.alloc(FITS_BLOCK_SIZE * 2))
+		expect(() => new FitsImageRowWriter(sink, { BITPIX: 16, NAXIS1: 1, NAXIS2: 1 })).toThrow('floating-point')
+
+		const writer = new FitsImageRowWriter(sink, { BITPIX: -32, NAXIS1: 2, NAXIS2: 1 })
+		await writer.begin()
+		await writer.write(new Float32Array([1]))
+		expect(writer.end()).rejects.toThrow('incomplete')
+	})
 })

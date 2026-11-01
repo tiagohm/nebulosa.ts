@@ -1,19 +1,34 @@
 import { exposureTimeKeyword } from '../../io/formats/fits/util'
-import type { CfaPattern, Image } from '../model/types'
+import { makeImageRawTypedArray, type CfaPattern, type DigitalImage, type Image } from '../model/types'
 
-// Astronomical frame calibration using raw bias, dark, flat, and dark-flat masters. The implementation
+// Astronomical frame calibration using bias, dark, flat, and dark-flat masters. The implementation
 // validates every master before mutating the light, preserves signed residuals, and fuses calibration
 // into one output pass. Exposure values are seconds and pixel values remain in normalized full-scale units.
 
 // Policy used to match dark-current exposure to its target frame.
 export type DarkScaling = 'exposure' | 'none'
 
-// Raw master frames and numerical policies used to calibrate a light image.
+// What a flat master already contains:
+// - rawUncalibrated: its bias and dark current, which calibrate removes and normalizes itself.
+// - calibratedNormalized: a corrected dimensionless response the light is divided by, untouched.
+export type FlatRepresentation = 'rawUncalibrated' | 'calibratedNormalized'
+
+// What happens to a sample whose flat response is non-finite or at or below `minimumFlat`:
+// - reject: throws before the light is mutated.
+// - passthrough: the sample keeps its dark-subtracted value, and such samples leave the flat mean.
+export type InvalidFlatPolicy = 'reject' | 'passthrough'
+
+// Master frames and numerical policies used to calibrate a light image.
 export interface CalibrationOptions {
 	// Master dark containing its original bias pedestal.
 	readonly dark?: Image
-	// Master flat containing its original bias and dark-current signals.
+	// Master flat, as `flatRepresentation` declares it.
 	readonly flat?: Image
+	// State of the flat. Defaults to rawUncalibrated. A calibratedNormalized flat refuses a darkFlat,
+	// because its correction was already applied, and a bias only corrects the light.
+	readonly flatRepresentation?: FlatRepresentation
+	// Handling of an invalid flat response. Defaults to reject.
+	readonly invalidFlat?: InvalidFlatPolicy
 	// Master bias acquired with the same sensor geometry and readout settings.
 	readonly bias?: Image
 	// Master dark-flat containing its original bias pedestal.
@@ -84,7 +99,8 @@ function darkScale(target: Image, dark: Image, bias: Image | undefined, scaling:
 }
 
 // Computes and validates corrected-flat means independently for interleaved RGB channels or the four CFA phases.
-function correctedFlatMeans(flat: Image, bias: Image | undefined, darkFlat: Image | undefined, scale: number, minimum: number, pattern: CfaPattern | undefined) {
+// With `skipInvalid`, invalid samples leave the mean instead of throwing.
+function correctedFlatMeans(flat: Image, bias: Image | undefined, darkFlat: Image | undefined, scale: number, minimum: number, pattern: CfaPattern | undefined, skipInvalid: boolean) {
 	const flatRaw = flat.raw
 	const biasRaw = bias?.raw
 	const darkFlatRaw = darkFlat?.raw
@@ -106,7 +122,10 @@ function correctedFlatMeans(flat: Image, bias: Image | undefined, darkFlat: Imag
 				} else if (biasRaw) {
 					value -= biasRaw[i]
 				}
-				if (!Number.isFinite(value) || !(value > minimum)) throw new Error(`corrected flat sample ${i} must be finite and greater than ${minimum}: ${value}`)
+				if (!Number.isFinite(value) || !(value > minimum)) {
+					if (skipInvalid) continue
+					throw new Error(`corrected flat sample ${i} must be finite and greater than ${minimum}: ${value}`)
+				}
 				const group = rowPhase | (x & 1)
 				sums[group] += value
 				counts[group]++
@@ -122,7 +141,10 @@ function correctedFlatMeans(flat: Image, bias: Image | undefined, darkFlat: Imag
 				} else if (biasRaw) {
 					value -= biasRaw[offset]
 				}
-				if (!Number.isFinite(value) || !(value > minimum)) throw new Error(`corrected flat sample ${offset} must be finite and greater than ${minimum}: ${value}`)
+				if (!Number.isFinite(value) || !(value > minimum)) {
+					if (skipInvalid) continue
+					throw new Error(`corrected flat sample ${offset} must be finite and greater than ${minimum}: ${value}`)
+				}
 				sums[channel] += value
 				counts[channel]++
 			}
@@ -141,15 +163,28 @@ function correctedFlatMeans(flat: Image, bias: Image | undefined, darkFlat: Imag
 	return sums
 }
 
-// Calibrates `light` in place and returns the same object. Masters are raw: dark and dark-flat include
-// their bias pedestal, while flat includes bias and dark current. Exposure scaling requires finite
-// positive FITS exposure metadata and a bias whenever target and dark exposures differ. Flat
-// normalization is independent per interleaved RGB channel or CFA phase. Results are intentionally not clipped.
+// Converts a master read in digital numbers to the normalized scale of `calibrate`. `fullScale` is the
+// digital full scale of the frames the master was integrated from, and 1 for a dimensionless flat.
+// The samples of a master in DN must not come from a normalized read, whose per-image min-max rescale
+// would change their meaning. Returns a fresh image sharing the header and metadata of `master`.
+export function calibrationMasterImage(master: DigitalImage, fullScale: number): Image {
+	const raw = makeImageRawTypedArray(master.raw, master.raw.length)
+	for (let i = 0; i < raw.length; i++) raw[i] = master.raw[i] / fullScale
+	return { header: master.header, metadata: master.metadata, raw }
+}
+
+// Calibrates `light` in place and returns the same object. Darks include their bias pedestal, and a
+// rawUncalibrated flat includes bias and dark current, while a calibratedNormalized flat is a corrected
+// response used as it is. Exposure scaling requires finite positive FITS exposure metadata and a bias
+// whenever target and dark exposures differ. Normalization of a raw flat is independent per interleaved
+// RGB channel or CFA phase. Results are intentionally not clipped.
 export function calibrate(light: Image, options: CalibrationOptions = {}) {
-	const { dark, flat, bias, darkFlat, darkScaling = 'exposure', minimumFlat = 0 } = options
+	const { dark, flat, bias, darkFlat, darkScaling = 'exposure', minimumFlat = 0, flatRepresentation = 'rawUncalibrated', invalidFlat = 'reject' } = options
 	if (darkScaling !== 'exposure' && darkScaling !== 'none') throw new Error(`unsupported dark scaling: ${darkScaling}`)
 	if (!Number.isFinite(minimumFlat) || !(minimumFlat >= 0)) throw new Error(`minimumFlat must be finite and non-negative: ${minimumFlat}`)
 	if (darkFlat && !flat) throw new Error('darkFlat requires a flat master')
+	// A second correction would remove the pedestal from an already corrected response.
+	if (darkFlat && flatRepresentation === 'calibratedNormalized') throw new Error('a calibrated normalized flat already includes its dark-flat correction')
 	if (!dark && !flat && !bias) return light
 
 	const lightPattern = validateImageLayout(light, 'light')
@@ -160,11 +195,15 @@ export function calibrate(light: Image, options: CalibrationOptions = {}) {
 
 	const darkExposureScale = dark ? darkScale(light, dark, bias, darkScaling, 'light', 'dark') : 1
 	const darkFlatExposureScale = flat && darkFlat ? darkScale(flat, darkFlat, bias, darkScaling, 'flat', 'darkFlat') : 1
-	const flatMeans = flat ? correctedFlatMeans(flat, bias, darkFlat, darkFlatExposureScale, minimumFlat, lightPattern) : undefined
+	const calibratedFlat = flatRepresentation === 'calibratedNormalized'
+	const passthrough = invalidFlat === 'passthrough'
+	const flatMeans = flat ? correctedFlatMeans(flat, calibratedFlat ? undefined : bias, darkFlat, darkFlatExposureScale, minimumFlat, lightPattern, passthrough) : undefined
+	if (flatMeans && calibratedFlat) flatMeans.fill(1)
 	const lightRaw = light.raw
 	const darkRaw = dark?.raw
 	const flatRaw = flat?.raw
 	const biasRaw = bias?.raw
+	const flatBiasRaw = calibratedFlat ? undefined : biasRaw
 	const darkFlatRaw = darkFlat?.raw
 
 	if (!flatRaw) {
@@ -197,10 +236,10 @@ export function calibrate(light: Image, options: CalibrationOptions = {}) {
 				if (darkFlatRaw) {
 					if (darkFlatExposureScale === 1) correctedFlat -= darkFlatRaw[i]
 					else correctedFlat -= biasRaw![i] + darkFlatExposureScale * (darkFlatRaw[i] - biasRaw![i])
-				} else if (biasRaw) {
-					correctedFlat -= biasRaw[i]
+				} else if (flatBiasRaw) {
+					correctedFlat -= flatBiasRaw[i]
 				}
-				lightRaw[i] = value * (flatMeans![rowPhase | (x & 1)] / correctedFlat)
+				lightRaw[i] = passthrough && !(Number.isFinite(correctedFlat) && correctedFlat > minimumFlat) ? value : value * (flatMeans![rowPhase | (x & 1)] / correctedFlat)
 			}
 		}
 	} else {
@@ -218,10 +257,10 @@ export function calibrate(light: Image, options: CalibrationOptions = {}) {
 				if (darkFlatRaw) {
 					if (darkFlatExposureScale === 1) correctedFlat -= darkFlatRaw[offset]
 					else correctedFlat -= biasRaw![offset] + darkFlatExposureScale * (darkFlatRaw[offset] - biasRaw![offset])
-				} else if (biasRaw) {
-					correctedFlat -= biasRaw[offset]
+				} else if (flatBiasRaw) {
+					correctedFlat -= flatBiasRaw[offset]
 				}
-				lightRaw[offset] = value * (flatMeans![channel] / correctedFlat)
+				lightRaw[offset] = passthrough && !(Number.isFinite(correctedFlat) && correctedFlat > minimumFlat) ? value : value * (flatMeans![channel] / correctedFlat)
 			}
 		}
 	}

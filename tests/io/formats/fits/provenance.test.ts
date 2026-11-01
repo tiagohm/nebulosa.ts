@@ -122,3 +122,20 @@ test('round-trips through header cards and replaces stale aliases', () => {
 	for (const key of FITS_PROVENANCE_KEYWORDS) expect(header[key]).toBeUndefined()
 	expect(header).toEqual({ SIMPLE: true, NAXIS: 0 })
 })
+
+test('reads and writes integrated master roles', () => {
+	const roles = { 'Master Dark': 'dark', 'MASTER BIAS': 'bias', 'Master Flat': 'flat', 'Master Dark Flat': 'darkFlat', 'Dark Master': 'dark' } as const
+
+	for (const [text, role] of Object.entries(roles)) {
+		const provenance = readFitsProvenance({ IMAGETYP: text })
+		expect(provenance.frameType).toBe(role)
+		expect(provenance.master).toBeTrue()
+		expect(provenance.diagnostics).toBeEmpty()
+	}
+
+	expect(readFitsProvenance({ IMAGETYP: 'Dark Frame' }).master).toBeUndefined()
+	expect(readFitsProvenance({ IMAGETYP: 'Master' }).frameType).toBeUndefined()
+
+	expect(writeFitsProvenance({}, { frameType: 'darkFlat', master: true }).IMAGETYP).toBe('Master Dark Flat')
+	expect(writeFitsProvenance({}, { frameType: 'dark' }).IMAGETYP).toBe('Dark Frame')
+})

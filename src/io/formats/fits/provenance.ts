@@ -35,6 +35,8 @@ export interface FitsProvenanceFields {
 	readonly filter?: string
 	// IMAGETYP, else FRAME, as a normalized frame role.
 	readonly frameType?: FitsFrameType
+	// Whether the role names an integrated master rather than a single frame, such as 'Master Dark'.
+	readonly master?: boolean
 	// XBINNING and YBINNING, positive binning factors along x and y.
 	readonly binning?: readonly [number, number]
 	// CCD-TEMP: measured sensor temperature in degrees Celsius.
@@ -91,6 +93,15 @@ const FRAME_TYPE_CODES: Readonly<Record<FitsFrameType, string>> = {
 	darkFlat: 'Dark Flat',
 }
 
+// IMAGETYP values written for each integrated master role (PixInsight spelling).
+const MASTER_FRAME_TYPE_CODES: Readonly<Record<FitsFrameType, string>> = {
+	light: 'Master Light',
+	dark: 'Master Dark',
+	flat: 'Master Flat',
+	bias: 'Master Bias',
+	darkFlat: 'Master Dark Flat',
+}
+
 // CALSTAT letters and the calibration step each one records.
 const CALIBRATION_STEPS: Readonly<Record<string, FitsCalibrationStep>> = { B: 'bias', D: 'dark', F: 'flat' }
 
@@ -110,6 +121,7 @@ export function readFitsProvenance(header: FitsHeader): FitsProvenance {
 		software: textMetadataKeyword(header, 'PROGRAM') ?? textMetadataKeyword(header, 'SWCREATE') ?? textMetadataKeyword(header, 'CREATOR'),
 		filter: textMetadataKeyword(header, 'FILTER'),
 		frameType: readFrameType(header, diagnostics),
+		master: readMasterRole(header),
 		binning: readBinning(header, diagnostics),
 		sensorTemperature: finiteMetadataKeyword(header, 'CCD-TEMP', diagnostics),
 		setTemperature: finiteMetadataKeyword(header, 'SET-TEMP', diagnostics),
@@ -137,7 +149,7 @@ export function writeFitsProvenance(header: FitsHeader, provenance: FitsProvenan
 		ORIGIN: provenance.origin,
 		PROGRAM: provenance.software,
 		FILTER: provenance.filter,
-		IMAGETYP: provenance.frameType && FRAME_TYPE_CODES[provenance.frameType],
+		IMAGETYP: provenance.frameType && (provenance.master ? MASTER_FRAME_TYPE_CODES : FRAME_TYPE_CODES)[provenance.frameType],
 		XBINNING: provenance.binning?.[0],
 		YBINNING: provenance.binning?.[1],
 		'CCD-TEMP': provenance.sensorTemperature,
@@ -159,14 +171,22 @@ export function writeFitsProvenance(header: FitsHeader, provenance: FitsProvenan
 	return header
 }
 
-// Normalizes one frame-role spelling, or undefined when it is not recognized.
+// Normalizes one frame-role spelling, or undefined when it is not recognized. A leading or trailing
+// 'master' does not change the role; readMasterRole reports it.
 function parseFrameType(value: string) {
 	return FRAME_TYPES[
 		value
 			.toLowerCase()
 			.replaceAll(/[^a-z]/g, '')
 			.replace(/(?:frame|field)$/, '')
+			.replace(/^master|master$/, '')
 	]
+}
+
+// Reads whether IMAGETYP, else FRAME, names a master, or undefined for a single frame.
+function readMasterRole(header: FitsHeader) {
+	const text = textMetadataKeyword(header, 'IMAGETYP') ?? textMetadataKeyword(header, 'FRAME')
+	return text !== undefined && parseFrameType(text) !== undefined && /master/i.test(text) ? true : undefined
 }
 
 // Reads IMAGETYP, else FRAME, as a frame role.

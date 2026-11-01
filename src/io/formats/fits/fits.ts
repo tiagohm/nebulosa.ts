@@ -600,11 +600,28 @@ export interface FitsWriteImage extends Readonly<Pick<Image, 'header' | 'raw'>> 
 	readonly normalization?: ImageNormalization
 }
 
+// Encodes header cards, the END card and the block padding into `buffer`, or into a larger replacement
+// when the cards do not fit. Returns the buffer holding the encoding and its size in bytes.
+function encodeFitsHeader(writer: FitsKeywordWriter, header: Readonly<FitsHeader> | readonly Readonly<FitsHeaderCard>[], buffer: Buffer) {
+	while (true) {
+		try {
+			let size = writer.writeAll(header, buffer)
+			size += writer.writeEnd(buffer, size)
+			const remaining = computeRemainingBytes(size)
+			if (remaining > 0) buffer.fill(FITS_HEADER_PADDING, size, size + remaining)
+			return { buffer, size: size + remaining }
+		} catch (error) {
+			if (!(error instanceof RangeError) || error.message !== FITS_HEADER_BUFFER_TOO_SMALL) throw error
+			buffer = Buffer.allocUnsafe(buffer.byteLength << 1)
+		}
+	}
+}
+
 // Writes a sequence of image HDUs to `sink`, padding each header and data segment to FITS block
 // boundaries. The first HDU becomes the primary HDU; when compression is requested each image is written
 // as a Rice-compressed BINTABLE extension preceded once by an empty primary header.
 export async function writeFits(sink: Sink & Partial<Seekable>, hdus: readonly FitsWriteImage[], options: FitsCompressionOptions = {}) {
-	let buffer = Buffer.allocUnsafe(FITS_BLOCK_SIZE * 4)
+	let buffer: Buffer = Buffer.allocUnsafe(FITS_BLOCK_SIZE * 4)
 	const headerWriter = new FitsKeywordWriter()
 
 	function fillWithRemainingBytes(size: number, offset: number, value: number) {
@@ -614,18 +631,9 @@ export async function writeFits(sink: Sink & Partial<Seekable>, hdus: readonly F
 	}
 
 	async function writeHeader(header: Readonly<FitsHeader> | readonly Readonly<FitsHeaderCard>[]) {
-		while (true) {
-			try {
-				let offset = headerWriter.writeAll(header, buffer)
-				offset += headerWriter.writeEnd(buffer, offset)
-				offset += fillWithRemainingBytes(offset, offset, FITS_HEADER_PADDING)
-				await writeFully(sink, buffer, offset)
-				return
-			} catch (error) {
-				if (!(error instanceof RangeError) || error.message !== FITS_HEADER_BUFFER_TOO_SMALL) throw error
-				buffer = Buffer.allocUnsafe(buffer.byteLength << 1)
-			}
-		}
+		const encoded = encodeFitsHeader(headerWriter, header, buffer)
+		buffer = encoded.buffer
+		await writeFully(sink, buffer, encoded.size)
 	}
 
 	let hasPrimaryHdu = false
@@ -1393,6 +1401,43 @@ export class FitsImageReader {
 		return true
 	}
 
+	// Whether readRows can reach any row of this HDU without decoding the rows before it.
+	get rowAddressable() {
+		return !this.#compressed && !isCompressedImageHeader(this.hdu.header)
+	}
+
+	// Reads `rowCount` consecutive rows of one channel into the start of `output`, using the requested
+	// sample scale. Rows are zero-based from the first row stored in the file, and `output` receives
+	// width * rowCount samples. Returns false when the source ends early. Tile-compressed data has no
+	// addressable rows and throws, because decoding a whole image here would break a bounded-memory caller.
+	async readRows(source: Source & Seekable, output: ImageRawType, startRow: number, rowCount: number, channel: number = 0, sampleScale: ImageSampleScale = 'normalized') {
+		if (!this.rowAddressable) throw new Error('compressed FITS rows are not addressable')
+
+		const { header } = this.hdu
+		const bitpix = bitpixKeyword(header, 0)
+		const pixelInBytes = bitpixInBytes(bitpix)
+		const width = widthKeyword(header, 0)
+		const height = heightKeyword(header, 0)
+		const samples = width * rowCount
+		const [multiplier, bias] = fitsReadScaling(header, bitpix, sampleScale)
+		const chunkSamples = pixelInBytes > 0 ? Math.trunc(this.#buffer.length / pixelInBytes) : 0
+		if (samples > 0 && chunkSamples === 0) return false
+		source.seek(this.hdu.data.offset + (channel * height + startRow) * width * pixelInBytes)
+
+		for (let startPixel = 0; startPixel < samples;) {
+			const count = Math.min(chunkSamples, samples - startPixel)
+			const byteCount = count * pixelInBytes
+			const chunk = byteCount === this.#buffer.length ? this.#buffer : this.#buffer.subarray(0, byteCount)
+
+			if ((await readUntil(source, chunk, byteCount, 0)) !== byteCount) return false
+
+			writePlanarFitsBytesToInterleaved(chunk, count, bitpix, pixelInBytes, output, startPixel, 0, 1, multiplier, bias)
+			startPixel += count
+		}
+
+		return true
+	}
+
 	// Reads and Rice-decompresses a tiled compressed image, reassembling tiles into the planar buffer
 	// before converting to interleaved output. Validates the tile table and heap offsets.
 	async #readRiceCompressed(source: Source & Seekable, output: ImageRawType, sampleScale: ImageSampleScale) {
@@ -1562,5 +1607,65 @@ export class FitsImageWriter {
 		}
 
 		return written
+	}
+}
+
+// Writes one floating-point primary image whose samples arrive in file order, so an image larger than
+// the memory budget of its producer never exists in one buffer. Samples are stored as given, with no
+// normalization, which keeps physical units such as digital numbers. Integer BITPIX is refused because
+// its stored codes assume normalized input. Multi-channel images arrive one whole channel after another.
+export class FitsImageRowWriter {
+	readonly #header: Readonly<FitsHeader>
+	readonly #bitpix: BitpixOrZero
+	readonly #pixelInBytes: number
+	readonly #multiplier: number
+	readonly #bias: number
+	readonly #size: number
+	readonly #buffer: Buffer
+	#written = 0
+
+	// Prepares to write the image declared by `header`, which must not carry stale compression keywords.
+	constructor(
+		readonly sink: Sink,
+		header: Readonly<FitsHeader>,
+	) {
+		const bitpix = uncompressedBitpixKeyword(header, 0)
+		if (bitpix !== -32 && bitpix !== -64) throw new Error(`FITS row writer needs a floating-point BITPIX: ${bitpix}`)
+
+		this.#header = header
+		this.#bitpix = bitpix
+		this.#pixelInBytes = bitpixInBytes(bitpix)
+		this.#size = uncompressedWidthKeyword(header, 0) * uncompressedHeightKeyword(header, 0) * uncompressedNumberOfChannelsKeyword(header, 1) * this.#pixelInBytes
+		;[this.#multiplier, this.#bias] = fitsWriteScaling(header, bitpix)
+		this.#buffer = Buffer.allocUnsafe(fitsImageChunkSize(this.#size, bitpix))
+	}
+
+	// Writes the header cards and their block padding. Call it once, before the first samples.
+	async begin() {
+		const encoded = encodeFitsHeader(new FitsKeywordWriter(), buildImageHeaderCards(this.#header, true), Buffer.allocUnsafe(FITS_BLOCK_SIZE * 4))
+		await writeFully(this.sink, encoded.buffer, encoded.size)
+	}
+
+	// Appends the first `count` samples of `input`.
+	async write(input: ImageRawType, count: number = input.length) {
+		const chunkSamples = Math.trunc(this.#buffer.length / this.#pixelInBytes)
+
+		for (let startPixel = 0; startPixel < count;) {
+			const samples = Math.min(chunkSamples, count - startPixel)
+			const byteCount = samples * this.#pixelInBytes
+			const chunk = byteCount === this.#buffer.length ? this.#buffer : this.#buffer.subarray(0, byteCount)
+			writeInterleavedChannelChunkToFitsBytes(input, chunk, samples, this.#bitpix, this.#pixelInBytes, startPixel, 0, 1, this.#multiplier, this.#bias)
+			await writeFully(this.sink, chunk)
+			this.#written += byteCount
+			startPixel += samples
+		}
+	}
+
+	// Pads the data segment to a block boundary. Throws when the samples do not fill the declared image,
+	// because the file would otherwise look complete with its last rows missing.
+	async end() {
+		if (this.#written !== this.#size) throw new Error(`FITS image is incomplete: ${this.#written} of ${this.#size} bytes`)
+		const remaining = computeRemainingBytes(this.#size)
+		if (remaining > 0) await writeFully(this.sink, Buffer.alloc(remaining, FITS_DATA_PADDING))
 	}
 }
