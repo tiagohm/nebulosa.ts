@@ -1,7 +1,7 @@
 import type { PathLike } from 'fs'
 import { type FileHandle, open } from 'fs/promises'
 import { isJpeg, Jpeg, type PixelFormat } from '../../bindings/imaging/libturbojpeg'
-import { type Bitpix, type Fits, type FitsHdu, FitsImageReader, readFits, writeFits } from '../../io/formats/fits/fits'
+import { Bitpix, type Fits, type FitsHdu, type FitsHeader, FitsImageReader, readFits, writeFits } from '../../io/formats/fits/fits'
 // oxfmt-ignore
 import { bitpixInBytes, cfaPatternKeyword, heightKeyword, isCompressedImageHeader, isRiceCompressedImageHeader, numberOfAxesKeyword, textKeyword, uncompressedBitpixKeyword, uncompressedHeightKeyword, uncompressedNumberOfChannelsKeyword, uncompressedScaleKeyword, uncompressedWidthKeyword, uncompressedZeroKeyword, widthKeyword } from '../../io/formats/fits/util'
 import { fileHandleSource } from '../../io/file'
@@ -117,7 +117,14 @@ export async function readImageFromFits(fits: Fits | FitsHdu, source: Source & S
 
 	const normalization = normalize(raw)
 
-	return { header, raw, metadata: normalization ? { ...metadata, normalization } : metadata }
+	return { header: explicitSignedZero(header, bitpix), raw, metadata: normalization ? { ...metadata, normalization } : metadata }
+}
+
+// Returns the header of a normalized FITS image. Integer samples without BZERO are signed, while the writer takes a 16
+// or 32 bit header without it for the unsigned convention, as an XISF source is; so a copy of such a header states
+// BZERO = 0, and the samples are written back as they were read.
+function explicitSignedZero(header: Readonly<FitsHeader>, bitpix: Bitpix): Readonly<FitsHeader> {
+	return (bitpix === 16 || bitpix === 32) && uncompressedZeroKeyword<number, undefined>(header, undefined) === undefined ? { ...header, BZERO: 0 } : header
 }
 
 // Reads an XISF image while preserving source digital numbers.
@@ -294,7 +301,18 @@ export function writeImageToXisf(image: Image, output: Buffer | Sink, format?: X
 	if (Buffer.isBuffer(output)) output = bufferSink(output)
 	const normalization = options?.sourceScale ? image.metadata.normalization : undefined
 	if (!normalization) return writeXisf(output, [image], format)
-	return writeXisf(output, [{ header: image.header, raw: image.raw, normalization, bounds: sourceScaleBounds(normalization, image.header.BITPIX === -32) }], format)
+	const bitpix = image.header.BITPIX as Bitpix
+
+	// XISF has no signed integer samples, so negative ones are written as floating-point in digital numbers: Float32 holds
+	// every 16-bit code exactly, and Float64 every 32-bit one.
+	if (bitpix > 0 && normalization.minimum < 0) {
+		const factor = 2 ** bitpix - 1
+		const digital = { minimum: normalization.minimum * factor, range: normalization.range * factor }
+		const header = { ...image.header, BITPIX: bitpix === 32 ? Bitpix.DOUBLE : Bitpix.FLOAT }
+		return writeXisf(output, [{ header, raw: image.raw, normalization: digital, bounds: sourceScaleBounds(digital, bitpix !== 32) }], format)
+	}
+
+	return writeXisf(output, [{ header: image.header, raw: image.raw, normalization, bounds: sourceScaleBounds(normalization, bitpix === -32) }], format)
 }
 
 // Scales a normalized pixel `p` (0..1) to an integer 0..max, truncating and clamping.

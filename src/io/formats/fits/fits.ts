@@ -268,7 +268,9 @@ const COMPRESSION_EXTENSION_EXCLUDED_KEYS = new Set([
 // BZERO (32768 for 16-bit, 2147483648 for 32-bit); without these cards a
 // standards-compliant reader interprets the samples as signed and shifts every
 // pixel by the missing zero-point. Skips 8-bit and float data, which apply no
-// offset, and leaves an existing BZERO untouched (it is copied by the caller).
+// offset, and leaves an existing BZERO untouched (it is copied by the caller). A
+// header read from a signed FITS file carries an explicit BZERO of 0 (see
+// readImageFromFits), so only a header without a FITS source reaches this default.
 function appendUnsignedIntegerScaling(cards: FitsHeaderCard[], header: Readonly<FitsHeader>, bitpix: BitpixOrZero) {
 	if ((bitpix !== 16 && bitpix !== 32) || header.BZERO !== undefined) return
 	cards.push(['BZERO', bitpix === 16 ? 32768 : 2147483648])
@@ -1267,14 +1269,15 @@ function riceBlockSizeFromHeader(header: Readonly<FitsHeader>) {
 	return Number.isFinite(fallback) && fallback > 0 ? Math.trunc(fallback) : RICE_DEFAULT_BLOCK_SIZE
 }
 
-// Computes the multiplier and bias that apply FITS scaling in normalized or digital sample space.
+// Computes the multiplier and bias that apply FITS scaling in normalized or digital sample space. A missing BZERO
+// is 0 (FITS 4.0, section 5.3), so integer samples without it are signed: normalized ones can be negative, and
+// readImageFromFits rescales them, recording the rescale.
 function fitsReadScaling(header: Readonly<FitsHeader>, bitpix: BitpixOrZero, sampleScale: ImageSampleScale) {
 	const normalized = sampleScale === 'normalized'
-	const defaultZero = normalized && bitpix === 16 ? 32768 : normalized && bitpix === 32 ? 2147483648 : 0
 	const scale = uncompressedScaleKeyword(header, 1)
-	const zero = uncompressedZeroKeyword(header, defaultZero)
+	const zero = uncompressedZeroKeyword(header, 0)
 	const safeScale = Number.isFinite(scale) ? scale : 1
-	const safeZero = Number.isFinite(zero) ? zero : defaultZero
+	const safeZero = Number.isFinite(zero) ? zero : 0
 	const effectiveScale = normalized && bitpix > 0 && safeScale === 0 ? 1 : safeScale
 	const normalization = normalized && bitpix > 0 ? 1 / (2 ** bitpix - 1) : 1
 	return [effectiveScale * normalization, safeZero * normalization] as const

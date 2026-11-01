@@ -717,3 +717,60 @@ describe('calibrate', async () => {
 		await saveImageAndCompareHash(stf(calibrated, ...adf(calibrated)), 'calibrated-dark-15', 'b72aa07a6c3269a10b72e363acd8cac0')
 	})
 })
+
+// Builds an integer FITS of big-endian `samples` with the extra header cards, as a signed writer leaves it.
+function integerFits(bitpix: 16 | 32, samples: readonly number[], cards: readonly string[] = []) {
+	const header = [`SIMPLE  =                    T`, `BITPIX  = ${`${bitpix}`.padStart(20)}`, `NAXIS   =                    2`, `NAXIS1  = ${`${samples.length}`.padStart(20)}`, `NAXIS2  =                    1`, ...cards, 'END']
+	const data = Buffer.alloc(2880)
+	samples.forEach((sample, i) => (bitpix === 16 ? data.writeInt16BE(sample, i * 2) : data.writeInt32BE(sample, i * 4)))
+	return Buffer.concat([
+		Buffer.from(
+			header
+				.map((card) => card.padEnd(80))
+				.join('')
+				.padEnd(2880),
+		),
+		data,
+	])
+}
+
+// Reads the digital numbers of a file.
+async function digitalSamples(buffer: Buffer) {
+	return [...(await readImageFromSource(bufferSource(buffer), { raw: 64, sampleScale: 'digital' }))!.raw]
+}
+
+test.each([16, 32] as const)('keeps the signed samples of an integer FITS without BZERO, %i bits', async (bitpix) => {
+	const samples = [-1000, 0, 1500, 2730]
+	const image = (await readImageFromSource(bufferSource(integerFits(bitpix, samples)), 64))!
+	const output = Buffer.alloc(8192)
+
+	expect(image.header.BZERO).toBe(0)
+	await writeImageToFits(image, bufferSink(output), { sourceScale: true })
+	expect(await digitalSamples(output)).toEqual(samples)
+})
+
+test('keeps a signed FITS whose samples are all positive', async () => {
+	const samples = [0, 100, 2000]
+	const image = (await readImageFromSource(bufferSource(integerFits(16, samples)), 64))!
+	const output = Buffer.alloc(8192)
+
+	expect(image.metadata.normalization).toBeUndefined()
+	await writeImageToFits(image, bufferSink(output), { sourceScale: true })
+	expect(await digitalSamples(output)).toEqual(samples)
+})
+
+test('leaves the BZERO of an unsigned FITS alone', async () => {
+	const image = (await readImageFromSource(bufferSource(integerFits(16, [-32768, 0, 32767], [`BZERO   = ${'32768'.padStart(20)}`])), 64))!
+	const output = Buffer.alloc(8192)
+
+	expect(image.header.BZERO).toBe(32768)
+	await writeImageToFits(image, bufferSink(output), { sourceScale: true })
+	expect(await digitalSamples(output)).toEqual([0, 32768, 65535])
+})
+
+test('writes the negative samples of a signed FITS to XISF as floating-point digital numbers', async () => {
+	for (const bitpix of [16, 32] as const) {
+		const image = (await readImageFromSource(bufferSource(integerFits(bitpix, [-1000, 0, 2730])), 64))!
+		expect(await sourceScaleXisf(image, true)).toEqual({ bounds: '-1000:2730', raw: [-1000, 0, 2730] })
+	}
+})
