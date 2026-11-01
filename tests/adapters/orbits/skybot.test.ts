@@ -40,6 +40,10 @@ describe('parse', () => {
 		expect(parseSkybotResponse([])).toEqual([])
 	})
 
+	test('a failure reported by the service keeps its message', () => {
+		expect(() => parseSkybotResponse({ flag: -1, ticket: 1, status: 200, message: 'computeEphemeris: error\n' })).toThrow('SkyBoT answered: computeEphemeris: error')
+	})
+
 	test('a malformed answer is refused', () => {
 		expect(() => parseSkybotResponse({ error: 'x' })).toThrow('not an array')
 		expect(() => parseSkybotResponse([1])).toThrow('not an object')

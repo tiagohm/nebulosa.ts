@@ -171,10 +171,17 @@ function parseRecord(value: unknown): SkybotObject {
 }
 
 // Parses the basic JSON output of a cone search: an array of records, or nothing (an empty body) when the field holds no
-// object. Throws an Error naming the problem when the payload is malformed.
+// object. The service reports its own failures with HTTP 200 and an object that has a message, such as an ephemeris it
+// could not compute for an object of the field. Throws an Error with that message, or naming the problem when the
+// payload is malformed.
 export function parseSkybotResponse(body: unknown): readonly SkybotObject[] {
 	if (body === undefined || body === null || body === '') return []
-	if (!Array.isArray(body)) throw new Error('SkyBoT response is not an array')
+
+	if (!Array.isArray(body)) {
+		const message = typeof body === 'object' && 'message' in body && typeof body.message === 'string' ? body.message.trim() : ''
+		throw new Error(message ? `SkyBoT answered: ${message}` : 'SkyBoT response is not an array')
+	}
+
 	return body.map(parseRecord)
 }
 
