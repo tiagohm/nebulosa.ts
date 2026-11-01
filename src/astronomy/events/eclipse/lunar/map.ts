@@ -1,13 +1,15 @@
 import { DAYSEC, DEG2RAD, PI, PIOVERTWO, TAU } from '../../../../core/constants'
 import type { Writable } from '../../../../core/types'
 import type { Point } from '../../../../math/numerical/geometry'
-import { clamp } from '../../../../math/numerical/math'
+import { clamp, type NumberArray } from '../../../../math/numerical/math'
+import { brentMinimize } from '../../../../math/numerical/optimization'
+import { polynomialRegression } from '../../../../math/numerical/regression'
 import type { Angle } from '../../../../math/units/angle'
-import type { LunarEclipse } from '../../../bodies/moon'
+import { DEFAULT_MINIMAL_LUNAR_ECLIPSE_TIME, type LunarEclipse, type LunarEclipseType } from '../../../bodies/moon'
 import { eraGst06a } from '../../../coordinates/erfa/erfa'
 import type { CylindricalProjection, ProjectionOptions, RaAxisDirection } from '../../../projections/projection'
-import { tt, type Time, toJulianDay } from '../../../time/time'
-import { geoPolylinesToSvgPathData, normalizeLongitude, pointsToSvgPathData, splitPolygonAtAntimeridian, type EclipseGeoBranch, type EclipseGeoCurve, type EclipseGeoPoint, type SunMoonProvider } from '../eclipse'
+import { tt, type Time, timeShift, toJulianDay } from '../../../time/time'
+import { bisectRoot, geoPolylinesToSvgPathData, normalizeLongitude, pointsToSvgPathData, splitPolygonAtAntimeridian, type EclipseGeoBranch, type EclipseGeoCurve, type EclipseGeoPoint, type SunMoonProvider } from '../eclipse'
 import type { SolarEclipseMapSvgProjectionOptions } from '../solar/map'
 
 // Lunar eclipse map geometry engine.
@@ -216,6 +218,152 @@ const CONTACT_SEQUENCE = {
 // JD 0 (ancient eclipses) have negative days and must not be dropped.
 function isExistingContactTime(time: Time) {
 	return !(time.day === 0 && time.fraction === 0)
+}
+
+// Sun's radius in Earth equatorial radii of the shadow geometry (696 000 km over 6 378.137 km).
+const SHADOW_SUN_RADIUS_EARTH_RADII = 109.1224
+
+// Danjon's enlargement of the Moon's parallax for the Earth's atmosphere in the shadow radii, the rule of the published
+// eclipse catalogs: the umbra is 1.01 pi_m + pi_s - s_s and the penumbra 1.01 pi_m + pi_s + s_s.
+const SHADOW_PARALLAX_ENLARGEMENT = 1.01
+
+// Half-span in hours of the fit of the shadow geometry around the eclipse; penumbral contacts stay within about 3.2 h.
+const SHADOW_FIT_HALF_SPAN = 4
+
+// Spacing in hours of the samples of the fit.
+const SHADOW_FIT_STEP = 0.8
+
+// Degree of the polynomials of the fit, whose residual is below 10 ms of arc over SHADOW_FIT_HALF_SPAN.
+const SHADOW_FIT_DEGREE = 5
+
+// Step in hours of the outward scan that brackets a contact.
+const SHADOW_CONTACT_STEP = 0.25
+
+// Shadow geometry of a lunar eclipse over hours from its fit center.
+interface LunarShadowFit {
+	// East offset of the Moon from the shadow axis in the plane tangent at the axis, in radians.
+	readonly x: Readonly<NumberArray>
+	// North offset of the Moon from the shadow axis in that plane, in radians.
+	readonly y: Readonly<NumberArray>
+	// Angular radius of the umbra, in radians.
+	readonly umbra: Readonly<NumberArray>
+	// Angular radius of the penumbra, in radians.
+	readonly penumbra: Readonly<NumberArray>
+	// Semidiameter of the Moon, in radians.
+	readonly semidiameter: Readonly<NumberArray>
+	// Distance of the Moon, in Earth equatorial radii.
+	readonly distance: Readonly<NumberArray>
+}
+
+// Value of a polynomial with ascending coefficients at t.
+function evaluateShadowPolynomial(coefficients: Readonly<NumberArray>, t: number) {
+	let value = 0
+	for (let i = coefficients.length - 1; i >= 0; i--) value = value * t + coefficients[i]
+	return value
+}
+
+// Fits the geometry of the Earth's shadow and the Moon around an instant, so a contact search evaluates polynomials
+// rather than the Sun and the Moon. The axis is the point opposite the apparent Sun, and offsets are gnomonic.
+function fitLunarShadow(center: Time, sunMoonPosition: SunMoonProvider): LunarShadowFit {
+	const count = Math.round((2 * SHADOW_FIT_HALF_SPAN) / SHADOW_FIT_STEP) + 1
+	const t = new Float64Array(count)
+	const x = new Float64Array(count)
+	const y = new Float64Array(count)
+	const umbra = new Float64Array(count)
+	const penumbra = new Float64Array(count)
+	const semidiameter = new Float64Array(count)
+	const distance = new Float64Array(count)
+
+	for (let i = 0; i < count; i++) {
+		t[i] = -SHADOW_FIT_HALF_SPAN + i * SHADOW_FIT_STEP
+		const { sun, moon } = sunMoonPosition(timeShift(center, t[i] / 24))
+		const axisDeclination = -sun.declination
+		const dRightAscension = moon.rightAscension - sun.rightAscension - PI
+		const sinAxis = Math.sin(axisDeclination)
+		const cosAxis = Math.cos(axisDeclination)
+		const sinMoon = Math.sin(moon.declination)
+		const cosMoon = Math.cos(moon.declination)
+		const cosRightAscension = Math.cos(dRightAscension)
+		const cosCenter = sinAxis * sinMoon + cosAxis * cosMoon * cosRightAscension
+		const moonParallax = Math.asin(1 / moon.distance)
+		const sunParallax = Math.asin(1 / sun.distance)
+		const sunSemidiameter = Math.asin(SHADOW_SUN_RADIUS_EARTH_RADII / sun.distance)
+
+		x[i] = (cosMoon * Math.sin(dRightAscension)) / cosCenter
+		y[i] = (cosAxis * sinMoon - sinAxis * cosMoon * cosRightAscension) / cosCenter
+		umbra[i] = SHADOW_PARALLAX_ENLARGEMENT * moonParallax + sunParallax - sunSemidiameter
+		penumbra[i] = SHADOW_PARALLAX_ENLARGEMENT * moonParallax + sunParallax + sunSemidiameter
+		semidiameter[i] = Math.asin(MOON_RADIUS_EARTH_RADII / moon.distance)
+		distance[i] = moon.distance
+	}
+
+	const fit = (values: Readonly<NumberArray>) => polynomialRegression(t, values, SHADOW_FIT_DEGREE).coefficients
+	return { x: fit(x), y: fit(y), umbra: fit(umbra), penumbra: fit(penumbra), semidiameter: fit(semidiameter), distance: fit(distance) }
+}
+
+// Hour on either side of the greatest eclipse at which a shadow value turns positive; undefined when it never does
+// inside the fit or is not negative at the greatest eclipse.
+function shadowContact(value: (t: number) => number, greatest: number, direction: -1 | 1) {
+	if (!(value(greatest) < 0)) return undefined
+
+	for (let t = greatest; Math.abs(t + direction * SHADOW_CONTACT_STEP) <= SHADOW_FIT_HALF_SPAN; t += direction * SHADOW_CONTACT_STEP) {
+		const next = t + direction * SHADOW_CONTACT_STEP
+		if (value(next) >= 0) return direction > 0 ? bisectRoot(value, t, next) : bisectRoot(value, next, t)
+	}
+
+	return undefined
+}
+
+// Replaces the instants, type, magnitude, and gamma of a Meeus series result by the geometry of the Moon and the
+// Earth's shadow from sunMoonPosition, with Danjon's shadow radii, as the published catalogs do: the greatest eclipse is
+// the Moon's closest approach to the axis, and a contact is the Moon's limb reaching a radius. Absent contacts keep the
+// sentinel of the series and their half-durations are NaN.
+//   eclipse: eclipse found by nearestLunarEclipse.
+//   sunMoonPosition: Sun and Moon of the eclipse, such as sunMoonPositionAround.
+//   returns: a copy with the refined values, in TT; undefined when the Moon misses the penumbra.
+export function refineLunarEclipse(eclipse: Readonly<LunarEclipse>, sunMoonPosition: SunMoonProvider): Readonly<LunarEclipse> | undefined {
+	const fit = fitLunarShadow(eclipse.maximalTime, sunMoonPosition)
+	const at = (coefficients: Readonly<NumberArray>, t: number) => evaluateShadowPolynomial(coefficients, t)
+	const separation = (t: number) => Math.atan(Math.hypot(at(fit.x, t), at(fit.y, t)))
+	const greatest = brentMinimize(separation, -SHADOW_FIT_HALF_SPAN, SHADOW_FIT_HALF_SPAN, { tolerance: 1e-7 }).minimum
+
+	const penumbralGap = (t: number) => separation(t) - at(fit.penumbra, t) - at(fit.semidiameter, t)
+	const partialGap = (t: number) => separation(t) - at(fit.umbra, t) - at(fit.semidiameter, t)
+	const totalGap = (t: number) => separation(t) - at(fit.umbra, t) + at(fit.semidiameter, t)
+
+	const firstPenumbra = shadowContact(penumbralGap, greatest, -1)
+	const lastPenumbra = shadowContact(penumbralGap, greatest, 1)
+	if (firstPenumbra === undefined || lastPenumbra === undefined) return undefined
+
+	const firstUmbra = shadowContact(partialGap, greatest, -1)
+	const lastUmbra = shadowContact(partialGap, greatest, 1)
+	const totalBegin = shadowContact(totalGap, greatest, -1)
+	const totalEnd = shadowContact(totalGap, greatest, 1)
+	const instant = (t: number | undefined) => (t === undefined ? DEFAULT_MINIMAL_LUNAR_ECLIPSE_TIME : timeShift(eclipse.maximalTime, t / 24))
+	const halfDuration = (first: number | undefined, last: number | undefined) => (first === undefined || last === undefined ? Number.NaN : (last - first) / 48)
+
+	const least = separation(greatest)
+	const semidiameter = at(fit.semidiameter, greatest)
+	const umbralMagnitude = (at(fit.umbra, greatest) + semidiameter - least) / (2 * semidiameter)
+	const penumbralMagnitude = (at(fit.penumbra, greatest) + semidiameter - least) / (2 * semidiameter)
+	const type: LunarEclipseType = umbralMagnitude >= 1 ? 'TOTAL' : umbralMagnitude > 0 ? 'PARTIAL' : 'PENUMBRAL'
+
+	return {
+		...eclipse,
+		type,
+		magnitude: type === 'PENUMBRAL' ? penumbralMagnitude : umbralMagnitude,
+		gamma: Math.sign(at(fit.y, greatest)) * Math.sin(least) * at(fit.distance, greatest),
+		maximalTime: instant(greatest),
+		firstContactPenumbraTime: instant(firstPenumbra),
+		firstContactUmbraTime: instant(firstUmbra),
+		totalBeginTime: instant(totalBegin),
+		totalEndTime: instant(totalEnd),
+		lastContactUmbraTime: instant(lastUmbra),
+		lastContactPenumbraTime: instant(lastPenumbra),
+		sdPartial: halfDuration(firstUmbra, lastUmbra),
+		sdTotal: halfDuration(totalBegin, totalEnd),
+		sdPenumbra: halfDuration(firstPenumbra, lastPenumbra),
+	}
 }
 
 // Resolves the ordered contact sequence of an eclipse from its type and existing contact times. Absent

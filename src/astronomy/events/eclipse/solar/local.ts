@@ -151,6 +151,9 @@ export interface LocalSolarEclipseCircumstances {
 		// undefined when the maximum is not central, the observer is outside the central shadow, or no edge is
 		// found within MAX_SHADOW_HALF_WIDTH_KM.
 		readonly shadowPathWidthKm?: number
+		// Width of the path through the place, in km: the distance between the limits of the central phase, across the
+		// central line (computeCentralPathWidthKm); undefined outside the central phase.
+		readonly pathWidthKm?: number
 	}
 	readonly events: {
 		readonly C1?: LocalSolarEclipseEvent
@@ -1337,8 +1340,57 @@ export function computeLocalShadowPathWidthKm(pbe: PolynomialBesselianElements, 
 	return computeCentralShadowChordWidthByBearingsKm(centralValueAt, longitude, latitude)
 }
 
+// Half-width, in days, of the window around an instant in which the shadow's closest passage over a point near the
+// central line is searched: 2 h, far more than the shadow takes to cross the path.
+const CENTRAL_PATH_PASSAGE_HALF_SPAN = 2 / 24
+
+// Time apart, in days, of the two central-line points that give its direction: 2 minutes either way.
+const CENTRAL_LINE_BEARING_STEP = 2 / 1440
+
+// Bearing, in radians from north through east, of the central line at an instant; undefined when the shadow axis
+// misses the Earth on either side of the instant.
+function centralLineBearing(pbe: PolynomialBesselianElements, jd: number) {
+	const before = besselianSampleAtJulianDay(pbe, jd - CENTRAL_LINE_BEARING_STEP)
+	const a = projectFundamentalPoint(before, before.x, before.y)
+	const after = besselianSampleAtJulianDay(pbe, jd + CENTRAL_LINE_BEARING_STEP)
+	const b = projectFundamentalPoint(after, after.x, after.y)
+	if (!a || !b) return undefined
+	const dLongitude = b.x - a.x
+	return Math.atan2(Math.sin(dLongitude) * Math.cos(b.y), Math.cos(a.y) * Math.sin(b.y) - Math.sin(a.y) * Math.cos(b.y) * Math.cos(dLongitude))
+}
+
+// Width (km) of the path of a central eclipse on the Earth's surface through a point inside it, as the catalogs
+// publish it at the greatest eclipse: the distance between the limits of totality or annularity, across the central
+// line. It is measured on the ground over the whole passage of the shadow, since a limit is where the central phase
+// just touches over time. This is what an observer means by the width of the path there, and at a low Sun it can be
+// several times the shadow chord of computeLocalShadowPathWidthKm, which is the narrowest width of the footprint at
+// one instant. Returns undefined when a limit is not found within MAX_SHADOW_HALF_WIDTH_KM or the central line has no
+// direction at the instant.
+//   jd: Julian Day of the point's central phase; the central line is taken there.
+export function computeCentralPathWidthKm(pbe: PolynomialBesselianElements, longitude: Angle, latitude: Angle, jd: number) {
+	const bearing = centralLineBearing(pbe, jd)
+	if (bearing === undefined) return undefined
+
+	const metrics: [distance: number, L1: number, L2: number] = [0, 0, 0]
+
+	const passageValueAt = (lon: Angle, lat: Angle) => {
+		const value = (instant: number) => {
+			const [distance, , L2] = localFundamentalMetricsFromSample(besselianSampleAtJulianDay(pbe, instant), lon, lat, metrics)
+			return distance - Math.abs(L2)
+		}
+
+		return brentMinimize(value, jd - CENTRAL_PATH_PASSAGE_HALF_SPAN, jd + CENTRAL_PATH_PASSAGE_HALF_SPAN, { tolerance: 1e-6 }).value
+	}
+
+	if (!(passageValueAt(longitude, latitude) < 0)) return undefined
+
+	const left = findCentralShadowEdgeKm(passageValueAt, longitude, latitude, bearing - PI / 2)
+	const right = findCentralShadowEdgeKm(passageValueAt, longitude, latitude, bearing + PI / 2)
+	return left === undefined || right === undefined ? undefined : left + right
+}
+
 // Computes the local detail summary (magnitude, ratios and durations) from the resolved events.
-function computeLocalDetails(events: LocalSolarEclipseCircumstances['events'], shadowPathWidthKm: number | undefined): LocalSolarEclipseCircumstances['details'] {
+function computeLocalDetails(events: LocalSolarEclipseCircumstances['events'], shadowPathWidthKm: number | undefined, pathWidthKm: number | undefined): LocalSolarEclipseCircumstances['details'] {
 	const { C1, C2, MAX, C3, C4 } = events
 
 	return {
@@ -1347,6 +1399,7 @@ function computeLocalDetails(events: LocalSolarEclipseCircumstances['events'], s
 		partialPhaseDuration: C1 !== undefined && C4 !== undefined ? (C4.jd - C1.jd) * DAYSEC : undefined,
 		centralPhaseDuration: C2 !== undefined && C3 !== undefined ? (C3.jd - C2.jd) * DAYSEC : undefined,
 		shadowPathWidthKm,
+		pathWidthKm,
 	}
 }
 
@@ -1528,7 +1581,8 @@ export function computeLocalSolarEclipseCircumstances(pbe: PolynomialBesselianEl
 	const events = computeLocalEclipseEvents(pbe, longitude, latitude, options)
 	const visibility = computeLocalVisibility(events, pbe, longitude, latitude, options)
 	const shadowPathWidthKm = events.MAX !== undefined && events.MAX.centralPhaseKind !== 'none' ? computeLocalShadowPathWidthKm(pbe, longitude, latitude, events.MAX.jd) : undefined
-	const details = computeLocalDetails(events, shadowPathWidthKm)
+	const pathWidthKm = events.MAX !== undefined && events.MAX.centralPhaseKind !== 'none' ? computeCentralPathWidthKm(pbe, longitude, latitude, events.MAX.jd) : undefined
+	const details = computeLocalDetails(events, shadowPathWidthKm, pathWidthKm)
 	const result: LocalSolarEclipseCircumstances = { location: { longitude, latitude }, visibility, details, events }
 	return result
 }
@@ -1623,7 +1677,7 @@ function extremeCircumstancesAt(pbe: PolynomialBesselianElements, point: SolarEc
 		deltaT: pbe.deltaT,
 		sunAltitude: solarAltitudeAtPoint(pbe, point),
 		sunAzimuth: solarAzimuthAtPoint(pbe, point),
-		pathWidthKm: centralDuration && computeLocalShadowPathWidthKm(pbe, point.x, point.y, jd),
+		pathWidthKm: centralDuration && computeCentralPathWidthKm(pbe, point.x, point.y, jd),
 		centralDuration,
 		kind: centralDuration === undefined ? undefined : centralLineKind(pbe, jd),
 	}

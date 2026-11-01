@@ -1013,6 +1013,19 @@ function findGreatestEclipseT(pbe: PolynomialBesselianElements) {
 	return bestT
 }
 
+// Replaces the greatest eclipse of a Meeus series result by the closest approach of the shadow axis to the Earth's
+// center in the Besselian elements of sunMoonPosition, the definition the published catalogs use. The series is
+// up to about a minute from that instant. The type and the magnitude are kept; gamma is taken at the new instant.
+//   eclipse: eclipse found by nearestSolarEclipse.
+//   sunMoonPosition: Sun and Moon of the eclipse, such as sunMoonPositionAround.
+//   returns: a copy with the refined instant, in TT, and gamma.
+export function refineSolarEclipse(eclipse: Readonly<SolarEclipse>, sunMoonPosition: SunMoonProvider): Readonly<SolarEclipse> {
+	const pbe = computePolynomialBesselianElements(eclipse.maximalTime, sunMoonPosition)
+	const jd = toJulianDay(pbe.time0) + findGreatestEclipseT(pbe) * pbe.step
+	const { x, y } = besselianSampleAtJulianDay(pbe, jd)
+	return { ...eclipse, maximalTime: timeAtJulianDay(pbe.time0, jd), gamma: Math.sign(y) * Math.hypot(x, y) }
+}
+
 // Finds the greatest eclipse point. The greatest-eclipse instant stays the authoritative maximumTime (the
 // published greatest-eclipse epoch) whenever it agrees with the fitted closest approach; a materially
 // inconsistent maximumTime (more than MAXIMUM_TIME_CONSISTENCY_DAYS from the fitted minimum of

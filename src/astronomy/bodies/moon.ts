@@ -72,7 +72,7 @@ export interface LunarEclipse {
 }
 
 // Sentinel TT instant used to initialize the LunarEclipse contact times.
-const DEFAULT_MINIMAL_LUNAR_ECLIPSE_TIME = time(0, 0, Timescale.TT)
+export const DEFAULT_MINIMAL_LUNAR_ECLIPSE_TIME = time(0, 0, Timescale.TT)
 // |gamma| boundary (Earth radii) for an umbral (partial/total) eclipse versus penumbral-only.
 const LUNAR_ECLIPSE_UMBRA_LIMIT = 1.0128
 // |gamma| boundary (Earth radii) beyond which not even the penumbra is touched: no eclipse.
@@ -334,8 +334,11 @@ export function nearestLunarPhase(time: Time, phase: LunarPhase, next: boolean):
 	}
 }
 
-// Computes the nearest (previous or next) lunar eclipse for a given time
-export function nearestLunarEclipse(time: Time, next: boolean): Readonly<LunarEclipse> {
+// Computes the nearest (previous or next) lunar eclipse for a given time from the Meeus series, good to about a
+// minute; refineLunarEclipse replaces its instants, type, and magnitude. `penumbralMargin` accepts candidates whose
+// penumbral magnitude is that far below zero, since the series misses the faintest penumbral eclipses; such a
+// candidate has no valid contacts and must be refined, which rejects it when the Moon misses the penumbra.
+export function nearestLunarEclipse(time: Time, next: boolean, penumbralMargin: number = 0): Readonly<LunarEclipse> {
 	time = tt(time)
 	const jd = toJulianDay(time)
 	let k = lunation(time, 'MEEUS') + (next ? 0.5 : 1.5)
@@ -460,7 +463,7 @@ export function nearestLunarEclipse(time: Time, next: boolean): Readonly<LunarEc
 
 			// No eclipse, if both phases is less than 0.
 			// Examine other lunation
-			if (mag < 0) {
+			if (mag < -penumbralMargin) {
 				found = false
 			}
 			// Eclipse found

@@ -1,12 +1,12 @@
 import { describe, expect, test } from 'bun:test'
 import { nearestSolarEclipse } from '../../../../../src/astronomy/bodies/sun'
-import { computePolynomialBesselianElements, type PolynomialBesselianElements } from '../../../../../src/astronomy/events/eclipse/solar/map'
+import { computePolynomialBesselianElements, refineSolarEclipse, type PolynomialBesselianElements } from '../../../../../src/astronomy/events/eclipse/solar/map'
 import { ASEC2RAD, PI, PIOVERFOUR, PIOVERTWO, RAD2DEG, TAU } from '../../../../../src/core/constants'
 import { deg, normalizeAngle } from '../../../../../src/math/units/angle'
 // oxfmt-ignore
 import { computeLocalSolarEclipseViewGeometry, computeLocalViewDiskPair, buildLocalViewHorizonGeometry, computeGreatestDurationCircumstances, computeGreatestEclipseCircumstances, computeLocalSolarEclipseCircumstances, findLocalContactRoots, findLocalMaximumTime, listLocalSolarEclipses, type LocalFundamentalState, type LocalSolarEclipseCircumstancesOptions, type LocalSolarEclipseEvent, type LocalSolarEclipseViewOptions, type LocalSolarEclipseCircumstances, } from '../../../../../src/astronomy/events/eclipse/solar/local'
-import { sunMoonPosition } from '../../../../../src/astronomy/events/eclipse/eclipse'
-import { timeToDate, timeYMD, toJulianDay, type Time } from '../../../../../src/astronomy/time/time'
+import { sunMoonPosition, sunMoonPositionAround } from '../../../../../src/astronomy/events/eclipse/eclipse'
+import { timeToDate, timeYMD, timeYMDHMS, Timescale, toJulianDay, type Time } from '../../../../../src/astronomy/time/time'
 import { sphericalSeparation } from '../../../../../src/math/numerical/geometry'
 
 function viewOptions(overrides: Partial<LocalSolarEclipseViewOptions> = {}): LocalSolarEclipseViewOptions {
@@ -717,5 +717,48 @@ describe('listLocalSolarEclipses', () => {
 		expect(listLocalSolarEclipses(deg(0), deg(-80), timeYMD(2024, 3, 1), timeYMD(2024, 5, 1), sunMoonPosition)).toHaveLength(0)
 		// endTime before startTime yields no results.
 		expect(listLocalSolarEclipses(mazatlanLongitude, mazatlanLatitude, timeYMD(2024, 7, 1), timeYMD(2024, 1, 1), sunMoonPosition)).toHaveLength(0)
+	})
+})
+
+// Published by F. Espenak, NASA Catalog of Solar Eclipses 2001 to 2100, for the point of greatest eclipse.
+describe('path width', () => {
+	const greatestWidth = (year: number, month: number, day: number) => {
+		const eclipse = nearestSolarEclipse(timeYMD(year, month, day), true)
+		const provider = sunMoonPositionAround(eclipse.maximalTime)
+		return computeGreatestEclipseCircumstances(computePolynomialBesselianElements(refineSolarEclipse(eclipse, provider).maximalTime, provider))!.pathWidthKm!
+	}
+
+	test.each([
+		[2026, 2, 16, 616],
+		[2023, 10, 13, 187],
+		[2034, 3, 19, 159],
+	])('matches the catalog at the greatest eclipse after %i-%i-%i, near %i km', (year, month, day, width) => {
+		expect(Math.abs(greatestWidth(year, month, day) / width - 1)).toBeLessThan(0.03)
+	})
+
+	test('through a place, it is the distance between the limits, wider than the shadow chord at a low Sun', () => {
+		const eclipse = nearestSolarEclipse(timeYMD(2026, 8, 11), true)
+		const provider = sunMoonPositionAround(eclipse.maximalTime)
+		const pbe = computePolynomialBesselianElements(eclipse.maximalTime, provider)
+		const { details } = computeLocalSolarEclipseCircumstances(pbe, deg(-8.4115), deg(43.3623), { sunMoonPosition: provider, horizonAltitude: 0 })
+		expect(details.shadowPathWidthKm!).toBeLessThan(details.pathWidthKm!)
+		expect(details.pathWidthKm!).toBeGreaterThan(250)
+		expect(details.pathWidthKm!).toBeLessThan(320)
+	})
+
+	test('is absent outside the path', () => {
+		const { details } = computeLocalSolarEclipseCircumstances(total2024.pbe, deg(-74.006), deg(40.7128), { sunMoonPosition, horizonAltitude: 0 })
+		expect(details.pathWidthKm).toBeUndefined()
+	})
+})
+
+describe('refineSolarEclipse', () => {
+	test('takes the greatest eclipse of the 2024-04-08 catalog entry from the Besselian elements', () => {
+		const eclipse = nearestSolarEclipse(timeYMD(2024, 4, 8), true)
+		const refined = refineSolarEclipse(eclipse, sunMoonPositionAround(eclipse.maximalTime))
+		const seconds = (toJulianDay(refined.maximalTime) - toJulianDay(timeYMDHMS(2024, 4, 8, 18, 18, 29, Timescale.TT))) * 86400
+		expect(Math.abs(seconds)).toBeLessThan(10)
+		expect(refined.gamma).toBeCloseTo(0.3431, 3)
+		expect(refined.type).toBe('total')
 	})
 })

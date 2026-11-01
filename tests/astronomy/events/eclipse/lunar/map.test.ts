@@ -1,10 +1,10 @@
 import { describe, expect, test } from 'bun:test'
 import { nearestLunarEclipse } from '../../../../../src/astronomy/bodies/moon'
-import { sunMoonPosition } from '../../../../../src/astronomy/events/eclipse/eclipse'
+import { sunMoonPosition, sunMoonPositionAround } from '../../../../../src/astronomy/events/eclipse/eclipse'
 import { moonAltitudeAt } from '../../../../../src/astronomy/events/eclipse/lunar/local'
-import { computeLunarEclipseMapGeometry, lunarEclipseEvents, lunarEclipseMapToSvgPaths, MOON_RADIUS_EARTH_RADII, type LunarEclipseContactKind } from '../../../../../src/astronomy/events/eclipse/lunar/map'
+import { computeLunarEclipseMapGeometry, lunarEclipseEvents, lunarEclipseMapToSvgPaths, MOON_RADIUS_EARTH_RADII, refineLunarEclipse, type LunarEclipseContactKind } from '../../../../../src/astronomy/events/eclipse/lunar/map'
 import { PlateCarree } from '../../../../../src/astronomy/projections/projection'
-import { greenwichApparentSiderealTime, type Time, timeYMDHMS } from '../../../../../src/astronomy/time/time'
+import { greenwichApparentSiderealTime, type Time, timeYMDHMS, Timescale, toJulianDay } from '../../../../../src/astronomy/time/time'
 import { PI, PIOVERTWO, TAU } from '../../../../../src/core/constants'
 import { deg, type Angle } from '../../../../../src/math/units/angle'
 import { longestProjectedSegment } from '../util'
@@ -500,5 +500,46 @@ describe('fill region polygons', () => {
 		expect(pointInPath(sub.x, sub.y, above)).toBe(true)
 		expect(pointInPath(anti.x, anti.y, above)).toBe(false)
 		expect(pointInPath(enclosedPole.x, enclosedPole.y, above)).toBe(true)
+	})
+})
+
+// Published by F. Espenak, NASA Catalog of Lunar Eclipses 2001 to 2100: TD of the greatest eclipse, magnitude, durations.
+describe('refineLunarEclipse', () => {
+	const refined = (year: number, month: number, day: number, margin = 0) => {
+		const eclipse = nearestLunarEclipse(timeYMDHMS(year, month, day, 0, 0, 0), true, margin)
+		return refineLunarEclipse(eclipse, sunMoonPositionAround(eclipse.maximalTime))
+	}
+
+	const seconds = (a: Time, b: Time) => (toJulianDay(a) - toJulianDay(b)) * 86400
+
+	test('agrees with the catalog on 2025-03-14', () => {
+		const eclipse = refined(2025, 3, 13)!
+		expect(eclipse.type).toBe('TOTAL')
+		expect(eclipse.magnitude).toBeCloseTo(1.1784, 3)
+		expect(Math.abs(seconds(eclipse.maximalTime, timeYMDHMS(2025, 3, 14, 6, 59, 56, Timescale.TT)))).toBeLessThan(3)
+		expect(seconds(eclipse.totalEndTime, eclipse.totalBeginTime) / 60).toBeCloseTo(65.4, 0)
+		expect(seconds(eclipse.lastContactUmbraTime, eclipse.firstContactUmbraTime) / 60).toBeCloseTo(218.3, 0)
+		expect(seconds(eclipse.lastContactPenumbraTime, eclipse.firstContactPenumbraTime) / 60).toBeCloseTo(362.6, 0)
+	})
+
+	test('classifies the shortest total eclipse of the century, which the series takes for a partial one', () => {
+		const eclipse = refined(2015, 4, 3)!
+		expect(eclipse.type).toBe('TOTAL')
+		expect(eclipse.magnitude).toBeCloseTo(1.0008, 3)
+		expect(seconds(eclipse.totalEndTime, eclipse.totalBeginTime) / 60).toBeCloseTo(4.7, 0)
+	})
+
+	test('has no contacts a partial or penumbral eclipse lacks', () => {
+		const eclipse = refined(2024, 9, 17)!
+		expect(eclipse.type).toBe('PARTIAL')
+		expect(lunarEclipseEvents(eclipse).map((e) => e.kind)).toEqual(['P1', 'U1', 'MAX', 'U4', 'P4'])
+		expect(eclipse.sdTotal).toBeNaN()
+	})
+
+	test('finds a penumbral eclipse the series misses, and rejects a candidate that misses the penumbra', () => {
+		const eclipse = refined(2027, 7, 17, 0.02)!
+		expect(eclipse.type).toBe('PENUMBRAL')
+		expect(eclipse.magnitude).toBeCloseTo(0.0014, 2)
+		expect(lunarEclipseEvents(eclipse).map((e) => e.kind)).toEqual(['P1', 'MAX', 'P4'])
 	})
 })

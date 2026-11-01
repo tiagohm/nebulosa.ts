@@ -2076,13 +2076,30 @@ const greatest = computeGreatestEclipseCircumstances(pbe)!
 console.log(toDeg(greatest.longitude), toDeg(greatest.latitude)) // -104.05 25.40
 console.log(timeToDate(utc(greatest.time)).slice(0, 6).join('-'), greatest.deltaT) // 2024-4-8-18-17-46 74.03057366821392
 console.log(toDeg(greatest.sunAltitude), toDeg(greatest.sunAzimuth)) // 69.78 150.02
-console.log(greatest.pathWidthKm, greatest.centralDuration, greatest.kind) // 187.87109375 269.8845148086548 total
+console.log(greatest.pathWidthKm, greatest.centralDuration, greatest.kind) // 199.189453125 269.8845148086548 total
 
 // The greatest duration is on the central line too, but about 0.5° to the north-east.
 const longest = computeGreatestDurationCircumstances(pbe)!
 console.log(toDeg(longest.longitude), toDeg(longest.latitude)) // -103.53 25.94
 console.log(timeToDate(utc(longest.time)).slice(0, 6).join('-')) // 2024-4-8-18-19-39
-console.log(longest.pathWidthKm, longest.centralDuration, longest.kind) // 187.78076171875 269.9222132563591 total
+console.log(longest.pathWidthKm, longest.centralDuration, longest.kind) // 198.77685546875 269.9222132563591 total
+```
+
+`pathWidthKm` is the width of the path as the catalogs publish it: the distance between the limits of totality or annularity across the central line, measured on the ground over the whole passage of the shadow (`computeCentralPathWidthKm(pbe, longitude, latitude, jd)`). The same value for any place inside the path is `details.pathWidthKm` of the local circumstances. `details.shadowPathWidthKm` is a different quantity: the shadow's chord through the place, the narrowest width of the footprint at the local maximum. They agree at a high Sun; at a low Sun the footprint is a long ellipse and the path can be several times wider than the chord.
+
+The instants and the Moon of the series and of `sunMoonPosition` are a fast approximation: `nearestSolarEclipse` is up to about a minute from the published greatest eclipse, and `eraMoon98` up to about 8″ from ELPMPP02, about 15 s on a contact. For results to be shown, build the provider of the eclipse with `sunMoonPositionAround(center)`, which corrects the Moon with three ELPMPP02 evaluations and then costs what `sunMoonPosition` costs, and take the greatest eclipse from the Besselian elements with `refineSolarEclipse(eclipse, provider)`, which returns a copy with the new `maximalTime` and `gamma`.
+
+```ts
+import { nearestSolarEclipse } from 'nebulosa/src/astronomy/bodies/sun'
+import { sunMoonPositionAround } from 'nebulosa/src/astronomy/events/eclipse/eclipse'
+import { refineSolarEclipse } from 'nebulosa/src/astronomy/events/eclipse/solar/map'
+import { timeToDate, timeYMDHMS, Timescale, utc } from 'nebulosa/src/astronomy/time/time'
+
+const series = nearestSolarEclipse(timeYMDHMS(2024, 4, 1, 0, 0, 0, Timescale.UTC), true)
+const eclipse = refineSolarEclipse(series, sunMoonPositionAround(series.maximalTime))
+
+console.log(timeToDate(utc(series.maximalTime)).slice(0, 6).join('-'), series.gamma) // 2024-4-8-18-17-46 0.34375
+console.log(timeToDate(utc(eclipse.maximalTime)).slice(0, 6).join('-'), eclipse.gamma) // 2024-4-8-18-17-14 0.34315
 ```
 
 ### HEALPix Object Index
@@ -3153,6 +3170,19 @@ console.log(eclipse.sdTotal * 1440) // 40.7 — minutes, half the duration of to
 const penumbral = nearestLunarEclipse(timeYMDHMS(1973, 6, 1, 0, 0, 0, Timescale.UTC), true)
 
 console.log(penumbral.type, penumbral.firstContactUmbraTime.day, penumbral.sdPartial) // PENUMBRAL 0 NaN
+```
+
+`nearestLunarEclipse` comes from the Meeus series, about a minute from the published contacts, and its shadow radii differ from the catalogs': the penumbral duration is about 2 minutes short on average, and the shortest total eclipse of the century, 2015-04-04, reads as partial. `refineLunarEclipse(eclipse, sunMoonPosition)` in `events/eclipse/lunar/map` replaces the instants, type, magnitude, and gamma with the geometry of the Moon and the Earth's shadow, with Danjon's radii (1.01 π_m + π_s ∓ s_s): the greatest eclipse is the Moon's closest approach to the axis, and a contact is its limb reaching a radius. It returns `undefined` when the Moon misses the penumbra. The series also misses the faintest penumbral eclipses, so `nearestLunarEclipse(time, next, penumbralMargin)` accepts candidates that far below magnitude 0 for the refinement to decide; such a candidate has no valid contacts before it is refined.
+
+```ts
+import { nearestLunarEclipse } from 'nebulosa/src/astronomy/bodies/moon'
+import { sunMoonPositionAround } from 'nebulosa/src/astronomy/events/eclipse/eclipse'
+import { refineLunarEclipse } from 'nebulosa/src/astronomy/events/eclipse/lunar/map'
+import { timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+
+const series = nearestLunarEclipse(timeYMDHMS(2015, 4, 3, 0, 0, 0), true)
+const eclipse = refineLunarEclipse(series, sunMoonPositionAround(series.maximalTime))!
+console.log(series.type, eclipse.type, eclipse.magnitude.toFixed(4)) // PARTIAL TOTAL 1.0008
 ```
 
 ### Lunar Eclipse Visibility Geometry
