@@ -722,7 +722,12 @@ describe('calibrate', async () => {
 function integerFits(bitpix: 16 | 32, samples: readonly number[], cards: readonly string[] = []) {
 	const header = [`SIMPLE  =                    T`, `BITPIX  = ${`${bitpix}`.padStart(20)}`, `NAXIS   =                    2`, `NAXIS1  = ${`${samples.length}`.padStart(20)}`, `NAXIS2  =                    1`, ...cards, 'END']
 	const data = Buffer.alloc(2880)
-	samples.forEach((sample, i) => (bitpix === 16 ? data.writeInt16BE(sample, i * 2) : data.writeInt32BE(sample, i * 4)))
+
+	for (let i = 0; i < samples.length; i++) {
+		if (bitpix === 16) data.writeInt16BE(samples[i], i * 2)
+		else data.writeInt32BE(samples[i], i * 4)
+	}
+
 	return Buffer.concat([
 		Buffer.from(
 			header
