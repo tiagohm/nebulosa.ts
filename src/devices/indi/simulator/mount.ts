@@ -2269,6 +2269,7 @@ export class MountSimulator extends DeviceSimulator {
 		if (this.#manualNorthSouth === direction) return
 		if (direction !== 0) this.#abortSlew()
 		this.#manualNorthSouth = direction
+		this.#publishManualMotion(this.#motionNS, direction > 0 ? 'MOTION_NORTH' : direction < 0 ? 'MOTION_SOUTH' : undefined)
 		this.#refreshSlewingState()
 	}
 
@@ -2278,13 +2279,21 @@ export class MountSimulator extends DeviceSimulator {
 		if (this.#manualWestEast === direction) return
 		if (direction !== 0) this.#abortSlew()
 		this.#manualWestEast = direction
+		this.#publishManualMotion(this.#motionWE, direction > 0 ? 'MOTION_EAST' : direction < 0 ? 'MOTION_WEST' : undefined)
 		this.#refreshSlewingState()
+	}
+
+	// Publishes the manual motion of an axis: the switch of its direction, Busy while it moves, as a driver does.
+	#publishManualMotion(vector: ReturnType<typeof makeSwitchVector>, direction: string | undefined) {
+		for (const name in vector.elements) vector.elements[name].value = name === direction
+		vector.state = direction === undefined ? 'Idle' : 'Busy'
+		this.notify(vector)
 	}
 
 	// Clears any manual motion command.
 	#clearManualMotion() {
-		this.#manualNorthSouth = 0
-		this.#manualWestEast = 0
+		this.#setManualNorthSouth(0)
+		this.#setManualWestEast(0)
 	}
 
 	// Clears active pulse-guiding commands.

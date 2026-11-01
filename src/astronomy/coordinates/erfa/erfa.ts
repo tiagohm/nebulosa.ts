@@ -2507,13 +2507,14 @@ export function eraAtciq(rc: Angle, dc: Angle, pr: Angle, pd: Angle, px: Distanc
 
 // Quick ICRS to CIRS transformation, given precomputed star-
 // independent astrometry parameters, and assuming zero parallax and
-// proper motion.
-export function eraAtciqz(rc: Angle, dc: Angle, astrom: EraAstrom) {
+// proper motion. `deflected` applies the light deflection by the Sun, which assumes a source far behind it; it must be
+// off for the Sun itself, whose light is not deflected on its way out.
+export function eraAtciqz(rc: Angle, dc: Angle, astrom: EraAstrom, deflected: boolean = true) {
 	// BCRS coordinate direction (unit vector).
 	const pco = eraS2c(rc, dc)
 
 	// Light deflection by the Sun, giving BCRS natural direction.
-	const pnat = eraLdSun(pco, astrom.eh, astrom.em)
+	const pnat = deflected ? eraLdSun(pco, astrom.eh, astrom.em) : pco
 
 	// Aberration, giving GCRS proper direction.
 	const ppr = eraAb(pnat, astrom.v, astrom.em, astrom.bm1)

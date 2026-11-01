@@ -4824,3 +4824,19 @@ function makeMeridianFlipMount(id: string) {
 function closeTo(a: number, b: number, tolerance: number) {
 	return Math.abs(a - b) <= tolerance
 }
+
+test('reports manual motion while an axis moves, as a driver does', () => {
+	const { client, mount, simulator } = makeMeridianFlipMount('mount.manual.motion')
+
+	client.sendSwitch({ device: mount.name, name: 'TELESCOPE_MOTION_NS', elements: { MOTION_NORTH: true, MOTION_SOUTH: false } })
+	expect(mount.moving).toBeTrue()
+
+	client.sendSwitch({ device: mount.name, name: 'TELESCOPE_MOTION_NS', elements: { MOTION_NORTH: false, MOTION_SOUTH: false } })
+	expect(mount.moving).toBeFalse()
+
+	client.sendSwitch({ device: mount.name, name: 'TELESCOPE_MOTION_WE', elements: { MOTION_WEST: false, MOTION_EAST: true } })
+	expect(mount.moving).toBeTrue()
+
+	simulator.dispose()
+	expect(mount.moving).toBeFalse()
+})

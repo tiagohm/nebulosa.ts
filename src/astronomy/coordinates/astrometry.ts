@@ -362,13 +362,14 @@ export function phaseAngle(body: CartesianCoordinate, sun: CartesianCoordinate, 
 }
 
 // Computes CIRS coordinates from ICRS cartesian/spherical coordinates (assuming zero parallax and proper motion).
-export function icrsToCirs(icrs: Vec3 | readonly [Angle, Angle], time: Time, ebpv: PositionAndVelocity, ehp: Vec3 = ebpv[0], astrom?: EraAstrom) {
+// `deflected` applies the light deflection by the Sun; it must be off for the Sun itself (see eraAtciqz).
+export function icrsToCirs(icrs: Vec3 | readonly [Angle, Angle], time: Time, ebpv: PositionAndVelocity, ehp: Vec3 = ebpv[0], astrom?: EraAstrom, deflected: boolean = true) {
 	const a = tt(time)
 
 	astrom ??= eraApci13(a.day, a.fraction, ebpv, ehp)
 
 	const [rc, dc] = icrs.length === 2 ? icrs : eraC2s(...icrs)
-	return eraAtciqz(rc, dc, astrom)
+	return eraAtciqz(rc, dc, astrom, deflected)
 }
 
 // Computes ICRS coordinates from CIRS cartesian/spherical coordinates.
