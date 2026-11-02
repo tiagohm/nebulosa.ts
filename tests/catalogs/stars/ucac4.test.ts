@@ -88,7 +88,7 @@ test('fails cleanly when no UCAC4 zone files exist', async () => {
 	const root = await fs.mkdtemp(join(tmpdir(), 'nebulosa-ucac4-empty-'))
 
 	try {
-		expect(openUcac4Catalog(root)).rejects.toThrow()
+		await expect(openUcac4Catalog(root)).rejects.toThrow()
 	} finally {
 		await fs.rm(root, { recursive: true, force: true })
 	}
@@ -107,7 +107,7 @@ test('detects malformed records with invalid coordinates', async () => {
 		const catalog = await openUcac4Catalog(root)
 
 		try {
-			expect(catalog.queryCone(0, 0, deg(1))).rejects.toThrow()
+			await expect(catalog.queryCone(0, 0, deg(1))).rejects.toThrow()
 		} finally {
 			await catalog.close()
 		}
@@ -186,7 +186,7 @@ test.each(['1 644 1 NaN 31413 1140226325 463469832 20000', '1 644 1 41087', '1 6
 	try {
 		await fs.writeFile(join(root, 'z644'), Buffer.alloc(RECORD_SIZE))
 		await fs.writeFile(join(root, 'u4hpm.dat'), data)
-		expect(openUcac4Catalog(root)).rejects.toThrow('corrupt UCAC4 high proper motion file')
+		await expect(openUcac4Catalog(root)).rejects.toThrow('corrupt UCAC4 high proper motion file')
 	} finally {
 		await fs.rm(root, { recursive: true, force: true })
 	}

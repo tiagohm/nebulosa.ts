@@ -40,8 +40,8 @@ test('query polygon filters a convex polygon exactly', async () => {
 	expect(idsOf(await catalog.queryPolygon(polygon))).toEqual(['polygon-inside'])
 })
 
-test('query polygon rejects fewer than three vertices', () => {
-	expect(catalog.queryPolygon([[0, 0]])).rejects.toThrow('at least three vertices')
+test('query polygon rejects fewer than three vertices', async () => {
+	await expect(catalog.queryPolygon([[0, 0]])).rejects.toThrow('at least three vertices')
 })
 
 test('query region dispatches by query kind', async () => {

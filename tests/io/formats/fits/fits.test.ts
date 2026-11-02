@@ -603,7 +603,7 @@ test('escape keyword', () => {
 	expect(sink).toEqual(source)
 })
 
-test('rejects a non-Rice compressed image HDU', () => {
+test('rejects a non-Rice compressed image HDU', async () => {
 	const header: FitsHeader = {
 		XTENSION: 'BINTABLE',
 		BITPIX: 8,
@@ -622,7 +622,7 @@ test('rejects a non-Rice compressed image HDU', () => {
 	const hdu: FitsHdu = { header, data: { offset: 0, size: 800 } }
 	const output = new Float64Array(8 * 100)
 
-	expect(new FitsImageReader(hdu).read(bufferSource(Buffer.alloc(800)), output)).rejects.toThrow('unsupported FITS compression')
+	await expect(new FitsImageReader(hdu).read(bufferSource(Buffer.alloc(800)), output)).rejects.toThrow('unsupported FITS compression')
 })
 
 test('fits image reader and writer honor non-zero backing buffer offsets', async () => {
@@ -958,7 +958,7 @@ describe('row access', () => {
 		const fits = await readFits(source)
 		const reader = new FitsImageReader(fits!.hdus[1])
 		expect(reader.rowAddressable).toBeFalse()
-		expect(reader.readRows(source, new Float32Array(2), 0, 1)).rejects.toThrow('not addressable')
+		await expect(reader.readRows(source, new Float32Array(2), 0, 1)).rejects.toThrow('not addressable')
 	})
 
 	test('streams floating-point rows in physical units with no normalization', async () => {
@@ -987,6 +987,6 @@ describe('row access', () => {
 		const writer = new FitsImageRowWriter(sink, { BITPIX: -32, NAXIS1: 2, NAXIS2: 1 })
 		await writer.begin()
 		await writer.write(new Float32Array([1]))
-		expect(writer.end()).rejects.toThrow('incomplete')
+		await expect(writer.end()).rejects.toThrow('incomplete')
 	})
 })

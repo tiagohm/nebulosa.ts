@@ -109,12 +109,12 @@ test('stores names case-insensitively', async () => {
 	expect(pool.get('FRAME_MOON_PA')).toEqual([31000])
 })
 
-test('rejects a file that is not a text kernel', () => {
-	expect(readTextKernel(kernelSource('DAF/PCK\n'))).rejects.toThrow('text kernel must start with KPL/PCK or KPL/FK')
+test('rejects a file that is not a text kernel', async () => {
+	await expect(readTextKernel(kernelSource('DAF/PCK\n'))).rejects.toThrow('text kernel must start with KPL/PCK or KPL/FK')
 })
 
-test('rejects an unterminated list', () => {
-	expect(
+test('rejects an unterminated list', async () => {
+	await expect(
 		readTextKernel(
 			kernelSource(`KPL/PCK
 \\begindata
@@ -125,8 +125,8 @@ test('rejects an unterminated list', () => {
 	).rejects.toThrow('unterminated list')
 })
 
-test('rejects an unterminated string', () => {
-	expect(
+test('rejects an unterminated string', async () => {
+	await expect(
 		readTextKernel(
 			kernelSource(`KPL/FK
 \\begindata
@@ -137,8 +137,8 @@ test('rejects an unterminated string', () => {
 	).rejects.toThrow('unterminated string')
 })
 
-test('rejects @ calendar dates', () => {
-	expect(
+test('rejects @ calendar dates', async () => {
+	await expect(
 		readTextKernel(
 			kernelSource(`KPL/PCK
 \\begindata
@@ -149,8 +149,8 @@ test('rejects @ calendar dates', () => {
 	).rejects.toThrow('@ dates are not supported')
 })
 
-test('rejects a missing equals sign', () => {
-	expect(
+test('rejects a missing equals sign', async () => {
+	await expect(
 		readTextKernel(
 			kernelSource(`KPL/FK
 \\begindata
