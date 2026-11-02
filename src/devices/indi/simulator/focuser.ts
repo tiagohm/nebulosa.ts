@@ -13,20 +13,25 @@ import { applyExclusiveSwitchValues, applyNumberVectorValues } from './util'
 // Simulated focuser motion, mechanical backlash, ambient temperature, and temperature compensation. The standard
 // driver backlash compensation properties are published and stored but never applied, so a client can be tested
 // against a driver that reports one.
+//
+// Backlash is the play of a rigid gear train, in steps: a single gap between the motor and the optical drawtube, the
+// same transmission model as the mount axes in mount.axis.ts without stiction. A reversal moves the open slack to the
+// other flank, so it costs the full gap (or the complement of a partly closed one) in either direction, and the motor
+// to optics offset only swings across one interval as wide as the backlash (containing zero after a sync, shifted by a
+// later change of the backlash). Repeated IN/OUT cycles therefore never drift the optics.
 
-// Direction of motor travel, with zero denoting a mechanism that has not yet engaged either side.
+// Direction the gear train is loaded in, with zero denoting a mechanism that has not yet engaged either flank.
 type FocuserAxisDirection = -1 | 0 | 1
 
-// Configures persistence and direction-dependent lost motion for a simulated focuser.
+// Configures persistence and gear play for a simulated focuser.
 export interface FocuserSimulatorOptions extends DeviceSimulatorOptions {
-	// Motor travel in steps consumed before effective motion resumes in the inward/decreasing direction.
-	readonly backlashIn?: number
-	// Motor travel in steps consumed before effective motion resumes in the outward/increasing direction.
-	readonly backlashOut?: number
+	// Total play of the gear train, in steps (non-negative). A full reversal in either direction consumes this much
+	// motor travel before the optical position moves again.
+	readonly backlash?: number
 }
 
 // Simulated focuser. Models absolute/relative moves at a fixed rate, a sinusoidal temperature,
-// direction-dependent backlash, and temperature compensation, advancing the position each tick. The reverse
+// gear backlash, and temperature compensation, advancing the position each tick. The reverse
 // switch is kept but, as on a real controller, only inverts the motor and not the reported position.
 export class FocuserSimulator extends DeviceSimulator {
 	readonly type = 'focuser'
@@ -39,7 +44,7 @@ export class FocuserSimulator extends DeviceSimulator {
 	readonly #sync = makeNumberVector('', 'FOCUS_SYNC', 'Sync', MAIN_CONTROL, 'rw', ['FOCUS_SYNC_VALUE', 'Position', FOCUSER_INITIAL_POSITION, 0, FOCUSER_MAX_POSITION, 1, '%.0f'])
 	readonly #temperature = makeNumberVector('', 'FOCUS_TEMPERATURE', 'Temperature', MAIN_CONTROL, 'ro', ['TEMPERATURE', 'Temperature', CAMERA_AMBIENT_TEMPERATURE, -50, 70, 0.1, '%6.2f'])
 	readonly #temperatureCompensation = makeSwitchVector('', 'FOCUS_TEMPERATURE_COMPENSATION', 'Temperature Compensation', MAIN_CONTROL, 'OneOfMany', 'rw', ['INDI_ENABLED', 'On', false], ['INDI_DISABLED', 'Off', true])
-	readonly #backlash = makeNumberVector('', 'SIMULATOR_BACKLASH', 'Backlash', SIMULATION, 'rw', ['BACKLASH_IN', 'In (steps)', 0, 0, FOCUSER_MAX_POSITION, 1, '%.0f'], ['BACKLASH_OUT', 'Out (steps)', 0, 0, FOCUSER_MAX_POSITION, 1, '%.0f'])
+	readonly #backlash = makeNumberVector('', 'SIMULATOR_BACKLASH', 'Backlash', SIMULATION, 'rw', ['BACKLASH', 'Play (steps)', 0, 0, FOCUSER_MAX_POSITION, 1, '%.0f'])
 
 	// Standard driver backlash compensation switch, stored only: the simulated mechanics never apply it.
 	readonly #driverBacklashToggle = makeSwitchVector('', 'FOCUS_BACKLASH_TOGGLE', 'Backlash', MAIN_CONTROL, 'OneOfMany', 'rw', ['INDI_ENABLED', 'Enabled', false], ['INDI_DISABLED', 'Disabled', true])
@@ -53,8 +58,10 @@ export class FocuserSimulator extends DeviceSimulator {
 	#lastTick = 0
 	#targetPosition?: number
 	#effectivePosition = FOCUSER_INITIAL_POSITION
-	#engagedDirection: FocuserAxisDirection = 0
-	#slackTravel = 0
+	// Flank the gear train is loaded on, or zero when unloaded (initially and after a sync).
+	#loadDirection: FocuserAxisDirection = 0
+	// Slack still to be taken up in the load direction before the optics move, in steps within [0, backlash].
+	#slackRemaining = 0
 	#temperaturePhase = 0
 	#lastCompensationTemperature = CAMERA_AMBIENT_TEMPERATURE
 
@@ -65,8 +72,7 @@ export class FocuserSimulator extends DeviceSimulator {
 		handler: IndiClientHandler = client.handler,
 	) {
 		super(name, client, handler, DeviceInterfaceType.FOCUSER, 'focuser.simulator')
-		this.#backlash.elements.BACKLASH_IN.value = options?.backlashIn ?? 0
-		this.#backlash.elements.BACKLASH_OUT.value = options?.backlashOut ?? 0
+		this.#backlash.elements.BACKLASH.value = options?.backlash ?? 0
 
 		for (const property of this.properties) {
 			property.device = name
@@ -80,19 +86,16 @@ export class FocuserSimulator extends DeviceSimulator {
 		return this.#position.elements.FOCUS_ABSOLUTE_POSITION.value
 	}
 
-	// Current effective optical position after mechanical backlash is applied, in steps.
+	// Current effective optical position after the gear play is applied, in steps. Since a sync it differs from the motor
+	// position by at most the backlash (while the backlash is unchanged), so it can lie up to that many steps outside the
+	// motor range at the travel limits.
 	get effectivePosition() {
 		return this.#effectivePosition
 	}
 
-	// Configured lost motion before effective inward/decreasing travel resumes, in steps.
-	get backlashIn() {
-		return this.#backlash.elements.BACKLASH_IN.value
-	}
-
-	// Configured lost motion before effective outward/increasing travel resumes, in steps.
-	get backlashOut() {
-		return this.#backlash.elements.BACKLASH_OUT.value
+	// Configured total play of the gear train, in steps.
+	get backlash() {
+		return this.#backlash.elements.BACKLASH.value
 	}
 
 	// Whether a move is in progress.
@@ -110,7 +113,7 @@ export class FocuserSimulator extends DeviceSimulator {
 		return this.#temperature.elements.TEMPERATURE.value
 	}
 
-	// Handles focuser number commands: absolute/relative move, sync to a position, and the backlash amounts.
+	// Handles focuser number commands: absolute/relative move, sync to a position, and the backlash amount.
 	sendNumber(vector: NewNumberVector) {
 		switch (vector.name) {
 			case 'ABS_FOCUS_POSITION':
@@ -124,8 +127,8 @@ export class FocuserSimulator extends DeviceSimulator {
 				return
 			case 'SIMULATOR_BACKLASH':
 				if (applyNumberVectorValues(this.#backlash, vector.elements)) {
-					this.#engagedDirection = 0
-					this.#slackTravel = 0
+					// The open slack cannot exceed the gap the gear now has, or a shrunk play would still be ground through.
+					this.#slackRemaining = Math.min(this.#slackRemaining, this.backlash)
 					this.notify(this.#backlash)
 				}
 
@@ -233,8 +236,8 @@ export class FocuserSimulator extends DeviceSimulator {
 		this.#sync.elements.FOCUS_SYNC_VALUE.value = position
 		this.#position.elements.FOCUS_ABSOLUTE_POSITION.value = position
 		this.#effectivePosition = position
-		this.#engagedDirection = 0
-		this.#slackTravel = 0
+		this.#loadDirection = 0
+		this.#slackRemaining = 0
 		this.#relativePosition.elements.FOCUS_RELATIVE_POSITION.value = 0
 		this.stop(false)
 		this.notify(this.#sync)
@@ -291,38 +294,24 @@ export class FocuserSimulator extends DeviceSimulator {
 		this.notify(this.#relativePosition)
 	}
 
-	// Applies signed motor travel to the effective position while preserving partially consumed slack.
+	// Applies signed motor travel, in steps, to the effective optical position through the gear play. An unloaded train
+	// engages immediately; a reversal leaves open the complement of the slack still open on the previous flank; the
+	// motor then closes that slack before the remainder of the travel reaches the optics. Splitting a move across ticks
+	// gives the same result as applying it at once.
 	#advanceEffectivePosition(travel: number) {
 		if (travel === 0) return
 
 		const direction = Math.sign(travel) as Exclude<FocuserAxisDirection, 0>
-		let remaining = Math.abs(travel)
 
-		if (this.#engagedDirection === 0) {
-			this.#engagedDirection = direction
-			this.#effectivePosition = clamp(this.#effectivePosition + travel, this.#position.elements.FOCUS_ABSOLUTE_POSITION.min, this.#position.elements.FOCUS_ABSOLUTE_POSITION.max)
-			return
+		if (this.#loadDirection !== direction) {
+			this.#slackRemaining = this.#loadDirection === 0 ? 0 : this.backlash - this.#slackRemaining
+			this.#loadDirection = direction
 		}
 
-		if (direction === this.#engagedDirection) {
-			const recovered = Math.min(remaining, this.#slackTravel)
-			this.#slackTravel -= recovered
-			remaining -= recovered
-			if (remaining > 0) this.#effectivePosition += direction * remaining
-		} else {
-			const backlash = direction < 0 ? this.backlashIn : this.backlashOut
-			const consumed = Math.min(remaining, Math.max(0, backlash - this.#slackTravel))
-			this.#slackTravel += consumed
-			remaining -= consumed
-
-			if (this.#slackTravel >= backlash) {
-				this.#engagedDirection = direction
-				this.#slackTravel = 0
-				if (remaining > 0) this.#effectivePosition += direction * remaining
-			}
-		}
-
-		this.#effectivePosition = clamp(this.#effectivePosition, this.#position.elements.FOCUS_ABSOLUTE_POSITION.min, this.#position.elements.FOCUS_ABSOLUTE_POSITION.max)
+		const distance = Math.abs(travel)
+		const closed = Math.min(distance, this.#slackRemaining)
+		this.#slackRemaining -= closed
+		this.#effectivePosition += direction * (distance - closed)
 	}
 
 	// Updates the moving state reflected by both focuser motion vectors.

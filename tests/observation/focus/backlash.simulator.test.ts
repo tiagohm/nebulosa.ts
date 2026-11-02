@@ -13,8 +13,7 @@ import { isTimeConsumingTestSkipped, waitUntil } from '../../util'
 
 // The compensator over the simulated mechanics: with a play of 120 steps and the overshoot a calibration recommends for
 // it (180 steps, 1.5 times the play), every return to the same position ends at the same optical position, while
-// uncompensated returns from both sides do not. The play is symmetric because the simulator consumes backlashIn and
-// backlashOut independently, so unequal amounts shift the optical position by their difference on every IN/OUT cycle.
+// uncompensated returns from both sides do not.
 
 const SKIP = isTimeConsumingTestSkipped()
 
@@ -35,7 +34,7 @@ describe.skipIf(SKIP)('backlash compensation over the focuser simulator', () => 
 
 	// Effective positions of the simulator each time the trajectory arrives at 50000, in steps.
 	async function returns(name: string, compensation: BacklashCompensation) {
-		using simulator = new FocuserSimulator(name, client, { backlashIn: 120, backlashOut: 120 })
+		using simulator = new FocuserSimulator(name, client, { backlash: 120 })
 		const focuser: Focuser = focuserManager.get(client, name)!
 		focuserManager.connect(focuser)
 		await waitUntil(() => focuser.connected && focuser.canAbsoluteMove)
