@@ -19177,7 +19177,7 @@ console.log(focuser.connected) // false
 
 The temperature is a sinusoid of 4 °C of amplitude and 40 s of period around the ambient temperature of the camera simulator, updated when it changes by at least 0.1 °C. With the temperature compensation enabled and no move in progress, the simulator nudges the focus by -250 steps per °C of drift (truncated to whole steps) once the temperature has moved by at least 0.05 °C since the last adjustment, which is a simple model and not a calibrated focuser.
 
-The `backlashIn` and `backlashOut` options (or the `SIMULATOR_BACKLASH` vector) model lost motion in steps: the reported `position` is the motor position, while `effectivePosition` is the optical position, which only follows the motor after the slack of a direction reversal has been consumed in the corresponding direction. `stop(alert?)` aborts the move (Alert by default, Idle with `false`). `position`, `isMoving`, `temperature` and `isTemperatureCompensationEnabled` are read accessors. `moveTo`, `moveRelative` and `syncTo` are the direct form of the vectors; `FOCUS_MOTION`, `FOCUS_REVERSE_MOTION` and the backlash are not saved by `CONFIG`.
+The `backlash` option (or the `BACKLASH` element of the `SIMULATOR_BACKLASH` vector) is the play of a rigid gear train, in steps: the reported `position` is the motor position, while `effectivePosition` is the optical position. A reversal moves the open slack to the other flank, so the motor first takes up the whole gap (or the complement of a partly closed one) before the optics follow; the lost motion is the same in both directions and repeated IN/OUT cycles do not drift the optical position. The gear train starts unloaded and a sync unloads it, so the next move engages immediately, and from then on `|position - effectivePosition|` does not exceed `backlash` (the optical position can therefore lie up to `backlash` steps outside the motor range). Changing the backlash keeps the current offset and clamps any slack left open by a partial reversal. `stop(alert?)` aborts the move (Alert by default, Idle with `false`). `position`, `isMoving`, `temperature` and `isTemperatureCompensationEnabled` are read accessors. `moveTo`, `moveRelative` and `syncTo` are the direct form of the vectors; `FOCUS_MOTION`, `FOCUS_REVERSE_MOTION` and the backlash are not saved by `CONFIG`.
 
 ```ts
 import { IndiClientHandlerSet } from 'nebulosa/src/devices/indi/client'
@@ -19198,12 +19198,12 @@ handler.add(manager)
 
 using client = new ClientSimulator('focuser', handler)
 
-// A focuser with 100 steps of backlash on the inward direction and 50 on the outward one.
-using simulator = new FocuserSimulator('Focuser Simulator', client, { backlashIn: 100, backlashOut: 50 })
+// A focuser with 100 steps of gear play.
+using simulator = new FocuserSimulator('Focuser Simulator', client, { backlash: 100 })
 const focuser = manager.get(client, simulator.name)!
 manager.connect(focuser)
 await waitUntil(() => focuser.connected)
-console.log(FOCUSER_MAX_POSITION, FOCUSER_INITIAL_POSITION, FOCUSER_MOVE_RATE, simulator.position, simulator.effectivePosition, simulator.backlashIn, simulator.backlashOut) // 100000 50000 20000 50000 50000 100 50
+console.log(FOCUSER_MAX_POSITION, FOCUSER_INITIAL_POSITION, FOCUSER_MOVE_RATE, simulator.position, simulator.effectivePosition, simulator.backlash) // 100000 50000 20000 50000 50000 100
 
 // Absolute move of 5000 steps takes about 0.25 s at 20000 steps per second.
 simulator.moveTo(55000)
@@ -19237,8 +19237,8 @@ client.sendSwitch({ device: simulator.name, name: 'FOCUS_TEMPERATURE_COMPENSATIO
 console.log(simulator.isTemperatureCompensationEnabled) // true
 
 // The backlash can be changed with its vector.
-client.sendNumber({ device: simulator.name, name: 'SIMULATOR_BACKLASH', elements: { BACKLASH_IN: 0, BACKLASH_OUT: 0 } })
-console.log(simulator.backlashIn, simulator.backlashOut) // 0 0
+client.sendNumber({ device: simulator.name, name: 'SIMULATOR_BACKLASH', elements: { BACKLASH: 0 } })
+console.log(simulator.backlash) // 0
 ```
 
 ### INDI Guide Output

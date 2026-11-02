@@ -265,7 +265,7 @@ describe.skipIf(SKIP_TIME_CONSUMING)('backlash calibration simulator integration
 
 		using client = new ClientSimulator('backlash.calibration', handler)
 		using cameraSimulator = new CameraSimulator('Camera Simulator', client, { focuserManager })
-		using focuserSimulator = new FocuserSimulator('Focuser Simulator', client, { backlashOut: 300 })
+		using focuserSimulator = new FocuserSimulator('Focuser Simulator', client, { backlash: 300 })
 		const camera = cameraManager.get(client, cameraSimulator.name)!
 		const focuser = focuserManager.get(client, focuserSimulator.name)!
 		cameraManager.connect(camera)
@@ -295,7 +295,7 @@ describe.skipIf(SKIP_TIME_CONSUMING)('backlash calibration simulator integration
 
 		const fit = fitBacklashBreakpoint(points, { probeStep: 100, minimumPlateauPoints: 2, minimumPostBreakPoints: 3, minimumSlope: 1e-5, huberTuning: 1.345 })
 		expect(fit.valid).toBeTrue()
-		expect(Math.abs(fit.breakpoint! - focuserSimulator.backlashOut)).toBeLessThanOrEqual(100)
+		expect(Math.abs(fit.breakpoint! - focuserSimulator.backlash)).toBeLessThanOrEqual(100)
 		expect(points[0].value).toBeCloseTo(points[3].value, 6)
 		expect(points.at(-1)!.value).toBeLessThan(points[3].value)
 	})
@@ -311,7 +311,7 @@ describe.skipIf(SKIP_TIME_CONSUMING)('backlash calibration simulator integration
 
 		using client = new ClientSimulator('backlash.calibration.commands', handler)
 		using cameraSimulator = new CameraSimulator('Camera Simulator', client, { focuserManager })
-		using focuserSimulator = new FocuserSimulator('Focuser Simulator', client, { backlashIn: 300, backlashOut: 300 })
+		using focuserSimulator = new FocuserSimulator('Focuser Simulator', client, { backlash: 300 })
 		const camera = cameraManager.get(client, cameraSimulator.name)!
 		const focuser = focuserManager.get(client, focuserSimulator.name)!
 		cameraManager.connect(camera)
@@ -344,8 +344,8 @@ describe.skipIf(SKIP_TIME_CONSUMING)('backlash calibration simulator integration
 		if (execution.command.type !== 'completed') throw new Error(`expected completed calibration, received ${execution.command.type}`)
 		expect(execution.moveCommandCount).toBe(execution.measureCommandCount)
 		expect(execution.moveCommandCount).toBeGreaterThan(20)
-		expect(Math.abs(execution.command.result.increasing.steps - focuserSimulator.backlashOut)).toBeLessThanOrEqual(150)
-		expect(Math.abs(execution.command.result.decreasing.steps - focuserSimulator.backlashIn)).toBeLessThanOrEqual(150)
+		expect(Math.abs(execution.command.result.increasing.steps - focuserSimulator.backlash)).toBeLessThanOrEqual(150)
+		expect(Math.abs(execution.command.result.decreasing.steps - focuserSimulator.backlash)).toBeLessThanOrEqual(150)
 		expect(execution.command.result.increasing.totalRunCount).toBe(3)
 		expect(execution.command.result.decreasing.totalRunCount).toBe(3)
 		expect(execution.command.result.increasing.validRunCount).toBeGreaterThanOrEqual(2)
