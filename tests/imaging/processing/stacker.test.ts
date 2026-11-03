@@ -8,7 +8,7 @@ import { readImageFromBuffer } from '../../../src/imaging/model/image'
 import { type CfaPattern, type Image, shiftCfaPattern } from '../../../src/imaging/model/types'
 import { calibrate } from '../../../src/imaging/processing/calibration'
 import { bayer } from '../../../src/imaging/processing/debayer'
-import { LiveStacker, type StackingFrame, type StackingOptions, stackFrames } from '../../../src/imaging/processing/stacker'
+import { LiveStacker, referenceQualityScore, type StackingFrame, type StackingOptions, stackFrames } from '../../../src/imaging/processing/stacker'
 import type { DetectedStar } from '../../../src/imaging/stars/detector'
 import { renderSyntheticStreak } from '../../../src/imaging/synthetic/streak'
 import { Bitpix, writeFits } from '../../../src/io/formats/fits/fits'
@@ -1057,6 +1057,35 @@ describe('stacker batch mode', () => {
 		expect(restored.metadata.width).toBe(image.metadata.width)
 		expect(restored.metadata.height).toBe(image.metadata.height)
 		expectRawClose(restored.raw, image.raw, 1e-5)
+	})
+})
+
+describe('stacked image headers', () => {
+	test('a resampled stack of integer frames is written as floating point without source scaling', async () => {
+		const reference = makeImage(18, 18, 1, (x, y) => 0.123456 + ((x * 3 + y * 5) % 11) / 64)
+		Object.assign(reference.header, { BITPIX: Bitpix.SHORT, NAXIS: 2, NAXIS1: 18, NAXIS2: 18, BZERO: 32768, BSCALE: 1, CHECKSUM: 'stale', ZCMPTYPE: 'RICE_1' })
+		const current = translateImage(reference, 2, -1)
+		const result = stackFrames([makeFrame(reference, makeStars()), makeFrame(current, makeStars(-2, 1))], { ...DEFAULT_STACK_OPTIONS, interpolationMode: 'nearest' })
+		const image = result.finalImage!
+		expect(image.header.BITPIX).toBe(Bitpix.FLOAT)
+		expect(image.header.BZERO).toBeUndefined()
+		expect(image.header.BSCALE).toBeUndefined()
+		expect(image.header.CHECKSUM).toBeUndefined()
+		expect(image.header.ZCMPTYPE).toBeUndefined()
+		expect(reference.header.BZERO).toBe(32768)
+
+		const storage = Buffer.alloc(32768)
+		const sink = bufferSink(storage)
+		await writeFits(sink, [image])
+		const restored = (await readImageFromBuffer(storage.subarray(0, sink.position), { raw: 32 }))!
+		expectRawClose(restored.raw, image.raw, 1e-7)
+	})
+
+	test('reference quality score penalizes star-poor and masked frames', () => {
+		const quality = { starCount: 20, medianSNR: 30, medianHFD: 2, qualityScore: 100, estimatedBackground: 0.01, noise: 0.001, normalizedScore: 0.8 }
+		expect(referenceQualityScore(quality, 10)).toBeCloseTo(99.99, 12)
+		expect(referenceQualityScore(quality, 30)).toBeCloseTo(24.99, 12)
+		expect(referenceQualityScore(quality, 10, 0.5)).toBeCloseTo(49.99, 12)
 	})
 })
 

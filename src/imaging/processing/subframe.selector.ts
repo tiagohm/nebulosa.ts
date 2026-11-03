@@ -208,7 +208,7 @@ export function selectSubframes<T extends SubframeInput>(frames: readonly T[], o
 	for (let i = 0; i < frames.length; i++) {
 		const frame = frames[i]
 		const metrics = measureSubframeQuality(frame)
-		const reasons = rejectionReasons(metrics, options)
+		const reasons = subframeRejectionReasons(metrics, options)
 		const result = { frame, metrics, accepted: reasons.length === 0, reasons }
 		results[i] = result
 		if (result.accepted) accepted.push(frame)
@@ -217,8 +217,9 @@ export function selectSubframes<T extends SubframeInput>(frames: readonly T[], o
 	return { accepted, results }
 }
 
-// Computes every configured threshold failure in deterministic diagnostic order.
-function rejectionReasons(metrics: SubframeQualityMetrics, options: SubframeSelectionOptions): SubframeRejectionReason[] {
+// Computes every configured threshold failure in deterministic diagnostic order, so metrics measured
+// once can be selected again under other thresholds without reading the frame.
+export function subframeRejectionReasons(metrics: SubframeQualityMetrics, options: SubframeSelectionOptions): SubframeRejectionReason[] {
 	const reasons: SubframeRejectionReason[] = []
 	if (options.minStars !== undefined && metrics.starCount < options.minStars) reasons.push('too-few-stars')
 	if (options.minMedianSNR !== undefined && metrics.medianSNR < options.minMedianSNR) reasons.push('median-snr-too-low')

@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { estimateBackground } from '../../../src/imaging/analysis/background'
 import type { Image } from '../../../src/imaging/model/types'
-import { imageQualityScore, measureSubframeQuality, selectSubframes } from '../../../src/imaging/processing/subframe.selector'
+import { imageQualityScore, measureSubframeQuality, selectSubframes, subframeRejectionReasons } from '../../../src/imaging/processing/subframe.selector'
 import { Bitpix } from '../../../src/io/formats/fits/fits'
 
 // Builds a minimal image used only for deterministic background measurement.
@@ -89,4 +89,10 @@ describe('subframe selector', () => {
 
 		expect(selectSubframes([{ image: mono, stars: [star()] }], { maxBackground: 0.3, maxNoise: 0.01 }).results[0]?.accepted).toBeTrue()
 	})
+})
+
+test('stored metrics can be selected again without the frame', () => {
+	const metrics = { starCount: 4, medianSNR: 8, medianHFD: Infinity, qualityScore: 0, estimatedBackground: 0.2, noise: 0.01, normalizedScore: 0.3 }
+	expect(subframeRejectionReasons(metrics, {})).toEqual([])
+	expect(subframeRejectionReasons(metrics, { minStars: 5, minMedianSNR: 10, maxMedianHFD: 3, maxBackground: 0.1, minNormalizedScore: 0.5 })).toEqual(['too-few-stars', 'median-snr-too-low', 'median-hfd-unavailable', 'background-too-high', 'normalized-score-too-low'])
 })

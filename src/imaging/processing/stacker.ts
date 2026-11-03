@@ -859,9 +859,7 @@ function selectReferenceFrameIndex(frames: readonly PreparedStackingFrame[], qua
 			if (options.reconstructionMode !== 'resample' && drizzleFrameFailure(frames[i], options) !== undefined) continue
 			if (!options.allowStarlessReference && qualities[i].starCount < options.minAcceptedStars) continue
 
-			const quality = qualities[i]
-			const starPenalty = quality.starCount >= options.minAcceptedStars ? 1 : 0.25
-			const score = quality.qualityScore * starPenalty * (1 - (frames[i].streakDiagnostics?.maskedFraction ?? 0)) - quality.estimatedBackground
+			const score = referenceQualityScore(qualities[i], options.minAcceptedStars, frames[i].streakDiagnostics?.maskedFraction)
 
 			if (score > bestScore) {
 				bestScore = score
@@ -1096,10 +1094,26 @@ function maybeCropImage(referenceImage: Image, raw: ImageRawType, cropBounds: St
 	return image
 }
 
-// Builds a valid Image structure from raw data and metadata pieces.
+// Score ranking candidate batch references by best-quality: the quality score, a quarter of it below
+// `minAcceptedStars`, reduced by the streak-masked fraction (0..1), minus the background level. Higher
+// is better; only frames of one acquisition setup are comparable.
+export function referenceQualityScore(quality: StackingFrameQualityMetrics, minAcceptedStars: number, maskedFraction: number = 0) {
+	const starPenalty = quality.starCount >= minAcceptedStars ? 1 : 0.25
+	return quality.qualityScore * starPenalty * (1 - maskedFraction) - quality.estimatedBackground
+}
+
+// FITS table, tile-compression, integer-scaling, and checksum cards invalidated by a new floating-point image.
+const STALE_STRUCTURE_PATTERN = /^(?:XTENSION|PCOUNT|GCOUNT|TFIELDS|THEAP|T(?:TYPE|FORM|UNIT|NULL|SCAL|ZERO|DISP|DIM|BCOL)\d+|Z(?:IMAGE|CMPTYPE|BITPIX|NAXIS\d*|TILE\d+|NAME\d+|VAL\d+|QUANTIZ|DITHER0|BLANK|SCALE|ZERO|SIMPLE|EXTEND|BLOCKED|PCOUNT|GCOUNT|HECKSUM|DATASUM)|BSCALE|BZERO|BLANK|CHECKSUM|DATASUM)$/
+
+// Builds a valid Image structure from raw data and metadata pieces. The header is a copy of `header`
+// whose BITPIX describes the floating-point raw, without the cards of the source storage, so a writer
+// never quantizes the result back to the reference's integer type or compression.
 function buildImage(raw: ImageRawType, header: FitsHeader, width: number, height: number, channels: number, bitpix: Bitpix, bayer: Image['metadata']['bayer']): Image {
+	const output: FitsHeader = { ...header, BITPIX: bitpix }
+	for (const key in output) if (STALE_STRUCTURE_PATTERN.test(key)) delete output[key]
+
 	return {
-		header: { ...header },
+		header: output,
 		raw,
 		metadata: {
 			width,
@@ -1280,17 +1294,13 @@ function stackDrizzleFrames(frames: readonly PreparedStackingFrame[], qualities:
 	return buildDrizzleResult(initial.state, reference, referenceIndex, accepted, diagnostics, options, false)
 }
 
-// FITS table and tile-compression structural cards invalidated by a new floating-point image.
-const DRIZZLE_STRUCTURE_PATTERN = /^(?:XTENSION|PCOUNT|GCOUNT|TFIELDS|THEAP|T(?:TYPE|FORM|UNIT|NULL|SCAL|ZERO|DISP|DIM|BCOL)\d+|Z(?:IMAGE|CMPTYPE|BITPIX|NAXIS\d*|TILE\d+|NAME\d+|VAL\d+|QUANTIZ|DITHER0|BLANK|SCALE|ZERO|SIMPLE|EXTEND|BLOCKED|PCOUNT|GCOUNT|HECKSUM|DATASUM)|BAYERPAT|BSCALE|BZERO|BLANK|CHECKSUM|DATASUM)$/
-
-// Builds a floating-point image with one cloned header and coherent post-crop metadata. Removes stale
-// compression/table cards so writeFits cannot inherit Rice compression for the new float raw.
+// Builds a floating-point image with one cloned header and coherent post-crop metadata. The CFA pattern
+// and higher axes of the source go too, since Drizzle reconstructs a plain mono or RGB raster.
 function buildDrizzleImage(reference: Image, raw: ImageRawType, width: number, height: number, channels: number, scaleX: number, scaleY: number, left: number, top: number): Image {
 	const bitpix = raw instanceof Float64Array ? Bitpix.DOUBLE : Bitpix.FLOAT
 	const image = buildImage(raw, reference.header, width, height, channels, bitpix, undefined)
 	const { header } = image
-	for (const key in header) if (DRIZZLE_STRUCTURE_PATTERN.test(key) || (/^NAXIS\d+$/.test(key) && +key.slice(5) > 2)) delete header[key]
-	header.BITPIX = bitpix
+	for (const key in header) if (key === 'BAYERPAT' || (/^NAXIS\d+$/.test(key) && +key.slice(5) > 2)) delete header[key]
 	header.NAXIS = channels === 3 ? 3 : 2
 	header.NAXIS1 = width
 	header.NAXIS2 = height
