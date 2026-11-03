@@ -4,7 +4,6 @@ import { Bitpix, type FitsHeader } from '../../io/formats/fits/fits'
 import { bitpixInBytes } from '../../io/formats/fits/util'
 import type { Rect, Size } from '../../math/numerical/geometry'
 import { clamp } from '../../math/numerical/math'
-import { meanOf, medianAbsoluteDeviationOf, medianOf } from '../../math/numerical/statistics'
 import type { StreakClass, StreakClassification, StreakClassificationContext, StreakClassifierOptions } from '../analysis/streak/classification.types'
 import { classifyStreaks } from '../analysis/streak/classifier'
 import { detectStreaks } from '../analysis/streak/detector'
@@ -18,6 +17,8 @@ import { createDrizzleAccumulator, depositDrizzle, type DrizzleAccumulator, driz
 // oxfmt-ignore
 import { applyGlobalNormalizationInPlace, applyLocalNormalizationInPlace, broadcastNormalizationPlanes, DEFAULT_LOCAL_NORMALIZATION_OPTIONS, type FrameNormalizationSummary, fitLocalNormalizationRaw, type GlobalNormalizationMode, isLocalNormalizationFallback, type LocalNormalizationFallbackReason, type LocalNormalizationModel, type LocalNormalizationOptions, localNormalizationFailureReason, localNormalizationSummary, MIN_GLOBAL_NORMALIZATION_SAMPLES, type NormalizationColorMode, resolveLocalNormalizationOptions, solveGlobalNormalizationPlanes } from './normalization'
 import { type ImageInterpolationMode, type ImageRegistrationFailureReason, type ImageRegistrationSuccess, registerImage, registerStars, toAffineMatrix } from './registration'
+// oxfmt-ignore
+import { accumulateSamples, combineStrip, coverageBounds, coverageThreshold as countThreshold, createCombinationScratch, DEFAULT_COMBINATION_PARAMETERS, finalizeOnlineSamples, frameWeight, isOnlineCombinationMethod, resolveCombinationParameters } from './stacking.combination'
 import { measureSubframeQuality, type SubframeQualityMetrics } from './subframe.selector'
 
 // Image stacking pipeline: registers a set of frames to a reference using star matching, normalizes
@@ -353,16 +354,7 @@ const DEFAULT_STACKING_OPTIONS: ResolvedStackingOptions = {
 	combinationMethod: 'average',
 	batchReference: { mode: 'first-accepted', index: 0 },
 	interpolationMode: 'bilinear',
-	sigmaClip: {
-		sigmaLower: 3,
-		sigmaUpper: 3,
-		maxIterations: 3,
-		centerMethod: 'median',
-		dispersionMethod: 'mad',
-	},
-	minMaxRejection: { low: 1, high: 1 },
-	winsorization: { lower: 0.1, upper: 0.9 },
-	percentileClip: { lower: 0.1, upper: 0.9 },
+	...DEFAULT_COMBINATION_PARAMETERS,
 	minAcceptedStars: 6,
 	minAcceptedInliers: 6,
 	maxAcceptedTransformError: 2.5,
@@ -411,25 +403,7 @@ function resolveStackingOptions(options: StackingOptions = {}): ResolvedStacking
 			mode: options.batchReference?.mode ?? DEFAULT_STACKING_OPTIONS.batchReference.mode,
 			index: Math.max(0, Math.trunc(options.batchReference?.index ?? DEFAULT_STACKING_OPTIONS.batchReference.index)),
 		},
-		sigmaClip: {
-			...DEFAULT_STACKING_OPTIONS.sigmaClip,
-			...options.sigmaClip,
-			sigmaLower: Math.max(0, options.sigmaClip?.sigmaLower ?? DEFAULT_STACKING_OPTIONS.sigmaClip.sigmaLower),
-			sigmaUpper: Math.max(0, options.sigmaClip?.sigmaUpper ?? DEFAULT_STACKING_OPTIONS.sigmaClip.sigmaUpper),
-			maxIterations: Math.max(1, Math.trunc(options.sigmaClip?.maxIterations ?? DEFAULT_STACKING_OPTIONS.sigmaClip.maxIterations)),
-		},
-		minMaxRejection: {
-			low: Math.max(0, Math.trunc(options.minMaxRejection?.low ?? DEFAULT_STACKING_OPTIONS.minMaxRejection.low)),
-			high: Math.max(0, Math.trunc(options.minMaxRejection?.high ?? DEFAULT_STACKING_OPTIONS.minMaxRejection.high)),
-		},
-		winsorization: {
-			lower: clamp(options.winsorization?.lower ?? DEFAULT_STACKING_OPTIONS.winsorization.lower, 0, 1),
-			upper: clamp(options.winsorization?.upper ?? DEFAULT_STACKING_OPTIONS.winsorization.upper, 0, 1),
-		},
-		percentileClip: {
-			lower: clamp(options.percentileClip?.lower ?? DEFAULT_STACKING_OPTIONS.percentileClip.lower, 0, 1),
-			upper: clamp(options.percentileClip?.upper ?? DEFAULT_STACKING_OPTIONS.percentileClip.upper, 0, 1),
-		},
+		...resolveCombinationParameters(options),
 		minAcceptedStars: Math.max(0, Math.trunc(options.minAcceptedStars ?? DEFAULT_STACKING_OPTIONS.minAcceptedStars)),
 		minAcceptedInliers: Math.max(0, Math.trunc(options.minAcceptedInliers ?? DEFAULT_STACKING_OPTIONS.minAcceptedInliers)),
 		maxAcceptedTransformError: Math.max(0, options.maxAcceptedTransformError ?? DEFAULT_STACKING_OPTIONS.maxAcceptedTransformError),
@@ -524,7 +498,7 @@ function stackingRegistrationFailureReason(reason: ImageRegistrationFailureReaso
 
 // Checks whether the selected combination method has an exact online path.
 export function isLiveCombinationMethodSupported(method: StackingCombinationMethod) {
-	return method === 'sum' || method === 'average' || method === 'weighted-average'
+	return isOnlineCombinationMethod(method)
 }
 
 // Implements live stacking and exposes a batch helper through the same API surface.
@@ -644,7 +618,7 @@ export class LiveStacker {
 		const normalization = computeNormalization(raw, valid, registration.finitePairCounts, frame, this.#referenceFrame, quality, this.#options)
 		if (normalization.transform.kind === 'rejected') return this.#reject(frameIndex, frame, quality, 'normalization-failed', overlapFraction, registration.transform.summary)
 		applyNormalizationInPlace(raw, valid, frame.image.metadata.channels, normalization.transform)
-		accumulateAlignedFrame(this.#referenceFrame.image.metadata.channels, raw, valid, this.#sum!, this.#weightSum!, this.#coverageMap, this.#options.combinationMethod, normalization.summary.weight)
+		accumulateSamples(this.#referenceFrame.image.metadata.channels, raw, valid, this.#sum!, this.#weightSum!, this.#coverageMap, this.#options.combinationMethod, normalization.summary.weight)
 
 		this.#acceptedFrames++
 
@@ -682,7 +656,7 @@ export class LiveStacker {
 		this.#workRaw = undefined
 		this.#workMask = undefined
 		const weight = resolveFrameWeight(frame, quality, this.#options)
-		accumulateAlignedFrame(channels, frame.image.raw, sourceValidity(frame), this.#sum, this.#weightSum, this.#coverageMap, this.#options.combinationMethod, weight)
+		accumulateSamples(channels, frame.image.raw, sourceValidity(frame), this.#sum, this.#weightSum, this.#coverageMap, this.#options.combinationMethod, weight)
 	}
 
 	// Records a structured rejection result. `overlapFraction` defaults to 0 for the failures that happen
@@ -747,7 +721,7 @@ function stackPreparedFrames(frames: readonly PreparedStackingFrame[], resolved:
 	const diagnostics: FrameAcceptanceResult[] = []
 	const pixelCount = referenceFrame.image.metadata.pixelCount
 	const channels = referenceFrame.image.metadata.channels
-	const sampleBasedMethod = !(resolved.combinationMethod === 'sum' || resolved.combinationMethod === 'average' || resolved.combinationMethod === 'weighted-average')
+	const sampleBasedMethod = !isOnlineCombinationMethod(resolved.combinationMethod)
 	const coverageMap = new Uint32Array(pixelCount)
 	const sum = new Float64Array(pixelCount * channels)
 	const weightSum = new Float64Array(pixelCount)
@@ -760,7 +734,7 @@ function stackPreparedFrames(frames: readonly PreparedStackingFrame[], resolved:
 	if (sampleBasedMethod) {
 		accepted.push(makeAlignedReference(referenceFrame, referenceIndex, qualities[referenceIndex], referenceNormalization, sum, weightSum, resolved.combinationMethod))
 	} else {
-		accumulateAlignedFrame(channels, referenceFrame.image.raw, referenceValid, sum, weightSum, undefined, resolved.combinationMethod, referenceWeight)
+		accumulateSamples(channels, referenceFrame.image.raw, referenceValid, sum, weightSum, undefined, resolved.combinationMethod, referenceWeight)
 	}
 
 	diagnostics.push({ accepted: true, frameIndex: referenceIndex, frameId: referenceFrame.id, overlapFraction: 1, quality: qualities[referenceIndex], transform: identityTransformSummary(), normalization: referenceNormalization })
@@ -836,7 +810,7 @@ function stackPreparedFrames(frames: readonly PreparedStackingFrame[], resolved:
 		if (sampleBasedMethod) {
 			accepted.push(aligned)
 		} else {
-			accumulateAlignedFrame(channels, aligned.raw, aligned.valid, sum, weightSum, undefined, resolved.combinationMethod, aligned.weight)
+			accumulateSamples(channels, aligned.raw, aligned.valid, sum, weightSum, undefined, resolved.combinationMethod, aligned.weight)
 		}
 
 		diagnostics.push({ accepted: true, frameIndex: i, frameId: frame.id, overlapFraction, quality, transform: registration.transform.summary, normalization: aligned.normalization })
@@ -914,8 +888,8 @@ function makeAlignedReference(frame: PreparedStackingFrame, index: number, quali
 	const raw = frame.image.raw
 	const valid = sourceValidity(frame)
 
-	if (method === 'sum' || method === 'average' || method === 'weighted-average') {
-		accumulateAlignedFrame(channels, raw, valid, sum, weightSum, undefined, method, normalization.weight)
+	if (isOnlineCombinationMethod(method)) {
+		accumulateSamples(channels, raw, valid, sum, weightSum, undefined, method, normalization.weight)
 	}
 
 	return { raw, valid, weight: normalization.weight, coveredPixels: pixelCount, index, id: frame.id, quality, normalization, transform: identityTransformSummary() }
@@ -968,14 +942,7 @@ function finalizeOnlineImage(referenceFrame: StackingFrame, options: ResolvedSta
 	const cropBounds = computeEffectiveCropBounds(referenceFrame.image.metadata.width, referenceFrame.image.metadata.height, coverageMap, acceptedFrames, options)
 	const threshold = coverageThreshold(acceptedFrames, options)
 	const raw = createLike(referenceFrame.image.raw, referenceFrame.image.metadata.pixelCount * referenceFrame.image.metadata.channels)
-
-	for (let pixel = 0; pixel < referenceFrame.image.metadata.pixelCount; pixel++) {
-		if (coverageMap[pixel] < threshold) continue
-		const denominator = options.combinationMethod === 'sum' ? 1 : weightSum[pixel]
-		if (!(denominator > 0)) continue
-		const base = pixel * referenceFrame.image.metadata.channels
-		for (let channel = 0; channel < referenceFrame.image.metadata.channels; channel++) raw[base + channel] = sum[base + channel] / denominator
-	}
+	finalizeOnlineSamples(sum, weightSum, coverageMap, referenceFrame.image.metadata.channels, threshold, options.combinationMethod, raw)
 
 	return { image: maybeCropImage(referenceFrame.image, raw, cropBounds, options) }
 }
@@ -985,154 +952,9 @@ function finalizeBatchImage(referenceFrame: StackingFrame, options: ResolvedStac
 	const cropBounds = computeEffectiveCropBounds(referenceFrame.image.metadata.width, referenceFrame.image.metadata.height, coverageMap, accepted.length, options)
 	const threshold = coverageThreshold(accepted.length, options)
 	const raw = createLike(referenceFrame.image.raw, referenceFrame.image.metadata.pixelCount * referenceFrame.image.metadata.channels)
-	const values = new Float64Array(accepted.length)
-	const weights = new Float64Array(accepted.length)
-	// Reused by MAD sigma-clip so each pixel does not allocate a fresh scratch array.
-	const madScratch = new Float64Array(accepted.length)
-
-	for (let pixel = 0; pixel < referenceFrame.image.metadata.pixelCount; pixel++) {
-		if (coverageMap[pixel] < threshold) continue
-		const base = pixel * referenceFrame.image.metadata.channels
-		for (let channel = 0; channel < referenceFrame.image.metadata.channels; channel++) {
-			let used = 0
-			for (let i = 0; i < accepted.length; i++) {
-				if (accepted[i].valid[pixel] === 0) continue
-				values[used] = accepted[i].raw[base + channel]
-				weights[used] = accepted[i].weight
-				used++
-			}
-			if (used === 0) continue
-			raw[base + channel] = combineValues(options.combinationMethod, values, weights, used, options, madScratch)
-		}
-	}
+	combineStrip(accepted, referenceFrame.image.metadata.pixelCount, referenceFrame.image.metadata.channels, coverageMap, threshold, options.combinationMethod, options, raw, createCombinationScratch(accepted.length))
 
 	return { image: maybeCropImage(referenceFrame.image, raw, cropBounds, options) }
-}
-
-// Combines one per-pixel sample vector according to the selected method.
-// `madScratch` is a reusable workspace for MAD sigma-clip; ignored by other methods.
-function combineValues(method: StackingCombinationMethod, values: Float64Array, weights: Float64Array, count: number, options: ResolvedStackingOptions, madScratch?: Float64Array) {
-	const sorted = values.subarray(0, count)
-	const sortedWeights = weights.subarray(0, count)
-
-	switch (method) {
-		case 'sum':
-		default: {
-			let sum = 0
-			for (let i = 0; i < count; i++) sum += sorted[i]
-			return sum
-		}
-		case 'average': {
-			let sum = 0
-			for (let i = 0; i < count; i++) sum += sorted[i]
-			return sum / count
-		}
-		case 'weighted-average': {
-			let weighted = 0
-			let weightSum = 0
-
-			for (let i = 0; i < count; i++) {
-				weighted += sorted[i] * sortedWeights[i]
-				weightSum += sortedWeights[i]
-			}
-
-			return weightSum > 0 ? weighted / weightSum : 0
-		}
-		case 'median':
-			sorted.sort()
-			return medianOf(sorted, count)
-		case 'min-max-average':
-			sorted.sort()
-			return combineMinMaxAverage(sorted, count, options.minMaxRejection.low, options.minMaxRejection.high)
-		case 'winsorized-mean':
-			sorted.sort()
-			return combineWinsorizedMean(sorted, count, options.winsorization.lower, options.winsorization.upper)
-		case 'percentile-clip-average':
-			sorted.sort()
-			return combinePercentileClipAverage(sorted, count, options.percentileClip.lower, options.percentileClip.upper)
-		case 'sigma-clip':
-			sorted.sort()
-			return combineSigmaClip(sorted, count, options.sigmaClip, madScratch)
-	}
-}
-
-// Computes a deterministic min/max rejection average.
-function combineMinMaxAverage(values: Float64Array, count: number, lowReject: number, highReject: number) {
-	const start = Math.min(lowReject, Math.max(0, count - 1))
-	const end = Math.max(start, count - Math.min(highReject, Math.max(0, count - start - 1)))
-	if (end <= start) return meanOf(values, 0, count)
-	let sum = 0
-	for (let i = start; i < end; i++) sum += values[i]
-	return sum / (end - start)
-}
-
-// Computes a winsorized mean with percentile clamping.
-function combineWinsorizedMean(values: Float64Array, count: number, lower: number, upper: number) {
-	if (count <= 2) return meanOf(values, 0, count)
-	const low = percentileSorted(values, count, lower)
-	const high = percentileSorted(values, count, Math.max(lower, upper))
-	let sum = 0
-	for (let i = 0; i < count; i++) sum += clamp(values[i], low, high)
-	return sum / count
-}
-
-// Computes a percentile-clipped average.
-function combinePercentileClipAverage(values: Float64Array, count: number, lower: number, upper: number) {
-	if (count <= 2) return meanOf(values, 0, count)
-	const low = percentileSorted(values, count, lower)
-	const high = percentileSorted(values, count, Math.max(lower, upper))
-	let sum = 0
-	let kept = 0
-
-	for (let i = 0; i < count; i++) {
-		const value = values[i]
-		if (value < low || value > high) continue
-		sum += value
-		kept++
-	}
-
-	return kept > 0 ? sum / kept : meanOf(values, 0, count)
-}
-
-// Computes a conservative sigma-clipped average for one sample vector.
-// `madScratch` is reused across pixels and iterations when dispersion is MAD; omitted, a temporary array is allocated.
-function combineSigmaClip(values: Float64Array, count: number, options: Required<SigmaClipStackingOptions>, madScratch?: Float64Array) {
-	if (count <= 2) return meanOf(values, 0, count)
-	let active = count
-
-	for (let iteration = 0; iteration < options.maxIterations; iteration++) {
-		const sorted = values.subarray(0, active).sort()
-		const center = options.centerMethod === 'mean' ? meanOf(sorted) : medianOf(sorted, active)
-		let sigma = 0
-
-		if (options.dispersionMethod === 'std') {
-			let sumSq = 0
-
-			for (let i = 0; i < active; i++) {
-				const delta = sorted[i] - center
-				sumSq += delta * delta
-			}
-
-			sigma = Math.sqrt(sumSq / active)
-		} else {
-			sigma = medianAbsoluteDeviationOf(sorted, center, true, active, madScratch)
-		}
-
-		if (!(sigma > 0)) return center
-
-		const low = center - options.sigmaLower * sigma
-		const high = center + options.sigmaUpper * sigma
-		let kept = 0
-
-		for (let i = 0; i < active; i++) if (sorted[i] >= low && sorted[i] <= high) values[kept++] = sorted[i]
-
-		if (kept === 0) return center
-		if (kept === active) return meanOf(sorted)
-
-		active = kept
-	}
-
-	return meanOf(values, 0, active)
 }
 
 // How a frame's pixels are transformed before combination. Kept separate from the retained summary so
@@ -1211,35 +1033,7 @@ function applyNormalizationInPlace(raw: ImageRawType, valid: Uint8Array, channel
 
 // Resolves the deterministic weight attached to one frame.
 function resolveFrameWeight(frame: StackingFrame, quality: StackingFrameQualityMetrics, options: ResolvedStackingOptions) {
-	const base = Math.max(FLOAT_EPSILON, frame.weight ?? 1)
-
-	switch (options.weightingMode) {
-		case 'none':
-		default:
-			return base
-		case 'snr':
-			return base * clamp(Math.max(quality.medianSNR, 1) / 10, 0.25, 4)
-		case 'inverse-hfd':
-			return base * clamp(2.5 / Math.max(quality.medianHFD, 0.5), 0.25, 4)
-		case 'stars':
-			return base * clamp(Math.max(quality.starCount, 1) / Math.max(options.minAcceptedStars, 1), 0.25, 4)
-		case 'quality':
-			return base * clamp((Math.sqrt(Math.max(quality.starCount, 1)) * Math.max(quality.medianSNR, 1)) / Math.max(quality.medianHFD * 10, 1), 0.25, 6)
-	}
-}
-
-// Accumulates an aligned frame into online sum and weight buffers.
-function accumulateAlignedFrame(channels: number, raw: ArrayLike<number>, valid: Uint8Array, sum: Float64Array, weightSum: Float64Array, coverageMap: Uint32Array | undefined, method: StackingCombinationMethod, weight: number) {
-	const effectiveWeight = method === 'weighted-average' ? weight : 1
-	const sumMode = method === 'sum'
-
-	for (let pixel = 0; pixel < valid.length; pixel++) {
-		if (valid[pixel] === 0) continue
-		const base = pixel * channels
-		for (let channel = 0; channel < channels; channel++) sum[base + channel] += raw[base + channel] * effectiveWeight
-		weightSum[pixel] += sumMode ? 1 : effectiveWeight
-		if (coverageMap !== undefined) coverageMap[pixel]++
-	}
+	return frameWeight(frame.weight, quality, options.weightingMode, options.minAcceptedStars)
 }
 
 // Builds the final validity mask for the requested crop policy.
@@ -1261,36 +1055,12 @@ function buildValidityMask(coverageMap: Uint32Array, acceptedFrames: number, opt
 // Computes the final effective crop bounds from the coverage map.
 function computeEffectiveCropBounds(width: number, height: number, coverageMap: Uint32Array, acceptedFrames: number, options: ResolvedStackingOptions): StackBounds | undefined {
 	if (acceptedFrames <= 0) return undefined
-
-	const threshold = coverageThreshold(acceptedFrames, options)
-
-	let left = width
-	let top = height
-	let right = -1
-	let bottom = -1
-
-	for (let y = 0; y < height; y++) {
-		for (let x = 0; x < width; x++) {
-			const pixel = y * width + x
-
-			if (coverageMap[pixel] < threshold) continue
-			if (x < left) left = x
-			if (y < top) top = y
-			if (x > right) right = x
-			if (y > bottom) bottom = y
-		}
-	}
-
-	if (right < left || bottom < top) return undefined
-
-	return { left, top, right, bottom, width: right - left + 1, height: bottom - top + 1 }
+	return coverageBounds(width, height, coverageMap, coverageThreshold(acceptedFrames, options))
 }
 
 // Computes the count threshold implied by crop mode and minimum coverage.
 function coverageThreshold(acceptedFrames: number, options: ResolvedStackingOptions) {
-	if (acceptedFrames <= 0) return 0
-	if (options.cropMode === 'intersection') return acceptedFrames
-	return Math.max(1, Math.ceil(options.minimumCoverage * acceptedFrames))
+	return countThreshold(acceptedFrames, options.cropMode, options.minimumCoverage)
 }
 
 // Crops the final image for intersection mode while preserving reference metadata shape otherwise.
@@ -1383,18 +1153,6 @@ function incrementCoverage(coverageMap: Uint32Array, valid: Uint8Array) {
 // Creates a typed raw buffer matching the reference storage class.
 function createLike(reference: ImageRawType, length: number) {
 	return reference instanceof Float64Array ? new Float64Array(length) : new Float32Array(length)
-}
-
-// Computes a percentile from a sorted numeric array.
-function percentileSorted(values: Float64Array, count: number, percentile: number) {
-	if (count <= 0) return Number.NaN
-	if (count === 1) return values[0]
-	const clamped = clamp(percentile, 0, 1)
-	const index = clamped * (count - 1)
-	const lower = Math.floor(index)
-	const upper = Math.min(lower + 1, count - 1)
-	const fraction = index - lower
-	return values[lower] + (values[upper] - values[lower]) * fraction
 }
 
 // Verifies that the decoded image shape is internally consistent.
