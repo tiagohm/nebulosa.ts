@@ -20,7 +20,7 @@ const CHANNELS: readonly CompositionChannel[] = ['red', 'green', 'blue']
 // BT.709 luminance coefficients of linear red, green, and blue; they sum to 1.
 export const BT709_LUMINANCE: readonly [number, number, number] = [0.2126, 0.7152, 0.0722]
 
-// Default number of robust standard deviations of the mixed luminance below which a pixel is too close
+// Default number of noise standard deviations of the mixed luminance below which a pixel is too close
 // to zero for a ratio, so the luminance blend adds its difference instead of scaling.
 export const DEFAULT_LUMINANCE_FLOOR_SIGMAS = 3
 
@@ -84,6 +84,9 @@ export interface LuminanceSamples {
 	position: number
 	readonly rgb: number[]
 	readonly luminance: number[]
+	// Second differences y(p−1) − 2·y(p) + y(p+1) of the mixed luminance around sampled pixels within a
+	// strip, which measure its pixel noise while constant and linear structure cancel.
+	readonly differences: number[]
 }
 
 // Linear map `matched = scale · L + offset` taking the corrected luminance master to the mixed luminance,
@@ -191,12 +194,13 @@ export function mixChannelRows(planes: readonly CompositionPlane[], mix: Channel
 
 // Creates an empty sample set for a composition of `totalPixels` pixels.
 export function createLuminanceSamples(totalPixels: number): LuminanceSamples {
-	return { stride: Math.max(1, Math.ceil(totalPixels / NORMALIZATION_SAMPLE_LIMIT)), position: 0, rgb: [], luminance: [] }
+	return { stride: Math.max(1, Math.ceil(totalPixels / NORMALIZATION_SAMPLE_LIMIT)), position: 0, rgb: [], luminance: [], differences: [] }
 }
 
 // Samples the next `pixels` composed pixels: at every stride position where the mixed RGB and the
-// luminance master are both valid and finite, records the BT.709 luminance and the corrected master.
-// Advances `samples.position` by `pixels`.
+// luminance master are both valid and finite, records the BT.709 luminance and the corrected master,
+// and, when both neighbors in the strip are valid too, the second difference there. Advances
+// `samples.position` by `pixels`.
 export function collectLuminanceSamples(samples: LuminanceSamples, rgb: Readonly<ImageRawType>, rgbValid: Readonly<Uint8Array>, luminance: CompositionPlane, pixels: number) {
 	const { stride } = samples
 	const start = samples.position
@@ -206,9 +210,10 @@ export function collectLuminanceSamples(samples: LuminanceSamples, rgb: Readonly
 		if (rgbValid[pixel] === 0 || luminance.valid[pixel] === 0) continue
 		const value = luminance.gain * luminance.raw[pixel] + luminance.offset
 		if (!Number.isFinite(value)) continue
-		const out = pixel * 3
-		samples.rgb.push(BT709_LUMINANCE[0] * rgb[out] + BT709_LUMINANCE[1] * rgb[out + 1] + BT709_LUMINANCE[2] * rgb[out + 2])
+		const y = luminanceAt(rgb, pixel)
+		samples.rgb.push(y)
 		samples.luminance.push(value)
+		if (pixel > 0 && pixel + 1 < pixels && rgbValid[pixel - 1] !== 0 && rgbValid[pixel + 1] !== 0) samples.differences.push(luminanceAt(rgb, pixel - 1) - 2 * y + luminanceAt(rgb, pixel + 1))
 	}
 
 	samples.position = start + pixels
@@ -217,14 +222,16 @@ export function collectLuminanceSamples(samples: LuminanceSamples, rgb: Readonly
 // Fits the luminance match and floor from collected samples. robustLinear matches the background
 // (25th percentile) and the 25th–75th percentile span of both distributions, a quantile match that
 // tolerates residual misregistration; off, or too few pairs, keeps the identity. The floor is
-// `floorSigmas` times the robust (normalized MAD) dispersion of the mixed luminance samples.
+// `floorSigmas` times the pixel noise of the mixed luminance, the normalized MAD of the second
+// differences divided by √6, so it follows the noise rather than the spread of the scene; structure
+// that curves within a few pixels, like star cores, raises it only where it covers most samples.
 export function solveLuminanceMatch(samples: LuminanceSamples, mode: LuminanceMatchMode, floorSigmas: number = DEFAULT_LUMINANCE_FLOOR_SIGMAS): LuminanceMatch {
 	const count = samples.rgb.length
 	let floor = 0
 
-	if (count > 0) {
-		const sorted = Float64Array.from(samples.rgb).sort()
-		floor = floorSigmas * medianAbsoluteDeviationOf(sorted, medianOf(sorted), true)
+	if (samples.differences.length > 0) {
+		const sorted = Float64Array.from(samples.differences).sort()
+		floor = (floorSigmas * medianAbsoluteDeviationOf(sorted, medianOf(sorted), true)) / Math.sqrt(6)
 	}
 
 	if (mode === 'off' || count < MIN_GLOBAL_NORMALIZATION_SAMPLES) return { scale: 1, offset: 0, matched: false, samples: count, floor }
@@ -241,8 +248,6 @@ export function solveLuminanceMatch(samples: LuminanceSamples, mode: LuminanceMa
 export function blendLuminanceRows(rgb: ImageRawType, rgbValid: Uint8Array, luminance: CompositionPlane, match: LuminanceMatch, alpha: number, pixels: number, counters: CompositionCounters) {
 	if (alpha === 0) return
 
-	const [cr, cg, cb] = BT709_LUMINANCE
-
 	for (let pixel = 0, out = 0; pixel < pixels; pixel++, out += 3) {
 		if (rgbValid[pixel] === 0) continue
 
@@ -256,7 +261,7 @@ export function blendLuminanceRows(rgb: ImageRawType, rgbValid: Uint8Array, lumi
 			continue
 		}
 
-		const y = cr * rgb[out] + cg * rgb[out + 1] + cb * rgb[out + 2]
+		const y = luminanceAt(rgb, pixel)
 		const target = (1 - alpha) * y + alpha * (match.scale * corrected + match.offset)
 
 		if (y > match.floor && target > 0) {
@@ -279,4 +284,10 @@ export function blendLuminanceRows(rgb: ImageRawType, rgbValid: Uint8Array, lumi
 			counters.nonFinite++
 		}
 	}
+}
+
+// BT.709 luminance of the interleaved RGB pixel at index `pixel`.
+function luminanceAt(rgb: Readonly<ImageRawType>, pixel: number) {
+	const out = pixel * 3
+	return BT709_LUMINANCE[0] * rgb[out] + BT709_LUMINANCE[1] * rgb[out + 1] + BT709_LUMINANCE[2] * rgb[out + 2]
 }

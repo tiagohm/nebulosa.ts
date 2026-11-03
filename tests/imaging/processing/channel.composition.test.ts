@@ -173,7 +173,7 @@ describe('luminance matching', () => {
 		const lum = new Float32Array(pixels)
 
 		for (let i = 0; i < pixels; i++) {
-			const signal = 0.1 + 0.4 * Math.exp(-(((i % width) - 30) ** 2) / 200 - (Math.floor(i / width) - 28) ** 2 / 300)
+			const signal = 0.1 + 0.4 * Math.exp(-(((i % width) - 30) ** 2) / 800 - (Math.floor(i / width) - 28) ** 2 / 1200)
 			red[i] = signal * 0.9 + random()
 			green[i] = signal + random()
 			blue[i] = signal * 1.2 + random()
@@ -201,7 +201,9 @@ describe('luminance matching', () => {
 		expect(match.matched).toBeTrue()
 		expect(match.scale).toBeCloseTo(0.5, 2)
 		expect(match.offset).toBeCloseTo(-0.025, 2)
-		expect(match.floor).toBeGreaterThan(0)
+		// The floor follows the pixel noise of the luminance (3 sigma), not the spread of the bright, smooth scene.
+		const noise = 0.002 * Math.hypot(...BT709_LUMINANCE)
+		expect(Math.abs(match.floor / (3 * noise) - 1)).toBeLessThan(0.1)
 		expect(solveLuminanceMatch(samples, 'off')).toMatchObject({ scale: 1, offset: 0, matched: false })
 	})
 
