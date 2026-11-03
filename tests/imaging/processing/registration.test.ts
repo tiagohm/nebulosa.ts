@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
-import type { AffineTransform } from '../../../src/astrometry/matching/star.matching'
+import { type AffineTransform, applyTransformToPoint, invertTransform, type SimilarityTransform } from '../../../src/astrometry/matching/star.matching'
 import { DEFAULT_GRAYSCALE, type Image, type ImageRawPrecision } from '../../../src/imaging/model/types'
-import { registerImage, registerStars, warpImage } from '../../../src/imaging/processing/registration'
+import { composeRegistrationTransforms, composeTransforms, registerImage, registerStars, summarizeTransform, warpImage } from '../../../src/imaging/processing/registration'
 import type { DetectedStar } from '../../../src/imaging/stars/detector'
 import { Bitpix } from '../../../src/io/formats/fits/fits'
 
@@ -190,5 +190,100 @@ describe('image warp', () => {
 		expect(Array.from(result.validityMask)).toEqual([0, 1, 1])
 		expect(Array.from(result.image.raw)).toEqual([0, 10, 20])
 		expect(result.coveredPixels).toBe(2)
+	})
+})
+
+describe('transform composition', () => {
+	const rotation = (angle: number, tx: number, ty: number, mirrored = false): SimilarityTransform => ({ a: Math.cos(angle), b: Math.sin(angle), tx, ty, mirrored })
+	const shear: AffineTransform = { m00: 1.02, m01: 0.03, tx: -4, m10: -0.01, m11: 0.98, ty: 2.5 }
+
+	test('composition applies the inner transform first', () => {
+		for (const [outer, inner] of [
+			[rotation(0.2, 3, -1), rotation(-0.05, 1.5, 2)],
+			[rotation(0.1, 1, 1, true), shear],
+			[shear, rotation(-0.3, -2, 4, true)],
+		] as const) {
+			const composed = composeTransforms(outer, inner)
+			for (const [x, y] of [
+				[0, 0],
+				[10, -3],
+				[-7.5, 22],
+			]) {
+				const step = applyTransformToPoint(x, y, inner)
+				const expected = applyTransformToPoint(step.x, step.y, outer)
+				const actual = applyTransformToPoint(x, y, composed)
+				expect(actual.x).toBeCloseTo(expected.x, 12)
+				expect(actual.y).toBeCloseTo(expected.y, 12)
+			}
+		}
+	})
+
+	test('a transform composed with its inverse is the identity', () => {
+		for (const transform of [rotation(0.4, 5, -3), rotation(-0.2, 1, 2, true), shear]) {
+			const identity = composeTransforms(invertTransform(transform)!, transform)
+			expect(identity.m00).toBeCloseTo(1, 12)
+			expect(identity.m11).toBeCloseTo(1, 12)
+			expect(identity.m01).toBeCloseTo(0, 12)
+			expect(identity.m10).toBeCloseTo(0, 12)
+			expect(identity.tx).toBeCloseTo(0, 12)
+			expect(identity.ty).toBeCloseTo(0, 12)
+		}
+	})
+
+	test('two mirrored similarities compose to a direct similarity summary', () => {
+		const first = { transform: rotation(0.1, 2, 3, true), inverseTransform: invertTransform(rotation(0.1, 2, 3, true))!, summary: summarizeTransform(rotation(0.1, 2, 3, true), 12, 0.3) }
+		const second = { transform: rotation(-0.25, -1, 4, true), inverseTransform: invertTransform(rotation(-0.25, -1, 4, true))!, summary: summarizeTransform(rotation(-0.25, -1, 4, true), 8, 0.4) }
+		const composed = composeRegistrationTransforms(first, second)!
+		expect(composed.summary.model).toBe('similarity')
+		expect(composed.summary.mirrored).toBeFalse()
+		expect(composed.summary.inlierCount).toBe(8)
+		expect(composed.summary.rmsError).toBeCloseTo(0.5, 12)
+		expect(composed.summary.rotation).toBeCloseTo(-0.35, 12)
+		const back = composeTransforms(composed.inverseTransform, composed.transform)
+		expect(back.m00).toBeCloseTo(1, 12)
+		expect(back.tx).toBeCloseTo(0, 12)
+	})
+
+	test('a singular composition is refused', () => {
+		const flat: AffineTransform = { m00: 1, m01: 2, tx: 0, m10: 2, m11: 4, ty: 0 }
+		const valid = { transform: rotation(0, 0, 0), inverseTransform: rotation(0, 0, 0), summary: summarizeTransform(rotation(0, 0, 0), 6, 0) }
+		expect(composeRegistrationTransforms(valid, { transform: flat, inverseTransform: flat, summary: summarizeTransform(flat, 6, 0) })).toBeUndefined()
+	})
+
+	test('one composed warp loses no more than two sequential warps', () => {
+		const width = 64
+		const height = 64
+		const field = (x: number, y: number) => 0.2 + 0.3 * Math.exp(-((x - 30.3) ** 2 + (y - 33.7) ** 2) / 18) + 0.2 * Math.exp(-((x - 18.6) ** 2 + (y - 20.2) ** 2) / 8)
+		const reference = makeImage(width, height, 1, field)
+		const intermediateToReference = rotation(0.03, 1.7, -1.2)
+		const targetToIntermediate = rotation(-0.02, -2.4, 0.9)
+		const targetToReference = composeTransforms(intermediateToReference, targetToIntermediate)
+		const intermediate = makeImage(width, height, 1, (x, y) => {
+			const p = applyTransformToPoint(x, y, intermediateToReference)
+			return field(p.x, p.y)
+		})
+		const target = makeImage(width, height, 1, (x, y) => {
+			const p = applyTransformToPoint(x, y, targetToReference)
+			return field(p.x, p.y)
+		})
+		const once = warpImage(target, reference, invertTransform(targetToReference)!, { interpolationMode: 'bicubic' })
+		const toIntermediate = warpImage(target, intermediate, invertTransform(targetToIntermediate)!, { interpolationMode: 'bicubic' })
+		const twice = warpImage(toIntermediate.image, reference, invertTransform(intermediateToReference)!, { interpolationMode: 'bicubic' })
+		let onceError = 0
+		let twiceError = 0
+		let count = 0
+
+		for (let y = 8; y < height - 8; y++) {
+			for (let x = 8; x < width - 8; x++) {
+				const pixel = y * width + x
+				if (once.validityMask[pixel] === 0 || twice.validityMask[pixel] === 0) continue
+				onceError += (once.image.raw[pixel] - reference.raw[pixel]) ** 2
+				twiceError += (twice.image.raw[pixel] - reference.raw[pixel]) ** 2
+				count++
+			}
+		}
+
+		expect(count).toBeGreaterThan(1500)
+		expect(onceError).toBeLessThanOrEqual(twiceError)
 	})
 })

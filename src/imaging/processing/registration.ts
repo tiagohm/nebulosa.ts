@@ -1,4 +1,4 @@
-import { type AffineTransform, invertTransform, matchStars, type SimilarityTransform, type StarMatchingConfig, type StarMatchingResult } from '../../astrometry/matching/star.matching'
+import { type AffineTransform, invertAffineTransform, invertTransform, matchStars, type SimilarityTransform, type StarMatchingConfig, type StarMatchingResult } from '../../astrometry/matching/star.matching'
 import { Bitpix } from '../../io/formats/fits/fits'
 import { bitpixInBytes } from '../../io/formats/fits/util'
 import { DEFAULT_GRAYSCALE, type Image, type ImageRawPrecision, type ImageRawType } from '../model/types'
@@ -223,20 +223,55 @@ export function warpImage(source: Image, reference: Image, inverseTransform: Sim
 // Converts a successful star-match model into a forward target-to-reference transform and summary.
 function resolveRegistrationTransform(match: StarMatchingResult): Omit<ImageRegistrationTransform, 'inverseTransform'> | undefined {
 	if (!match.success || match.model === undefined) return undefined
+	const transform = match.model === 'similarity' ? match.similarity : match.model === 'affine' ? match.affine : undefined
+	if (transform === undefined) return undefined
+	return { transform, summary: summarizeTransform(transform, match.inlierCount, match.rmsError ?? Infinity) }
+}
 
-	if (match.model === 'similarity' && match.similarity !== undefined) {
-		const { a, b, tx, ty, mirrored } = match.similarity
+// Describes a target-to-reference transform: translation in pixels, basis lengths, rotation of the x
+// basis in radians, normalized shear, and parity, with the given inlier count and RMS residual in pixels.
+export function summarizeTransform(transform: SimilarityTransform | AffineTransform, inlierCount: number, rmsError: number): ImageTransformSummary {
+	if ('mirrored' in transform) {
+		const { a, b, tx, ty, mirrored } = transform
 		const scale = Math.hypot(a, b)
-		return { transform: match.similarity, summary: { model: 'similarity', translationX: tx, translationY: ty, scaleX: scale, scaleY: scale, rotation: Math.atan2(b, a), shear: 0, mirrored, inlierCount: match.inlierCount, rmsError: match.rmsError ?? Infinity } }
+		return { model: 'similarity', translationX: tx, translationY: ty, scaleX: scale, scaleY: scale, rotation: Math.atan2(b, a), shear: 0, mirrored, inlierCount, rmsError }
 	}
 
-	if (match.model === 'affine' && match.affine !== undefined) {
-		const { m00, m01, tx, m10, m11, ty } = match.affine
-		const scaleX = Math.hypot(m00, m10)
-		const scaleY = Math.hypot(m01, m11)
-		const shear = Math.abs(m00 * m01 + m10 * m11) / Math.max(scaleX * scaleY, Number.EPSILON)
-		return { transform: match.affine, summary: { model: 'affine', translationX: tx, translationY: ty, scaleX, scaleY, rotation: Math.atan2(m10, m00), shear, mirrored: m00 * m11 - m01 * m10 < 0, inlierCount: match.inlierCount, rmsError: match.rmsError ?? Infinity } }
+	const { m00, m01, tx, m10, m11, ty } = transform
+	const scaleX = Math.hypot(m00, m10)
+	const scaleY = Math.hypot(m01, m11)
+	const shear = Math.abs(m00 * m01 + m10 * m11) / Math.max(scaleX * scaleY, Number.EPSILON)
+	return { model: 'affine', translationX: tx, translationY: ty, scaleX, scaleY, rotation: Math.atan2(m10, m00), shear, mirrored: m00 * m11 - m01 * m10 < 0, inlierCount, rmsError }
+}
+
+// Returns the affine transform applying `inner` first and then `outer` (outer ∘ inner), in pixels.
+export function composeTransforms(outer: SimilarityTransform | AffineTransform, inner: SimilarityTransform | AffineTransform): AffineTransform {
+	const o = toAffineMatrix(outer)
+	const i = toAffineMatrix(inner)
+	return {
+		m00: o.m00 * i.m00 + o.m01 * i.m10,
+		m01: o.m00 * i.m01 + o.m01 * i.m11,
+		tx: o.m00 * i.tx + o.m01 * i.ty + o.tx,
+		m10: o.m10 * i.m00 + o.m11 * i.m10,
+		m11: o.m10 * i.m01 + o.m11 * i.m11,
+		ty: o.m10 * i.tx + o.m11 * i.ty + o.ty,
 	}
+}
+
+// Chains a registration of a target onto an intermediate grid with a registration of that grid onto
+// the reference, so the target is resampled onto the reference once instead of twice. The composed
+// summary is labeled similarity when both are, keeps the smaller inlier count, and estimates the RMS
+// residual as the quadrature sum of both, assuming independent errors and near-unit intermediate scale.
+// Returns undefined when the composed transform is singular.
+export function composeRegistrationTransforms(targetToIntermediate: ImageRegistrationTransform, intermediateToReference: ImageRegistrationTransform): ImageRegistrationTransform | undefined {
+	const transform = composeTransforms(intermediateToReference.transform, targetToIntermediate.transform)
+	const inverseTransform = invertAffineTransform(transform)
+	if (inverseTransform === undefined) return undefined
+	const inlierCount = Math.min(targetToIntermediate.summary.inlierCount, intermediateToReference.summary.inlierCount)
+	const rmsError = Math.hypot(targetToIntermediate.summary.rmsError, intermediateToReference.summary.rmsError)
+	const summary = summarizeTransform(transform, inlierCount, rmsError)
+	const similarity = targetToIntermediate.summary.model === 'similarity' && intermediateToReference.summary.model === 'similarity'
+	return { transform, inverseTransform, summary: similarity ? { ...summary, model: 'similarity', shear: 0 } : summary }
 }
 
 // Checks an accepted transform against optional caller-supplied plausibility limits.
