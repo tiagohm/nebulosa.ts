@@ -163,6 +163,28 @@ function correctedFlatMeans(flat: Image, bias: Image | undefined, darkFlat: Imag
 	return sums
 }
 
+// Pixels of a calibratedNormalized master flat that `calibrate` with invalidFlat: passthrough leaves
+// without flat correction, because a sample of the pixel is non-finite or at or below `minimumFlat`.
+// `mask` holds one byte per pixel, 1 when any channel is invalid; `count` is the number of such pixels.
+// The mask lets a caller exclude those samples from integration instead of mixing uncorrected values.
+export function invalidFlatMask(flat: Image, minimumFlat: number = 0) {
+	const { channels, pixelCount } = flat.metadata
+	const raw = flat.raw
+	const mask = new Uint8Array(pixelCount)
+	let count = 0
+
+	for (let pixel = 0, offset = 0; pixel < pixelCount; pixel++) {
+		for (let channel = 0; channel < channels; channel++, offset++) {
+			const value = raw[offset]
+			if (Number.isFinite(value) && value > minimumFlat) continue
+			if (mask[pixel] === 0) count++
+			mask[pixel] = 1
+		}
+	}
+
+	return { mask, count }
+}
+
 // Converts a master read in digital numbers to the normalized scale of `calibrate`. `fullScale` is the
 // digital full scale of the frames the master was integrated from, and 1 for a dimensionless flat.
 // The samples of a master in DN must not come from a normalized read, whose per-image min-max rescale

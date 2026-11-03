@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { calibrate, type CalibrationOptions } from '../../../src/imaging/processing/calibration'
+import { calibrate, type CalibrationOptions, invalidFlatMask } from '../../../src/imaging/processing/calibration'
 import { expectImageValues, makeImage } from './util'
 
 test('calibrate subtracts an exposure-matched raw dark and normalizes by a bias-corrected flat', () => {
@@ -299,4 +299,21 @@ test('calibrate leaves the image unchanged when no calibration frames are provid
 
 	expect(calibrate(light)).toBe(light)
 	expectImageValues(light, before, 8)
+})
+
+test('invalidFlatMask marks exactly the pixels a passthrough calibration leaves uncorrected', () => {
+	const flat = makeImage(3, 2, 1, [1, 0, Number.NaN, 1.2, -0.1, 0.8])
+	const light = makeImage(3, 2, 1, [0.5, 0.5, 0.5, 0.6, 0.5, 0.4])
+	const { mask, count } = invalidFlatMask(flat)
+	calibrate(light, { flat, flatRepresentation: 'calibratedNormalized', invalidFlat: 'passthrough' })
+	expect(Array.from(mask)).toEqual([0, 1, 1, 0, 1, 0])
+	expect(count).toBe(3)
+	expectImageValues(light, [0.5, 0.5, 0.5, 0.5, 0.5, 0.5], 6)
+	expect(invalidFlatMask(flat, 0.9).count).toBe(4)
+})
+
+test('invalidFlatMask counts an RGB pixel once when several channels are invalid', () => {
+	const { mask, count } = invalidFlatMask(makeImage(2, 1, 3, [0, Number.POSITIVE_INFINITY, 1, 1, 1, 1]))
+	expect(Array.from(mask)).toEqual([1, 0])
+	expect(count).toBe(1)
 })
