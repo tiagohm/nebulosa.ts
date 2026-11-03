@@ -23,7 +23,7 @@ import { measureSubframeQuality, type SubframeQualityMetrics } from './subframe.
 
 // Image stacking pipeline: registers a set of frames to a reference using star matching, normalizes
 // and weights them, then combines the aligned pixels with a selectable rejection method (average,
-// median, sigma-clip, min/max, winsorized mean, percentile clip). Produces the stacked image plus
+// median, sigma-clip, weighted sigma-clip, min/max, winsorized mean, percentile clip). Produces the stacked image plus
 // per-frame acceptance diagnostics, coverage, and combination statistics. Drizzle deposits square
 // drops without resampling, optionally reconstructing CFA as RGB. Means preserve normalized intensity
 // (which may exceed [0,1]); Drizzle sum preserves distributed samples before masking/cropping.
@@ -42,8 +42,9 @@ export interface DrizzleStackingOptions {
 	readonly maxMemoryBytes?: number
 }
 
-// Pixel-combination algorithm applied across the aligned frame stack.
-export type StackingCombinationMethod = 'sum' | 'average' | 'weighted-average' | 'median' | 'sigma-clip' | 'min-max-average' | 'winsorized-mean' | 'percentile-clip-average'
+// Pixel-combination algorithm applied across the aligned frame stack. weighted-sigma-clip rejects with
+// the sigma-clip bounds and averages the retained samples with their frame weights; sigma-clip ignores weights.
+export type StackingCombinationMethod = 'sum' | 'average' | 'weighted-average' | 'median' | 'sigma-clip' | 'weighted-sigma-clip' | 'min-max-average' | 'winsorized-mean' | 'percentile-clip-average'
 
 // Resampling kernel used when warping a frame onto the reference grid.
 export type StackingInterpolationMode = ImageInterpolationMode
@@ -152,7 +153,7 @@ export interface BatchReferenceSelection {
 	readonly index?: number
 }
 
-// Sigma-clip rejection parameters for the 'sigma-clip' combination.
+// Sigma-clip rejection parameters for the 'sigma-clip' and 'weighted-sigma-clip' combinations.
 export interface SigmaClipStackingOptions {
 	readonly sigmaLower?: number
 	readonly sigmaUpper?: number

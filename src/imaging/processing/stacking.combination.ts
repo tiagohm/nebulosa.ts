@@ -40,6 +40,8 @@ export interface CombinationScratch {
 	readonly weights: Float64Array
 	// Workspace of the MAD dispersion of sigma clipping.
 	readonly mad: Float64Array
+	// Sorted copy of the samples used by weighted sigma clipping, which keeps `values` paired with `weights`.
+	readonly sorted: Float64Array
 }
 
 // One contributing frame of a strip: views starting at the strip's first pixel. `raw` holds
@@ -85,7 +87,7 @@ export function isOnlineCombinationMethod(method: StackingCombinationMethod) {
 
 // Allocates workspaces for at most `capacity` contributing frames per pixel.
 export function createCombinationScratch(capacity: number): CombinationScratch {
-	return { values: new Float64Array(capacity), weights: new Float64Array(capacity), mad: new Float64Array(capacity) }
+	return { values: new Float64Array(capacity), weights: new Float64Array(capacity), mad: new Float64Array(capacity), sorted: new Float64Array(capacity) }
 }
 
 // Resolves the weight of one frame from its caller weight (1 when absent) and the factor of the
@@ -190,15 +192,16 @@ export function combineStrip(frames: readonly CombinationStripFrame[], pixels: n
 				used++
 			}
 			if (used === 0) continue
-			out[base + channel] = combineSamples(method, values, weights, used, parameters, scratch.mad)
+			out[base + channel] = combineSamples(method, values, weights, used, parameters, scratch)
 		}
 	}
 }
 
 // Combines one per-pixel sample vector of `count` values with the selected method. `values` is
-// reordered in place by the sorting methods; `weights` is read by weighted-average only; `madScratch`
-// is the reusable workspace of MAD sigma clipping, allocated per call when omitted.
-export function combineSamples(method: StackingCombinationMethod, values: Float64Array, weights: Float64Array, count: number, parameters: CombinationParameters, madScratch?: Float64Array) {
+// reordered in place by the sorting methods, except weighted-sigma-clip, which keeps it paired with
+// `weights`; the weighted methods read `weights`. `scratch` supplies reusable workspaces of at least
+// `count` samples; omitted, the clipping methods allocate them per call.
+export function combineSamples(method: StackingCombinationMethod, values: Float64Array, weights: Float64Array, count: number, parameters: CombinationParameters, scratch?: Pick<CombinationScratch, 'mad' | 'sorted'>) {
 	const sorted = values.subarray(0, count)
 	const sortedWeights = weights.subarray(0, count)
 
@@ -239,7 +242,9 @@ export function combineSamples(method: StackingCombinationMethod, values: Float6
 			return combinePercentileClipAverage(sorted, count, parameters.percentileClip.lower, parameters.percentileClip.upper)
 		case 'sigma-clip':
 			sorted.sort()
-			return combineSigmaClip(sorted, count, parameters.sigmaClip, madScratch)
+			return combineSigmaClip(sorted, count, parameters.sigmaClip, scratch?.mad)
+		case 'weighted-sigma-clip':
+			return combineWeightedSigmaClip(values, weights, count, parameters.sigmaClip, scratch?.sorted ?? new Float64Array(count), scratch?.mad)
 	}
 }
 
@@ -320,6 +325,69 @@ function combineSigmaClip(values: Float64Array, count: number, options: Required
 	}
 
 	return meanOf(values, 0, active)
+}
+
+// Rejects with exactly the bounds of sigma-clip, iterated on a sorted copy, and returns the weighted
+// mean of the original (value, weight) pairs inside the intersection of every iteration's bounds, which
+// is the set sigma-clip keeps. With two samples or fewer nothing is rejected; with no positive retained
+// weight, or a zero dispersion that sigma-clip answers with its center, the center is returned.
+function combineWeightedSigmaClip(values: Float64Array, weights: Float64Array, count: number, options: Required<SigmaClipStackingOptions>, sorted: Float64Array, madScratch?: Float64Array) {
+	if (count <= 2) return weightedMeanWithin(values, weights, count, -Infinity, Infinity, meanOf(values, 0, count))
+
+	for (let i = 0; i < count; i++) sorted[i] = values[i]
+	let active = count
+	let low = -Infinity
+	let high = Infinity
+	let center = 0
+
+	for (let iteration = 0; iteration < options.maxIterations; iteration++) {
+		const current = sorted.subarray(0, active).sort()
+		center = options.centerMethod === 'mean' ? meanOf(current) : medianOf(current, active)
+		let sigma = 0
+
+		if (options.dispersionMethod === 'std') {
+			let sumSq = 0
+
+			for (let i = 0; i < active; i++) {
+				const delta = current[i] - center
+				sumSq += delta * delta
+			}
+
+			sigma = Math.sqrt(sumSq / active)
+		} else {
+			sigma = medianAbsoluteDeviationOf(current, center, true, active, madScratch)
+		}
+
+		if (!(sigma > 0)) return center
+
+		low = Math.max(low, center - options.sigmaLower * sigma)
+		high = Math.min(high, center + options.sigmaUpper * sigma)
+		let kept = 0
+
+		for (let i = 0; i < active; i++) if (current[i] >= low && current[i] <= high) sorted[kept++] = current[i]
+
+		if (kept === 0) return center
+		if (kept === active) break
+
+		active = kept
+	}
+
+	return weightedMeanWithin(values, weights, count, low, high, center)
+}
+
+// Weighted mean of the samples within [low, high], or `fallback` when their weights sum to no positive value.
+function weightedMeanWithin(values: Float64Array, weights: Float64Array, count: number, low: number, high: number, fallback: number) {
+	let weighted = 0
+	let weightSum = 0
+
+	for (let i = 0; i < count; i++) {
+		const value = values[i]
+		if (value < low || value > high) continue
+		weighted += value * weights[i]
+		weightSum += weights[i]
+	}
+
+	return weightSum > 0 ? weighted / weightSum : fallback
 }
 
 // Computes a percentile from a sorted numeric array.

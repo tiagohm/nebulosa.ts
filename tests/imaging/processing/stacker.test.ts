@@ -1357,6 +1357,19 @@ describe('stacker over a synthetic multi-filter acquisition', () => {
 		}
 	})
 
+	test('weighted sigma clipping removes impulses in batch and is refused live', () => {
+		const truth = syntheticTruth(field, 'OIII', EXPOSURE)
+		const frames = calibratedFrames('OIII', 4)
+		const expected = NOISE / Math.min(...masters.flat.raw) / Math.sqrt(FRAMES)
+		const result = stackFrames(frames, { ...options, combinationMethod: 'weighted-sigma-clip', weightingMode: 'snr' })
+		expect(result.acceptedFrames).toBe(FRAMES)
+		expect(result.statistics.method).toBe('weighted-sigma-clip')
+		expect(backgroundResidual(result.finalImage!.raw, truth)).toBeLessThan(expected)
+
+		const live = new LiveStacker({ ...options, combinationMethod: 'weighted-sigma-clip' })
+		expect(live.add(frames[0]).reason).toBe('combination-method-not-supported-in-live-mode')
+	})
+
 	test('batch and live outputs stay byte-identical while the stacker internals are refactored', () => {
 		const frames = calibratedFrames('Ha', 4, true)
 		const hashes: Record<string, string> = {}

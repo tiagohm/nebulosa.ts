@@ -3,7 +3,7 @@ import type { StackingCombinationMethod } from '../../../src/imaging/processing/
 import { accumulateSamples, combineSamples, combineStrip, coverageBounds, coverageThreshold, createCombinationScratch, DEFAULT_COMBINATION_PARAMETERS, finalizeOnlineSamples, isOnlineCombinationMethod, resolveCombinationParameters } from '../../../src/imaging/processing/stacking.combination'
 import { mulberry32 } from '../../../src/math/numerical/random'
 
-const SAMPLE_METHODS = ['median', 'sigma-clip', 'min-max-average', 'winsorized-mean', 'percentile-clip-average', 'average', 'weighted-average', 'sum'] as const satisfies readonly StackingCombinationMethod[]
+const SAMPLE_METHODS = ['median', 'sigma-clip', 'weighted-sigma-clip', 'min-max-average', 'winsorized-mean', 'percentile-clip-average', 'average', 'weighted-average', 'sum'] as const satisfies readonly StackingCombinationMethod[]
 
 function randomFrames(count: number, pixels: number, channels: number, seed: number) {
 	const random = mulberry32(seed)
@@ -105,6 +105,42 @@ describe('stacking combination', () => {
 		coverage[2 * 5 + 3] = 3
 		expect(coverageBounds(5, 4, coverage, 3)).toEqual({ left: 1, top: 1, right: 3, bottom: 2, width: 3, height: 2 })
 		expect(coverageBounds(5, 4, coverage, 4)).toBeUndefined()
+	})
+
+	test('weighted sigma clipping rejects outliers and weights the retained samples', () => {
+		const parameters = resolveCombinationParameters({})
+		const values = Float64Array.of(1, 1.02, 0.98, 1.01, 0.99, 1.03, 0.97, 5)
+		const weights = Float64Array.of(1, 4, 1, 1, 1, 1, 1, 100)
+		const scratch = createCombinationScratch(8)
+		scratch.values.set(values)
+		scratch.weights.set(weights)
+		const result = combineSamples('weighted-sigma-clip', scratch.values, scratch.weights, 8, parameters, scratch)
+		// The heavily weighted outlier is rejected and the inliers average with their own weights.
+		expect(result).toBeCloseTo((1 + 4 * 1.02 + 0.98 + 1.01 + 0.99 + 1.03 + 0.97) / 10, 12)
+		// Values stay paired with their weights after the call.
+		expect(scratch.values).toEqual(values)
+	})
+
+	test('weighted sigma clipping with equal weights matches sigma clipping', () => {
+		const random = mulberry32(17)
+		const parameters = resolveCombinationParameters({ sigmaClip: { sigmaLower: 2, sigmaUpper: 2, maxIterations: 5 } })
+
+		for (let trial = 0; trial < 200; trial++) {
+			const count = 1 + Math.floor(random() * 12)
+			const values = new Float64Array(count)
+			for (let i = 0; i < count; i++) values[i] = random() + (random() < 0.15 ? 3 * random() : 0)
+			const weights = new Float64Array(count).fill(2)
+			const plain = combineSamples('sigma-clip', values.slice(), weights, count, parameters)
+			const weighted = combineSamples('weighted-sigma-clip', values.slice(), weights, count, parameters)
+			expect(weighted).toBeCloseTo(plain, 12)
+		}
+	})
+
+	test('weighted sigma clipping keeps every sample of tiny stacks and falls back to the center', () => {
+		const parameters = resolveCombinationParameters({})
+		expect(combineSamples('weighted-sigma-clip', Float64Array.of(1, 10), Float64Array.of(3, 1), 2, parameters)).toBeCloseTo(13 / 4, 12)
+		expect(combineSamples('weighted-sigma-clip', Float64Array.of(2, 2, 2, 9), Float64Array.of(1, 1, 1, 1), 4, parameters)).toBe(2)
+		expect(isOnlineCombinationMethod('weighted-sigma-clip')).toBeFalse()
 	})
 
 	test('rejection parameters are clamped to their domain', () => {
