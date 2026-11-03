@@ -431,6 +431,8 @@ test('reflects and commands the update and average periods', () => {
 	const weather = weatherDevice(manager)
 
 	expect(weather.updatePeriod).toBeUndefined()
+	expect(manager.canSetUpdatePeriod(weather)).toBeFalse()
+	expect(manager.canSetAveragePeriod(weather)).toBeFalse()
 	expect(manager.setUpdatePeriod(weather, 30)).toBeFalse()
 	expect(manager.setAveragePeriod(weather, 1)).toBeFalse()
 
@@ -439,6 +441,8 @@ test('reflects and commands the update and average periods', () => {
 
 	manager.numberVector(recordingClient, { device: weather.name, name: 'WEATHER_AVERAGE_PERIOD', permission: 'rw', state: 'Ok', elements: { AVERAGE_PERIOD: defNumber('AVERAGE_PERIOD', 0.5, 0, 24) } }, 'defNumberVector')
 	expect(weather.averagePeriod).toBe(0.5)
+	expect(manager.canSetUpdatePeriod(weather)).toBeTrue()
+	expect(manager.canSetAveragePeriod(weather)).toBeTrue()
 
 	numberCommands.length = 0
 	expect(manager.setUpdatePeriod(weather, 30)).toBeTrue()
@@ -448,8 +452,16 @@ test('reflects and commands the update and average periods', () => {
 		{ device: weather.name, name: 'WEATHER_AVERAGE_PERIOD', elements: { AVERAGE_PERIOD: 2 } },
 	])
 
+	// An Alert refusing a period still reaches the observers when the period stays unchanged.
+	const updates: string[] = []
+	manager.addHandler({ added() {}, updated: (_, property, state) => updates.push(`${property}:${state}`), removed() {} })
+	manager.numberVector(recordingClient, { device: weather.name, name: 'WEATHER_UPDATE', state: 'Alert', elements: { PERIOD: { name: 'PERIOD', value: 60 } } }, 'setNumberVector')
+	expect(updates).toEqual(['updatePeriod:Alert'])
+	expect(weather.updatePeriod!.value).toBe(60)
+
 	// A read-only redefinition withdraws the command.
 	manager.numberVector(recordingClient, { device: weather.name, name: 'WEATHER_UPDATE', permission: 'ro', state: 'Ok', elements: { PERIOD: defNumber('PERIOD', 60, 1, 3600) } }, 'defNumberVector')
+	expect(manager.canSetUpdatePeriod(weather)).toBeFalse()
 	expect(manager.setUpdatePeriod(weather, 30)).toBeFalse()
 })
 
@@ -458,9 +470,11 @@ test('commands refresh only when the driver offers a writable switch', () => {
 	const weather = weatherDevice(manager)
 
 	expect(manager.refresh(weather)).toBeFalse()
+	expect(manager.canRefresh(weather)).toBeFalse()
 
 	manager.switchVector(recordingClient, { device: weather.name, name: 'WEATHER_REFRESH', permission: 'rw', rule: 'AtMostOne', state: 'Idle', elements: { REFRESH: defSwitch('REFRESH', false) } }, 'defSwitchVector')
 
+	expect(manager.canRefresh(weather)).toBeTrue()
 	switchCommands.length = 0
 	expect(manager.refresh(weather)).toBeTrue()
 	expect(switchCommands).toEqual([{ device: weather.name, name: 'WEATHER_REFRESH', elements: { REFRESH: true } }])

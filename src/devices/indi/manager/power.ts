@@ -154,7 +154,7 @@ export class PowerManager extends DeviceManager<Power> {
 
 // Reconciles one power-channel list (dc/dew/usb/variable) against an incoming vector: updates each
 // channel's label/value/enabled or min/max range, appends new channels, trims removed ones, and notifies
-// on any change. Returns whether anything changed.
+// on any change or Alert. Returns whether anything changed.
 function handlePowerChannel(manager: DeviceManager<Power>, device: Power, message: DefVector | SetVector, tag: string, type: PowerChannelType, property: keyof Omit<PowerChannel, 'type'>, client = device[CLIENT]!) {
 	const entries = Object.entries(message.elements) as readonly [string, DefElement][]
 	const channels = device[type]
@@ -186,7 +186,8 @@ function handlePowerChannel(manager: DeviceManager<Power>, device: Power, messag
 		updated = true
 	}
 
-	if (updated) {
+	// An Alert that leaves every channel unchanged still reaches the observers, so a refused command fails at once.
+	if (updated || message.state === 'Alert') {
 		manager.updated(device, type, message.state)
 	}
 

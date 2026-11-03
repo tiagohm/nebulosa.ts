@@ -157,6 +157,21 @@ export class FocuserCommander implements DeviceHandler<Focuser>, FocuserMover, D
 		)
 	}
 
+	// Enables or disables the backlash compensation of the driver itself, which then overshoots and returns on
+	// every later move that reverses direction. This acquires the focuser like any other command: a move in
+	// flight would otherwise end at a position compensated differently from the one it was planned for. The
+	// command is not waited for, since the switch takes effect at once and moves nothing.
+	async setBacklash(scope: OperationScope, focuser: Focuser, enabled: boolean): Promise<OperationResult<void>> {
+		return await this.#mutate(
+			scope,
+			'focuserBacklash',
+			focuser,
+			() => focuser.hasBacklash,
+			'toggle its backlash compensation',
+			() => this.focuserManager.backlash(focuser, enabled),
+		)
+	}
+
 	// Stops any motion and waits for the focuser to report a standstill.
 	// This is the one command that does not acquire the focuser. It is the emergency stop, used both by the
 	// stop endpoint and by the abort path of every wait here, and it exists precisely for the states in
