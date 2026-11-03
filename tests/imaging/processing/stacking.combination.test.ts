@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import type { StackingCombinationMethod } from '../../../src/imaging/processing/stacker'
 import { accumulateSamples, combineSamples, combineStrip, coverageBounds, coverageThreshold, createCombinationScratch, DEFAULT_COMBINATION_PARAMETERS, finalizeOnlineSamples, isOnlineCombinationMethod, resolveCombinationParameters } from '../../../src/imaging/processing/stacking.combination'
-import { mulberry32 } from '../../../src/math/numerical/random'
+import { mulberry32, normal } from '../../../src/math/numerical/random'
 
 const SAMPLE_METHODS = ['median', 'sigma-clip', 'weighted-sigma-clip', 'min-max-average', 'winsorized-mean', 'percentile-clip-average', 'average', 'weighted-average', 'sum'] as const satisfies readonly StackingCombinationMethod[]
 
@@ -141,6 +141,30 @@ describe('stacking combination', () => {
 		expect(combineSamples('weighted-sigma-clip', Float64Array.of(1, 10), Float64Array.of(3, 1), 2, parameters)).toBeCloseTo(13 / 4, 12)
 		expect(combineSamples('weighted-sigma-clip', Float64Array.of(2, 2, 2, 9), Float64Array.of(1, 1, 1, 1), 4, parameters)).toBe(2)
 		expect(isOnlineCombinationMethod('weighted-sigma-clip')).toBeFalse()
+	})
+
+	test('averaging N independent frames scales the noise by 1/sqrt(N), weighting included', () => {
+		const pixels = 20000
+		const sigma = 0.01
+		const random = normal(mulberry32(23), 0, sigma)
+
+		for (const count of [4, 16]) {
+			const frames = []
+			for (let i = 0; i < count; i++) frames.push({ raw: Float64Array.from({ length: pixels }, () => 0.2 + random()), valid: new Uint8Array(pixels).fill(1), weight: i % 2 ? 1 : 3 })
+			const coverage = coverageOf(frames, pixels)
+
+			for (const method of ['average', 'weighted-average'] as const) {
+				const out = new Float64Array(pixels)
+				combineStrip(frames, pixels, 1, coverage, 1, method, DEFAULT_COMBINATION_PARAMETERS, out, createCombinationScratch(count))
+				let sumSq = 0
+				for (let p = 0; p < pixels; p++) sumSq += (out[p] - 0.2) ** 2
+				const measured = Math.sqrt(sumSq / pixels)
+				// Weights 3 and 1 alternating: the variance of the weighted mean is sigma^2 * sum(w^2) / sum(w)^2.
+				const expected = method === 'average' ? sigma / Math.sqrt(count) : sigma * Math.sqrt(((count / 2) * 10) / (2 * count) ** 2)
+				// 20000 samples estimate a standard deviation within about 1 % (1 sigma); allow 4 %.
+				expect(Math.abs(measured / expected - 1)).toBeLessThan(0.04)
+			}
+		}
 	})
 
 	test('rejection parameters are clamped to their domain', () => {
