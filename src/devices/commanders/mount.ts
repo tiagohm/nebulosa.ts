@@ -3,11 +3,11 @@ import type { GeographicCoordinate } from '../../astronomy/observer/location'
 import { type Time, timeNow } from '../../astronomy/time/time'
 import { DEG2RAD } from '../../core/constants'
 import { errorMessage } from '../../core/util'
-import type { Angle } from '../../math/units/angle'
+import { type Angle, normalizePI } from '../../math/units/angle'
 import type { GPS, Mount, MountTargetCoordinate, NameAndLabel, PierSide, TrackMode } from '../indi/device'
 import type { DeviceHandler } from '../indi/manager/device'
 import { type MountManager, mountTargetEquatorial } from '../indi/manager/mount'
-import type { PropertyState } from '../indi/types'
+import type { PropertyState, StatefulSetVector } from '../indi/types'
 import { isDeviceQuiescent } from '../orchestration/device.lifecycle'
 import { failedOperationResult, successfulOperationResult, type OperationResult, type OperationContext, type OperationScope } from '../orchestration/operation'
 import { abortReason, waitForDeviceState } from '../orchestration/operation.wait'
@@ -17,8 +17,9 @@ import { resourceKey, type ResourceKey } from '../orchestration/resource'
 // Targets may be given in any MountTargetCoordinate frame and are converted to the equinox-of-date
 // equatorial coordinate at the mount's site; angles are radians and every duration is in milliseconds.
 // Slews, flips, parking and homing acquire the mount and resolve only after it stops, verifying arrival
-// against a tolerance; a failed or canceled motion is physically aborted first. Manual moves are
-// open-ended handles, and the emergency stop does not acquire the mount.
+// against a tolerance; a failed or canceled motion is physically aborted first. The settings that move
+// nothing (sync, site, clock, home and park positions, tracking and its rates) resolve once the driver
+// reports them. Manual moves are open-ended handles, and the emergency stop does not acquire the mount.
 
 // Axis direction of an open-ended manual motion. North/south and west/east are independent INDI vectors,
 // so one direction of each pair may be active at the same time.
@@ -86,6 +87,8 @@ interface MountUpdate {
 	readonly property?: keyof Mount & string
 	// INDI state published with the change, absent when the update is a poll of the current state.
 	readonly state?: PropertyState
+	// Command vector the driver answered, for the commands whose effect no device field reflects.
+	readonly vector?: StatefulSetVector
 }
 
 // Mutable bookkeeping of one open-ended manual motion, retained per mount so the direct endpoints, which
@@ -115,6 +118,14 @@ const DEFAULT_TOLERANCE = (1 / 60) * DEG2RAD
 
 // Default angular tolerance for accepting that a slew which stopped actually reached its target.
 const DEFAULT_ARRIVAL_TOLERANCE = DEG2RAD
+
+// Angular tolerance, in radians, for a reported site latitude and longitude. Drivers of hand controllers
+// such as LX200 store the site to the arcminute, so a finer comparison would never accept their answer.
+const SITE_TOLERANCE = (1 / 60) * DEG2RAD
+
+// Tolerance, in milliseconds, for a reported mount clock. The clock is sent to the second, and the driver
+// reports it to the second as well.
+const TIME_TOLERANCE = 1000
 
 // Properties whose Alert state means the commanded motion itself failed. An Alert on an unrelated vector,
 // such as the site time, must not fail a slew that is otherwise progressing.
@@ -170,6 +181,11 @@ export class MountCommander implements DeviceHandler<Mount>, Disposable {
 		this.#emit({ mount, property, state })
 	}
 
+	// Feeds every waiter with the answer to a command vector, such as the TELESCOPE_HOME state.
+	vectorState(mount: Mount, vector: StatefulSetVector) {
+		this.#emit({ mount, vector, state: vector.state })
+	}
+
 	// Wakes every waiter so it reevaluates; removal is reported as a disconnected device by evaluation,
 	// and the operation itself is canceled independently by DeviceLifecycle.
 	removed(mount: Mount) {
@@ -211,18 +227,27 @@ export class MountCommander implements DeviceHandler<Mount>, Disposable {
 		}).result
 	}
 
-	// Redefines the mount's idea of where it is pointing. The driver applies it without any movement, so
-	// there is no observable transition to wait for. Only `options.time` applies.
+	// Redefines the mount's idea of where it is pointing, which the driver applies without any movement, and
+	// resolves once the mount reports the target within `options.tolerance` (1′ by default). `options.time`
+	// and `options.timeout` (10 s by default) apply.
 	async sync(scope: OperationScope, mount: Mount, target: MountTargetCoordinate<string | Angle>, options: MountCommandOptions = {}): Promise<OperationResult<void>> {
-		return await scope.start<void>('mountSync', [{ key: resourceKey(mount), device: mount }], () => {
-			if (!mount.connected) return failedOperationResult('disconnected')
-			if (!mount.canSync) return unsupported(mount, 'sync')
+		const tolerance = options.tolerance ?? DEFAULT_TOLERANCE
+		let rightAscension = 0
+		let declination = 0
 
-			const [rightAscension, declination] = resolveTarget(mount, target, options.time)
-			this.mountManager.syncTo(mount, rightAscension, declination)
-
-			return successfulOperationResult(undefined)
-		}).result
+		return await this.#setting(
+			scope,
+			'mountSync',
+			mount,
+			() => mount.canSync,
+			'sync',
+			options,
+			(update) => (update.state === 'Alert' && update.property === 'equatorialCoordinate' ? 'alert' : mount.hasEquatorialCoordinate && separation(mount, rightAscension, declination) <= tolerance),
+			() => {
+				;[rightAscension, declination] = resolveTarget(mount, target, options.time)
+				this.mountManager.syncTo(mount, rightAscension, declination)
+			},
+		)
 	}
 
 	// Enables or disables tracking and resolves only after the mount reports the requested state, so a
@@ -283,26 +308,32 @@ export class MountCommander implements DeviceHandler<Mount>, Disposable {
 		)
 	}
 
-	// Stores the current position as the home position.
-	async setHome(scope: OperationScope, mount: Mount): Promise<OperationResult<void>> {
-		return await this.#mutate(
+	// Stores the current position as the home position and resolves once the driver answers TELESCOPE_HOME
+	// with Ok or Idle; an Alert fails it as `alert`. The position itself is not modelled.
+	async setHome(scope: OperationScope, mount: Mount, options: MountCommandOptions = {}): Promise<OperationResult<void>> {
+		return await this.#setting(
 			scope,
 			'mountSetHome',
 			mount,
 			() => mount.canSetHome,
 			'set the home position',
+			options,
+			(update) => vectorAnswer(update, 'TELESCOPE_HOME'),
 			() => this.mountManager.setHome(mount),
 		)
 	}
 
-	// Stores the current position as the park position.
-	async setPark(scope: OperationScope, mount: Mount): Promise<OperationResult<void>> {
-		return await this.#mutate(
+	// Stores the current position as the park position and resolves once the driver answers
+	// TELESCOPE_PARK_OPTION with Ok or Idle; an Alert fails it as `alert`. The position itself is not modelled.
+	async setPark(scope: OperationScope, mount: Mount, options: MountCommandOptions = {}): Promise<OperationResult<void>> {
+		return await this.#setting(
 			scope,
 			'mountSetPark',
 			mount,
 			() => mount.canSetPark,
 			'set the park position',
+			options,
+			(update) => vectorAnswer(update, 'TELESCOPE_PARK_OPTION'),
 			() => this.mountManager.setPark(mount),
 		)
 	}
@@ -360,26 +391,40 @@ export class MountCommander implements DeviceHandler<Mount>, Disposable {
 		}).result
 	}
 
-	// Writes the observing site the mount computes its pointing from.
-	async setGeographicCoordinate(scope: OperationScope, mount: Mount, coordinate: GeographicCoordinate): Promise<OperationResult<void>> {
-		return await this.#mutate(
+	// Writes the observing site the mount computes its pointing from, and resolves once the mount reports the
+	// latitude and longitude within SITE_TOLERANCE (1′). The elevation is sent but not compared, because some
+	// drivers ignore it and keep reporting their own.
+	async setGeographicCoordinate(scope: OperationScope, mount: Mount, coordinate: GeographicCoordinate, options: MountCommandOptions = {}): Promise<OperationResult<void>> {
+		return await this.#setting(
 			scope,
 			'mountLocation',
 			mount,
 			() => true,
 			'change the location',
+			options,
+			(update) => {
+				if (update.state === 'Alert' && update.property === 'geographicCoordinate') return 'alert'
+				const { latitude, longitude } = mount.geographicCoordinate
+				return mount.hasGeographicCoordinate && Math.abs(latitude - coordinate.latitude) <= SITE_TOLERANCE && Math.abs(normalizePI(longitude - coordinate.longitude)) <= SITE_TOLERANCE
+			},
 			() => this.mountManager.geographicCoordinate(mount, coordinate),
 		)
 	}
 
-	// Writes the mount clock, which its pointing model depends on.
-	async setTime(scope: OperationScope, mount: Mount, time: GPS['time']): Promise<OperationResult<void>> {
-		return await this.#mutate(
+	// Writes the mount clock, which its pointing model depends on, and resolves once the mount reports the same
+	// UTC offset and a clock within TIME_TOLERANCE (1 s) of the second that was sent.
+	async setTime(scope: OperationScope, mount: Mount, time: GPS['time'], options: MountCommandOptions = {}): Promise<OperationResult<void>> {
+		// The manager sends the clock truncated to the second.
+		const utc = Math.floor(time.utc / 1000) * 1000
+
+		return await this.#setting(
 			scope,
 			'mountTime',
 			mount,
 			() => true,
 			'change the time',
+			options,
+			(update) => (update.state === 'Alert' && update.property === 'time' ? 'alert' : Math.abs(mount.time.utc - utc) <= TIME_TOLERANCE && Math.abs(mount.time.offset - time.offset) < 1),
 			() => this.mountManager.time(mount, time),
 		)
 	}
@@ -682,16 +727,28 @@ export class MountCommander implements DeviceHandler<Mount>, Disposable {
 		}).result
 	}
 
-	// Runs a mutation that has no observable completion under a scope owning the mount, so it cannot be
-	// interleaved with a slew or with any other operation already holding the device.
-	async #mutate(scope: OperationScope, kind: string, mount: Mount, supported: () => boolean, description: string, command: VoidFunction): Promise<OperationResult<void>> {
-		return await scope.start<void>(kind, [{ key: resourceKey(mount), device: mount }], () => {
+	// Runs a setting that moves nothing under a scope owning the mount and resolves once the driver reports it.
+	// `reached` reads each update: true once the reported state is the commanded one, or `alert` for an Alert
+	// that refuses it. `options.timeout` bounds the wait (10 s by default).
+	async #setting(scope: OperationScope, kind: string, mount: Mount, supported: () => boolean, description: string, options: MountCommandOptions, reached: (update: MountUpdate) => boolean | 'alert', command: VoidFunction): Promise<OperationResult<void>> {
+		return await scope.start<void>(kind, [{ key: resourceKey(mount), device: mount }], async (context) => {
 			if (!mount.connected) return failedOperationResult('disconnected')
 			if (!supported()) return unsupported(mount, description)
 
-			command()
+			const observed = await waitForDeviceState<MountUpdate>({
+				signal: context.signal,
+				timeout: options.timeout ?? DEFAULT_SWITCH_TIMEOUT,
+				subscribe: (listener) => this.#subscribe(mount, listener),
+				current: () => ({ mount }),
+				evaluate: (update) => {
+					if (!mount.connected) return 'disconnected'
+					const verdict = reached(update)
+					return verdict === 'alert' ? 'alert' : verdict ? 'success' : 'pending'
+				},
+				command,
+			})
 
-			return successfulOperationResult(undefined)
+			return observed.ok ? successfulOperationResult(undefined) : observed
 		}).result
 	}
 
@@ -795,6 +852,13 @@ function slewResult(mount: Mount): MountSlewResult {
 // Whether the driver defines the motion vector of the axis a direction moves along.
 function canMoveTowards(mount: Mount, direction: MountMoveDirection) {
 	return direction === 'NORTH' || direction === 'SOUTH' ? mount.canMoveNS : mount.canMoveWE
+}
+
+// Reads the answer to a command vector whose effect no device field reflects: true once the driver published
+// it Ok or Idle, `alert` when it published it Alert, and false for Busy or for any other update.
+function vectorAnswer(update: MountUpdate, name: string) {
+	if (update.vector?.name !== name) return false
+	return update.vector.state === 'Alert' ? 'alert' : update.vector.state === 'Ok' || update.vector.state === 'Idle'
 }
 
 // Reports a capability the driver does not expose as an expected failure rather than an exception.

@@ -15,7 +15,8 @@ import { resourceKey } from '../orchestration/resource'
 
 // Timing overrides for one rotator command; every duration is in milliseconds.
 export interface RotatorCommandOptions {
-	// Maximum time the commanded angle may take to be reached.
+	// Maximum time the commanded angle may take to be reached (120 s by default), or a setting that moves
+	// nothing, such as a sync, to be reported (10 s by default).
 	readonly timeout?: number
 	// Maximum time a canceled or failed motion has to bring the rotator to a standstill.
 	readonly settleTimeout?: number
@@ -42,6 +43,9 @@ const DEFAULT_MOVE_TIMEOUT = 120000
 
 // Default milliseconds a motion that ended has to be reported as no longer moving.
 const DEFAULT_SETTLE_TIMEOUT = 15000
+
+// Default milliseconds a setting that moves nothing (a sync or the reverse switch) has to be reported.
+const DEFAULT_SETTING_TIMEOUT = 10000
 
 // Largest angular difference, in degrees, at which the rotator already stands at the commanded angle, so
 // no command is sent, or has reached it without any motion being observed.
@@ -164,30 +168,42 @@ export class RotatorCommander implements DeviceHandler<Rotator>, Disposable {
 		}).result
 	}
 
-	// Redefines the angle the rotator reports, in degrees, which the driver applies without any movement.
-	async syncTo(scope: OperationScope, rotator: Rotator, angle: number): Promise<OperationResult<void>> {
-		return await scope.start<void>('rotatorSync', [{ key: resourceKey(rotator), device: rotator }], () => {
-			if (!rotator.connected) return failedOperationResult('disconnected')
-			if (!rotator.canSync) return failedOperationResult('unexpectedState', `rotator ${rotator.name} cannot sync`)
+	// Redefines the angle the rotator reports, in degrees, which the driver applies without any movement, and
+	// resolves once the rotator reports that angle within half its published step (plus ANGLE_TOLERANCE),
+	// whichever representative of the direction it publishes.
+	async syncTo(scope: OperationScope, rotator: Rotator, angle: number, options: RotatorCommandOptions = {}): Promise<OperationResult<void>> {
+		const target = rotatorAngle(rotator, angle)
+		const tolerance = (rotator.angle.step > 0 ? rotator.angle.step / 2 : 0) + ANGLE_TOLERANCE
 
-			this.rotatorManager.syncTo(rotator, rotatorAngle(rotator, angle))
-
-			return successfulOperationResult(undefined)
-		}).result
+		return await this.#setting(
+			scope,
+			'rotatorSync',
+			rotator,
+			() => rotator.canSync,
+			'sync',
+			'angle',
+			() => angularSeparation(rotator.angle.value, target) <= tolerance,
+			() => this.rotatorManager.syncTo(rotator, target),
+			options,
+		)
 	}
 
 	// Inverts the direction the rotator turns for a given angle at the driver.
 	// This acquires the rotator even though nothing moves: the setting reinterprets every angle commanded
-	// after it, and flipping it under a running operation would send the next move the wrong way.
-	async reverse(scope: OperationScope, rotator: Rotator, enabled: boolean): Promise<OperationResult<void>> {
-		return await scope.start<void>('rotatorReverse', [{ key: resourceKey(rotator), device: rotator }], () => {
-			if (!rotator.connected) return failedOperationResult('disconnected')
-			if (!rotator.canReverse) return failedOperationResult('unexpectedState', `rotator ${rotator.name} cannot reverse`)
-
-			this.rotatorManager.reverse(rotator, enabled)
-
-			return successfulOperationResult(undefined)
-		}).result
+	// after it, and flipping it under a running operation would send the next move the wrong way. Resolves
+	// once the driver reports the requested direction.
+	async reverse(scope: OperationScope, rotator: Rotator, enabled: boolean, options: RotatorCommandOptions = {}): Promise<OperationResult<void>> {
+		return await this.#setting(
+			scope,
+			'rotatorReverse',
+			rotator,
+			() => rotator.canReverse,
+			'reverse',
+			'reversed',
+			() => rotator.reversed === enabled,
+			() => this.rotatorManager.reverse(rotator, enabled),
+			options,
+		)
 	}
 
 	// Aborts any motion and waits for the rotator to report a standstill.
@@ -251,6 +267,30 @@ export class RotatorCommander implements DeviceHandler<Rotator>, Disposable {
 		})
 
 		return settled.ok ? successfulOperationResult(undefined) : settled
+	}
+
+	// Runs a setting that moves nothing under a scope owning the rotator and resolves once `reached` holds for
+	// the reported state. An Alert on `property` fails it as `alert`.
+	async #setting(scope: OperationScope, kind: string, rotator: Rotator, supported: () => boolean, description: string, property: keyof Rotator & string, reached: () => boolean, command: VoidFunction, options: RotatorCommandOptions): Promise<OperationResult<void>> {
+		return await scope.start<void>(kind, [{ key: resourceKey(rotator), device: rotator }], async (context) => {
+			if (!rotator.connected) return failedOperationResult('disconnected')
+			if (!supported()) return failedOperationResult('unexpectedState', `rotator ${rotator.name} cannot ${description}`)
+
+			const observed = await waitForDeviceState<RotatorUpdate>({
+				signal: context.signal,
+				timeout: options.timeout ?? DEFAULT_SETTING_TIMEOUT,
+				subscribe: (listener) => this.#subscribe(rotator, listener),
+				current: () => ({ rotator }),
+				evaluate: (update) => {
+					if (!rotator.connected) return 'disconnected'
+					if (update.state === 'Alert' && update.property === property) return 'alert'
+					return reached() ? 'success' : 'pending'
+				},
+				command,
+			})
+
+			return observed.ok ? successfulOperationResult(undefined) : observed
+		}).result
 	}
 
 	// Registers a waiter for one device and returns its idempotent unsubscriber.

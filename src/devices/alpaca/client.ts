@@ -224,6 +224,10 @@ const MAIN_CONTROL = 'Main Control'
 // INDI property group label for the read-only driver/general info tab.
 const GENERAL_INFO = 'General Info'
 
+// Degrees Celsius within which an Alpaca camera counts as standing at its cooling target: CCD_TEMPERATURE is
+// answered and kept Busy while the reading is farther than this and Ok once within it, as INDI CCD drivers do.
+const COOLING_THRESHOLD = 0.5
+
 // Minimal polled state shared by every device: connection flag, optional bulk DeviceState, and the
 // step counter that sequences the initial endpoint-enable handshake.
 interface AlpacaClientDeviceState {
@@ -698,6 +702,9 @@ class AlpacaCamera extends AlpacaDevice {
 	readonly #abort = makeSwitchVector('', 'CCD_ABORT_EXPOSURE', 'Abort', MAIN_CONTROL, 'AtMostOne', 'rw', ['ABORT', 'Abort', false])
 	readonly #exposure = makeNumberVector('', 'CCD_EXPOSURE', 'Exposure', MAIN_CONTROL, 'rw', ['CCD_EXPOSURE_VALUE', 'Exposure (s)', 0, 0, 0, 1e-6, '%.6f'])
 	readonly #coolerPower = makeNumberVector('', 'CCD_COOLER_POWER', 'Cooler Power', MAIN_CONTROL, 'ro', ['CCD_COOLER_POWER', 'Power (%)', 0, 0, 100, 1, '%.0f'])
+	// Cooling target the server accepted in this session, in degrees Celsius, which decides the Busy or Ok state
+	// of CCD_TEMPERATURE; undefined until one is set.
+	#targetTemperature?: number
 	readonly #temperature = makeNumberVector('', 'CCD_TEMPERATURE', 'Temperature', MAIN_CONTROL, 'ro', ['CCD_TEMPERATURE_VALUE', 'Temperature', 0, -50, 70, 0.1, '%6.2f'])
 	readonly #frame = makeNumberVector('', 'CCD_FRAME', 'Frame', MAIN_CONTROL, 'rw', ['X', 'X', 0, 0, 15999, 1, '%.0f'], ['Y', 'Y', 0, 0, 15999, 1, '%.0f'], ['WIDTH', 'Width', 1, 1, 16000, 1, '%.0f'], ['HEIGHT', 'Height', 1, 1, 16000, 1, '%.0f'])
 	readonly #bin = makeNumberVector('', 'CCD_BINNING', 'Bin', MAIN_CONTROL, 'rw', ['HOR_BIN', 'X', 1, 1, 1, 1, '%.0f'], ['VER_BIN', 'Y', 1, 1, 1, 1, '%.0f'])
@@ -828,6 +835,7 @@ class AlpacaCamera extends AlpacaDevice {
 
 			if (CCDTemperature !== undefined) {
 				this.#temperature.elements.CCD_TEMPERATURE_VALUE.value = CCDTemperature
+				this.#targetTemperature = undefined
 
 				if (CanSetCcdTemperature) {
 					this.#temperature.permission = 'rw'
@@ -944,7 +952,9 @@ class AlpacaCamera extends AlpacaDevice {
 			}
 
 			if (CCDTemperature !== undefined) {
-				this.updatePropertyValue(this.#temperature, 'CCD_TEMPERATURE_VALUE', Math.trunc(CCDTemperature)) && this.sendSetProperty(this.#temperature)
+				let updated = this.updatePropertyValue(this.#temperature, 'CCD_TEMPERATURE_VALUE', Math.trunc(CCDTemperature))
+				if (this.#targetTemperature !== undefined) updated = this.updatePropertyState(this.#temperature, Math.abs(CCDTemperature - this.#targetTemperature) <= COOLING_THRESHOLD ? 'Ok' : 'Busy') || updated
+				updated && this.sendSetProperty(this.#temperature)
 			}
 
 			if (StartX !== undefined || StartY !== undefined || NumX !== undefined || NumY !== undefined) {
@@ -1077,7 +1087,7 @@ class AlpacaCamera extends AlpacaDevice {
 				break
 			case 'CCD_TEMPERATURE':
 				if (this.state.CanSetCcdTemperature && vector.elements.CCD_TEMPERATURE_VALUE !== undefined) {
-					void this.api.setSetCcdTemperature(this.id, vector.elements.CCD_TEMPERATURE_VALUE)
+					void this.#handleTemperature(vector.elements.CCD_TEMPERATURE_VALUE)
 				}
 
 				break
@@ -1114,6 +1124,26 @@ class AlpacaCamera extends AlpacaDevice {
 				break
 			}
 		}
+	}
+
+	// Forwards a cooling target and answers it on CCD_TEMPERATURE, as an INDI CCD driver does: Alert when the
+	// server refuses it, otherwise Busy while the published reading is farther than COOLING_THRESHOLD from it
+	// and Ok once within it. The state then follows the polled reading until the next session.
+	async #handleTemperature(target: number) {
+		const session = this.session
+		const result = await this.api.setSetCcdTemperature(this.id, target)
+
+		// An answer outliving its session describes a device that is gone; see AlpacaDevice.session.
+		if (session !== this.session) return
+
+		if (!result.ok) {
+			this.#temperature.state = 'Alert'
+		} else {
+			this.#targetTemperature = target
+			this.#temperature.state = Math.abs(this.#temperature.elements.CCD_TEMPERATURE_VALUE.value - target) <= COOLING_THRESHOLD ? 'Ok' : 'Busy'
+		}
+
+		this.sendSetProperty(this.#temperature)
 	}
 
 	// Stops the active exposure. A successful stop releases the pending-image flag even if the driver
@@ -2380,6 +2410,20 @@ class AlpacaDome extends AlpacaDevice {
 		this.disableEndpoints('Slaved')
 	}
 
+	// Stores the current azimuth as the park position and answers DOME_PARK_OPTION with the outcome, Ok or
+	// Alert, which is how a client learns the momentary switch took effect: Alpaca exposes no park position.
+	async #handleSetPark() {
+		const session = this.session
+		const result = await this.api.setPark(this.id)
+
+		// An answer outliving its session describes a device that is gone; see AlpacaDevice.session.
+		if (session !== this.session) return
+
+		this.#parkOption.elements.PARK_CURRENT.value = false
+		this.#parkOption.state = result.ok ? 'Ok' : 'Alert'
+		this.sendSetProperty(this.#parkOption)
+	}
+
 	// Routes synthesized INDI switch commands to Alpaca Dome operations.
 	sendSwitch(vector: NewSwitchVector) {
 		super.sendSwitch(vector)
@@ -2392,7 +2436,7 @@ class AlpacaDome extends AlpacaDevice {
 				if (vector.elements.PARK === true && this.state.CanPark) void this.api.park(this.id)
 				break
 			case 'DOME_PARK_OPTION':
-				if (vector.elements.PARK_CURRENT === true && this.state.CanSetPark) void this.api.setPark(this.id)
+				if (vector.elements.PARK_CURRENT === true && this.state.CanSetPark) void this.#handleSetPark()
 				break
 			case 'DOME_SHUTTER':
 				if (vector.elements.SHUTTER_OPEN === true && this.state.CanSetShutter) void this.api.openShutter(this.id)

@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test'
 import { DEFAULT_CAMERA } from '../../../../src/devices/indi/device'
 import { CameraManager } from '../../../../src/devices/indi/manager/camera'
+import type { PropertyState, SetNumberVector } from '../../../../src/devices/indi/types'
 import { client, setupDevice } from './util'
 
 test('resets deleted INDI properties to defaults', () => {
@@ -56,4 +57,23 @@ test('reports the transfer formats the driver defines', () => {
 
 	manager.delProperty(client, { device: device.name, name: 'CCD_TRANSFER_FORMAT' })
 	expect(device.transferFormats).toEqual(DEFAULT_CAMERA.transferFormats)
+})
+
+test('reports every answer to the cooling target with the reading published with it', () => {
+	const manager = new CameraManager()
+	const device = setupDevice(structuredClone(DEFAULT_CAMERA))
+	manager.add(device)
+	const answers: [string, PropertyState, number | undefined][] = []
+	manager.addHandler({ added() {}, removed() {}, vectorState: (_, vector) => answers.push([vector.name, vector.state, (vector as SetNumberVector).elements.CCD_TEMPERATURE_VALUE?.value]) })
+
+	const temperature = (state: PropertyState, value: number): SetNumberVector => ({ device: device.name, name: 'CCD_TEMPERATURE', state, elements: { CCD_TEMPERATURE_VALUE: { name: 'CCD_TEMPERATURE_VALUE', value } } })
+	manager.numberVector(client, temperature('Busy', 12.5), 'setNumberVector')
+	manager.numberVector(client, temperature('Busy', 12.5), 'setNumberVector')
+	manager.numberVector(client, temperature('Ok', -10), 'setNumberVector')
+
+	expect(answers).toEqual([
+		['CCD_TEMPERATURE', 'Busy', 12.5],
+		['CCD_TEMPERATURE', 'Busy', 12.5],
+		['CCD_TEMPERATURE', 'Ok', -10],
+	])
 })

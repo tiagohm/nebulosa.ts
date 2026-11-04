@@ -57,6 +57,9 @@ export const CAMERA_MIN_EXPOSURE = 0.001
 export const CAMERA_MAX_EXPOSURE = 3600
 export const CAMERA_AMBIENT_TEMPERATURE = 18
 export const CAMERA_DEFAULT_TARGET_TEMPERATURE = 0
+// Degrees Celsius within which the simulated sensor counts as standing at its cooling target: CCD_TEMPERATURE
+// is published Busy while the reading is farther than this and Ok once within it, as INDI CCD drivers do.
+export const CAMERA_TEMPERATURE_THRESHOLD = 0.2
 export const CAMERA_SCENE_SEED = 0x1d0f3a57
 export const CAMERA_BLOB_PADDING = 16384
 // Upper bound, in unbinned pixels, for the margin by which the synthetic star field extends beyond

@@ -5,7 +5,7 @@ import { normalizeAngle, safeAngularDifference, type Angle } from '../../math/un
 import type { DomeDirection, Dome, DomeShutterState } from '../indi/device'
 import type { DeviceHandler } from '../indi/manager/device'
 import type { DomeManager } from '../indi/manager/dome'
-import type { PropertyState } from '../indi/types'
+import type { PropertyState, StatefulSetVector } from '../indi/types'
 import { type OperationScope, type OperationContext, successfulOperationResult, failedOperationResult, type OperationResult, type FailedOperationResult } from '../orchestration/operation'
 import { abortReason, waitForDeviceState } from '../orchestration/operation.wait'
 import { resourceKey, type ResourceKey } from '../orchestration/resource'
@@ -19,7 +19,8 @@ import { resourceKey, type ResourceKey } from '../orchestration/resource'
 
 // Timing overrides for one dome command; every duration is in milliseconds.
 export interface DomeCommandOptions {
-	// Maximum time the commanded state may take to be observed.
+	// Maximum time the commanded state may take to be observed: 120 s by default for a motion, 10 s for a
+	// switch or a setting that moves nothing.
 	readonly timeout?: number
 	// Maximum time a canceled or failed motion has to bring the dome to a standstill.
 	readonly settleTimeout?: number
@@ -51,6 +52,8 @@ interface DomeUpdate {
 	readonly property?: keyof Dome & string
 	// INDI state published with the change, absent when the update is a poll of the current state.
 	readonly state?: PropertyState
+	// Command vector the driver answered, for the commands whose effect no device field reflects.
+	readonly vector?: StatefulSetVector
 }
 
 // Mutable bookkeeping for one open-ended manual motion, retained per dome so direct endpoints can reach
@@ -81,6 +84,9 @@ const DEFAULT_ARRIVAL_TOLERANCE = 2 * DEG2RAD
 
 // Default milliseconds a switch or setting command has to be reflected by the device.
 const DEFAULT_SWITCH_TIMEOUT = 10000
+
+// Relative tolerance absorbing the float rounding of a value echoed through the INDI text protocol.
+const VALUE_EPSILON = 1e-9
 
 // Properties whose Alert state means the commanded dome operation itself failed. An Alert on an
 // unrelated setting, such as speed, must not fail a motion that is otherwise progressing.
@@ -122,6 +128,11 @@ export class DomeCommander implements DeviceHandler<Dome>, Disposable {
 	// Feeds every waiter observing the device, which is how a motion learns it arrived or hit an Alert.
 	updated(dome: Dome, property: keyof Dome & string, state?: PropertyState) {
 		this.#emit({ dome, property, state })
+	}
+
+	// Feeds every waiter with the answer to a command vector, such as the DOME_PARK_OPTION state.
+	vectorState(dome: Dome, vector: StatefulSetVector) {
+		this.#emit({ dome, vector, state: vector.state })
 	}
 
 	// Wakes every waiter so it reevaluates; removal is reported as a disconnected device by evaluation,
@@ -302,15 +313,20 @@ export class DomeCommander implements DeviceHandler<Dome>, Disposable {
 		return this.#manualMoves.get(resourceKey(dome))?.handle
 	}
 
-	// Synchronizes the dome's reported azimuth in radians without starting a move.
-	async syncTo(scope: OperationScope, dome: Dome, azimuth: Angle): Promise<OperationResult<void>> {
-		return await this.#mutate(
+	// Synchronizes the dome's reported azimuth in radians without starting a move, and resolves once the dome
+	// reports that azimuth within ANGLE_TOLERANCE.
+	async syncTo(scope: OperationScope, dome: Dome, azimuth: Angle, options: DomeCommandOptions = {}): Promise<OperationResult<void>> {
+		const target = domeAzimuth(dome, azimuth)
+
+		return await this.#setting(
 			scope,
 			'domeSync',
 			dome,
+			options,
 			() => dome.canSync && !dome.slaved,
 			'synchronize the azimuth',
-			() => this.domeManager.syncTo(dome, azimuth),
+			(update) => (update.state === 'Alert' && update.property === 'azimuth' ? 'alert' : azimuthSeparation(dome.azimuth.value, target) <= ANGLE_TOLERANCE),
+			() => this.domeManager.syncTo(dome, target),
 		)
 	}
 
@@ -357,14 +373,25 @@ export class DomeCommander implements DeviceHandler<Dome>, Disposable {
 		)
 	}
 
-	// Stores the current azimuth as the dome's park position.
-	async setPark(scope: OperationScope, dome: Dome): Promise<OperationResult<void>> {
-		return await this.#mutate(
+	// Stores the current azimuth as the dome's park position and resolves once the driver answers it: with the
+	// state of DOME_PARK_OPTION (Ok or Idle) when the option is what the manager sends, or by reporting the park
+	// position within ANGLE_TOLERANCE of the azimuth the dome stood at, which is also how a driver taking the
+	// position itself (DOME_PARK_POSITION or DOME_PARAMS) answers. An Alert on either fails it as `alert`.
+	async setPark(scope: OperationScope, dome: Dome, options: DomeCommandOptions = {}): Promise<OperationResult<void>> {
+		const azimuth = dome.azimuth.value
+
+		return await this.#setting(
 			scope,
 			'domeSetPark',
 			dome,
+			options,
 			() => dome.canSetPark,
 			'set the park position',
+			(update) => {
+				if (update.vector?.name === 'DOME_PARK_OPTION') return update.vector.state === 'Alert' ? 'alert' : update.vector.state === 'Ok' || update.vector.state === 'Idle'
+				if (update.state === 'Alert' && update.property === 'parkPosition') return 'alert'
+				return azimuthSeparation(dome.parkPosition.value, azimuth) <= ANGLE_TOLERANCE
+			},
 			() => this.domeManager.setPark(dome),
 		)
 	}
@@ -379,54 +406,65 @@ export class DomeCommander implements DeviceHandler<Dome>, Disposable {
 		return await this.#shutter(scope, 'domeCloseShutter', dome, 'CLOSED', options, () => this.domeManager.closeShutter(dome))
 	}
 
-	// Enables or disables driver-side slaving.
+	// Enables or disables driver-side slaving and resolves once the dome reports it.
 	async slave(scope: OperationScope, dome: Dome, enabled: boolean, options: DomeCommandOptions = {}): Promise<OperationResult<void>> {
-		return await this.#switch(
+		return await this.#setting(
 			scope,
 			'domeSlave',
 			dome,
-			enabled,
 			options,
 			() => dome.canSlave,
 			'change slaving',
-			() => dome.slaved,
+			(update) => (update.state === 'Alert' && update.property === 'slaved' ? 'alert' : dome.slaved === enabled),
 			() => this.domeManager.slave(dome, enabled),
 		)
 	}
 
-	// Sets dome rotation speed in RPM, resolved against the driver's published range.
-	async setSpeed(scope: OperationScope, dome: Dome, value: number): Promise<OperationResult<void>> {
-		return await this.#mutate(
+	// Sets dome rotation speed in RPM, resolved against the driver's published range, and resolves once the
+	// dome reports it within half its published step.
+	async setSpeed(scope: OperationScope, dome: Dome, value: number, options: DomeCommandOptions = {}): Promise<OperationResult<void>> {
+		const target = clamp(value, dome.speed.min, dome.speed.max)
+
+		return await this.#setting(
 			scope,
 			'domeSpeed',
 			dome,
+			options,
 			() => dome.canSetSpeed,
 			'set the speed',
-			() => this.domeManager.speed(dome, clamp(value, dome.speed.min, dome.speed.max)),
+			(update) => (update.state === 'Alert' && update.property === 'speed' ? 'alert' : withinStep(dome.speed.value, target, dome.speed.step)),
+			() => this.domeManager.speed(dome, target),
 		)
 	}
 
-	// Enables or disables controller backlash compensation.
-	async setBacklash(scope: OperationScope, dome: Dome, enabled: boolean): Promise<OperationResult<void>> {
-		return await this.#mutate(
+	// Enables or disables controller backlash compensation and resolves once the dome reports it.
+	async setBacklash(scope: OperationScope, dome: Dome, enabled: boolean, options: DomeCommandOptions = {}): Promise<OperationResult<void>> {
+		return await this.#setting(
 			scope,
 			'domeBacklash',
 			dome,
+			options,
 			() => dome.hasBacklash,
 			'change backlash compensation',
+			(update) => (update.state === 'Alert' && update.property === 'backlashEnabled' ? 'alert' : dome.backlashEnabled === enabled),
 			() => this.domeManager.backlash(dome, enabled),
 		)
 	}
 
-	// Sets controller backlash in raw driver steps, resolved against the driver's published range.
-	async setBacklashSteps(scope: OperationScope, dome: Dome, steps: number): Promise<OperationResult<void>> {
-		return await this.#mutate(
+	// Sets controller backlash in raw driver steps, resolved against the driver's published range, and resolves
+	// once the dome reports it within half its published step.
+	async setBacklashSteps(scope: OperationScope, dome: Dome, steps: number, options: DomeCommandOptions = {}): Promise<OperationResult<void>> {
+		const target = clamp(steps, dome.backlash.min, dome.backlash.max)
+
+		return await this.#setting(
 			scope,
 			'domeBacklashSteps',
 			dome,
+			options,
 			() => dome.hasBacklash,
 			'set backlash steps',
-			() => this.domeManager.backlashSteps(dome, clamp(steps, dome.backlash.min, dome.backlash.max)),
+			(update) => (update.state === 'Alert' && update.property === 'backlash' ? 'alert' : withinStep(dome.backlash.value, target, dome.backlash.step)),
+			() => this.domeManager.backlashSteps(dome, target),
 		)
 	}
 
@@ -439,20 +477,10 @@ export class DomeCommander implements DeviceHandler<Dome>, Disposable {
 		return await this.#settle(dome, options, () => this.domeManager.stop(dome))
 	}
 
-	// Runs a state-changing command under a scope owning the dome. The command is expected to take effect
-	// immediately; physical transitions use #move instead so their terminal state is observed.
-	async #mutate(scope: OperationScope, kind: string, dome: Dome, supported: () => boolean, description: string, command: VoidFunction): Promise<OperationResult<void>> {
-		return await scope.start<void>(kind, [{ key: resourceKey(dome), device: dome }], () => {
-			if (!dome.connected) return failedOperationResult('disconnected')
-			if (!supported()) return unsupported(dome, description)
-
-			command()
-			return successfulOperationResult(undefined)
-		}).result
-	}
-
-	// Sends a boolean switch and resolves only after the device reports the requested value.
-	async #switch(scope: OperationScope, kind: string, dome: Dome, enabled: boolean, options: DomeCommandOptions, supported: () => boolean, description: string, state: () => boolean, command: VoidFunction): Promise<OperationResult<void>> {
+	// Runs a setting that moves nothing under a scope owning the dome and resolves once the driver reports it.
+	// `reached` reads each update: true once the reported state is the commanded one, or `alert` for an Alert
+	// that refuses it.
+	async #setting(scope: OperationScope, kind: string, dome: Dome, options: DomeCommandOptions, supported: () => boolean, description: string, reached: (update: DomeUpdate) => boolean | 'alert', command: VoidFunction): Promise<OperationResult<void>> {
 		return await scope.start<void>(kind, [{ key: resourceKey(dome), device: dome }], async (context) => {
 			if (!dome.connected) return failedOperationResult('disconnected')
 			if (!supported()) return unsupported(dome, description)
@@ -464,8 +492,8 @@ export class DomeCommander implements DeviceHandler<Dome>, Disposable {
 				current: () => ({ dome }),
 				evaluate: (update) => {
 					if (!dome.connected) return 'disconnected'
-					if (update.state === 'Alert' && update.property === 'slaved') return 'alert'
-					return state() === enabled ? 'success' : 'pending'
+					const verdict = reached(update)
+					return verdict === 'alert' ? 'alert' : verdict ? 'success' : 'pending'
 				},
 				command,
 			})
@@ -640,6 +668,12 @@ function domeQuiescent(dome: Dome) {
 // Shortest circular distance between two azimuths, in radians within 0..PI.
 function azimuthSeparation(current: Angle, target: Angle) {
 	return Math.abs(safeAngularDifference(current, target))
+}
+
+// Whether a reported value stands within half the published step of the commanded one, plus VALUE_EPSILON
+// relative to it; a step of 0 accepts only that rounding.
+function withinStep(value: number, target: number, step: number) {
+	return Math.abs(value - target) <= (step > 0 ? step / 2 : 0) + VALUE_EPSILON * Math.max(1, Math.abs(target))
 }
 
 // Builds the typed failure used when the dome cannot perform an operation.

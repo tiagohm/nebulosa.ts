@@ -259,6 +259,8 @@ export class DomeManager extends DeviceManager<Dome> {
 			}
 			case 'DOME_PARK_OPTION':
 				if (definition && handleSwitchValue(dome, 'canSetPark', message.elements.PARK_CURRENT !== undefined && definition.permission !== 'ro')) this.updated(dome, 'canSetPark', message.state)
+				// A PARK_CURRENT is acknowledged by this state; the park position it stores follows on its own vector.
+				this.handleVectorState(dome, message, tag)
 				return
 			case 'DOME_BACKLASH_TOGGLE':
 				if (definition && handleSwitchValue(dome, 'hasBacklash', definition.permission !== 'ro')) this.updated(dome, 'hasBacklash', message.state)

@@ -112,7 +112,6 @@ test('renames slots and rejects renaming without the capability', async () => {
 	const names = ['Luminance', 'Red', 'Green', 'Blue']
 
 	expect(await wheelCommander.setNames(operationCoordinator, wheel, names)).toMatchObject({ ok: true })
-	await waitUntil(() => wheel.names.slice(0, names.length).join('\0') === names.join('\0'))
 	expect(wheel.names.slice(0, names.length)).toEqual(names)
 
 	const slots = spyOn(wheelManager, 'slots').mockImplementation(() => {})
@@ -124,6 +123,21 @@ test('renames slots and rejects renaming without the capability', async () => {
 		wheel.canSetNames = true
 		slots.mockRestore()
 	}
+})
+
+test('times out renamed slots the driver never reports and ignores names beyond the slots', async () => {
+	const wheel = await connected()
+	const slots = spyOn(wheelManager, 'slots').mockImplementation(() => {})
+
+	try {
+		expect(await wheelCommander.setNames(operationCoordinator, wheel, ['Ha', 'OIII'], { timeout: 30 })).toMatchObject(failedOperationResult('timeout'))
+		expect(isFree(wheel)).toBeTrue()
+	} finally {
+		slots.mockRestore()
+	}
+
+	const names = [...wheel.names, 'Extra']
+	expect(await wheelCommander.setNames(operationCoordinator, wheel, names, { timeout: 1000 })).toMatchObject({ ok: true })
 })
 
 test('keeps a canceled wheel move leased until the physical move finishes', async () => {

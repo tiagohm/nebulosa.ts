@@ -1338,11 +1338,17 @@ export class MountSimulator extends DeviceSimulator {
 		this.#setParking(false)
 	}
 
-	// Stores the current mechanical orientation and physical shaft branch as the park position.
+	// Stores the current mechanical orientation and physical shaft branch as the park position, and answers
+	// TELESCOPE_PARK_OPTION.
 	setPark() {
 		this.#parkCoordinate.rightAscension = this.#mechanical.rightAscension
 		this.#parkCoordinate.declination = this.#mechanical.declination
 		this.#parkPierSide = this.#storedPosePierSide()
+
+		// Answered like an INDI driver: the momentary option settles back to off with the vector Ok.
+		this.#parkOptions.elements.PARK_CURRENT.value = false
+		this.#parkOptions.state = 'Ok'
+		this.notify(this.#parkOptions)
 	}
 
 	// Returns the physical pier side belonging to a pose saved at the current instant.

@@ -216,6 +216,11 @@ export class CameraManager extends DeviceManager<Camera> {
 					}
 				}
 
+				// The setpoint is not modelled: the state (Busy while ramping, Ok once reached, Alert when refused) and
+				// the reading published with it are what acknowledge a new target. The reading itself is applied by the
+				// thermometer manager.
+				this.handleVectorState(device, message, tag)
+
 				return
 			case 'CCD_FRAME': {
 				if (tag[0] === 'd') {

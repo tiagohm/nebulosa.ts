@@ -472,6 +472,9 @@ export class MountManager extends DeviceManager<Mount> {
 					}
 				}
 
+				// The park position is not modelled, so the state is what acknowledges a PARK_CURRENT.
+				this.handleVectorState(device, message, tag)
+
 				return
 			case 'TELESCOPE_ABORT_MOTION':
 				if (tag[0] === 'd') {
@@ -501,6 +504,9 @@ export class MountManager extends DeviceManager<Mount> {
 						this.updated(device, 'homing', message.state)
 					}
 				}
+
+				// The home position is not modelled, so the state is what acknowledges a SET.
+				this.handleVectorState(device, message, tag)
 
 				return
 			case 'ON_COORD_SET':

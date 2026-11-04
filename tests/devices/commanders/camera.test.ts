@@ -5,6 +5,7 @@ import type { Camera } from '../../../src/devices/indi/device'
 import { CameraManager } from '../../../src/devices/indi/manager/camera'
 import { CameraSimulator } from '../../../src/devices/indi/simulator/camera'
 import { ClientSimulator } from '../../../src/devices/indi/simulator/client'
+import type { PropertyState } from '../../../src/devices/indi/types'
 import { DeviceLifecycle } from '../../../src/devices/orchestration/device.lifecycle'
 import { OperationCoordinator, failedOperationResult } from '../../../src/devices/orchestration/operation'
 import { ResourceArbiter, resourceKey } from '../../../src/devices/orchestration/resource'
@@ -55,20 +56,103 @@ async function connected() {
 	return camera
 }
 
-test('switches the cooler and sets the target temperature', async () => {
+test('switches the cooler and sets the target temperature once the driver answers them', async () => {
+	const camera = await connected()
+	const cooler = spyOn(cameraManager, 'cooler')
+	const temperature = spyOn(cameraManager, 'temperature')
+
+	try {
+		expect(await cameraCommander.cooler(operationCoordinator, camera, true)).toMatchObject({ ok: true })
+		expect(cooler).toHaveBeenCalledWith(camera, true)
+		expect(camera.cooler).toBeTrue()
+
+		expect(await cameraCommander.temperature(operationCoordinator, camera, -15)).toMatchObject({ ok: true })
+		expect(temperature).toHaveBeenCalledWith(camera, -15)
+
+		expect(await cameraCommander.cooler(operationCoordinator, camera, false)).toMatchObject({ ok: true })
+		expect(camera.cooler).toBeFalse()
+		expect(isFree(camera)).toBeTrue()
+	} finally {
+		cooler.mockRestore()
+		temperature.mockRestore()
+	}
+})
+
+test('resolves a cooler switch only after the driver reports it', async () => {
+	const camera = await connected()
+	const cooler = spyOn(cameraManager, 'cooler').mockImplementation(() => {})
+
+	try {
+		let settled = false
+		const command = cameraCommander.cooler(operationCoordinator, camera, true).then((result) => {
+			settled = true
+			return result
+		})
+
+		await Bun.sleep(30)
+		expect(settled).toBeFalse()
+		cooler.mockRestore()
+		cameraManager.cooler(camera, true)
+		expect(await command).toMatchObject({ ok: true })
+		expect(camera.cooler).toBeTrue()
+	} finally {
+		cooler.mockRestore()
+	}
+})
+
+test('times out when the driver never answers a thermal command', async () => {
 	const camera = await connected()
 	const cooler = spyOn(cameraManager, 'cooler').mockImplementation(() => {})
 	const temperature = spyOn(cameraManager, 'temperature').mockImplementation(() => {})
 
 	try {
-		expect(await cameraCommander.cooler(operationCoordinator, camera, true)).toMatchObject({ ok: true })
-		expect(cooler).toHaveBeenCalledWith(camera, true)
-
-		expect(await cameraCommander.temperature(operationCoordinator, camera, -15)).toMatchObject({ ok: true })
-		expect(temperature).toHaveBeenCalledWith(camera, -15)
+		expect(await cameraCommander.cooler(operationCoordinator, camera, true, { timeout: 30 })).toMatchObject(failedOperationResult('timeout'))
+		expect(await cameraCommander.temperature(operationCoordinator, camera, -15, { timeout: 30 })).toMatchObject(failedOperationResult('timeout'))
+		expect(isFree(camera)).toBeTrue()
 	} finally {
 		cooler.mockRestore()
 		temperature.mockRestore()
+	}
+})
+
+test('reads back a cooling target from the state of CCD_TEMPERATURE', async () => {
+	const camera = await connected()
+	const answer = (state: PropertyState, value: number) => cameraManager.numberVector(client, { device: camera.name, name: 'CCD_TEMPERATURE', state, elements: { CCD_TEMPERATURE_VALUE: { name: 'CCD_TEMPERATURE_VALUE', value } } }, 'setNumberVector')
+	let reply: (() => void) | undefined
+	const temperature = spyOn(cameraManager, 'temperature').mockImplementation(() => reply?.())
+
+	try {
+		// Ramping towards the target.
+		reply = () => answer('Busy', 10)
+		expect(await cameraCommander.temperature(operationCoordinator, camera, -15, { timeout: 1000 })).toMatchObject({ ok: true })
+
+		// Already at the target.
+		reply = () => answer('Ok', -14.8)
+		expect(await cameraCommander.temperature(operationCoordinator, camera, -15, { timeout: 1000 })).toMatchObject({ ok: true })
+
+		// An Ok reading far from the new target is a poll from before the command, not its answer.
+		reply = () => answer('Ok', 10)
+		expect(await cameraCommander.temperature(operationCoordinator, camera, -15, { timeout: 50 })).toMatchObject(failedOperationResult('timeout'))
+
+		// Refused.
+		reply = () => answer('Alert', 10)
+		expect(await cameraCommander.temperature(operationCoordinator, camera, -15, { timeout: 1000 })).toMatchObject(failedOperationResult('alert'))
+	} finally {
+		temperature.mockRestore()
+	}
+})
+
+test('stops observing the manager once disposed', () => {
+	const commander = new CameraCommander(cameraManager)
+	const removeHandler = spyOn(cameraManager, 'removeHandler')
+
+	try {
+		commander.dispose()
+		commander[Symbol.dispose]()
+		expect(removeHandler).toHaveBeenCalledTimes(2)
+		expect(removeHandler).toHaveBeenCalledWith(commander)
+	} finally {
+		removeHandler.mockRestore()
 	}
 })
 

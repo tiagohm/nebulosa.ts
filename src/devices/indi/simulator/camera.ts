@@ -28,7 +28,7 @@ import type { WheelManager } from '../manager/wheel'
 import { findOnSwitch, makeBlobVector, makeNumberVector, makeSwitchVector, makeTextVector, type EnableBlob, type NewNumberVector, type NewSwitchVector, type NewTextVector } from '../types'
 import type { ClientSimulator } from './client'
 // oxfmt-ignore
-import { CAMERA_AMBIENT_TEMPERATURE, CAMERA_BLOB_PADDING, CAMERA_DEFAULT_TARGET_TEMPERATURE, CAMERA_MAX_BIN, CAMERA_MAX_EXPOSURE, CAMERA_MAX_SCENE_MARGIN, CAMERA_MIN_EXPOSURE, CAMERA_PIXEL_SIZE, CAMERA_SCENE_SEED, CAMERA_SENSOR_HEIGHT, CAMERA_SENSOR_WIDTH, GENERAL_INFO, MAIN_CONTROL, MAX_TRAJECTORY_SAMPLES, SIMULATION, TICK_INTERVAL_MS, TRAJECTORY_PIXELS_PER_SAMPLE } from './constants'
+import { CAMERA_AMBIENT_TEMPERATURE, CAMERA_BLOB_PADDING, CAMERA_DEFAULT_TARGET_TEMPERATURE, CAMERA_MAX_BIN, CAMERA_MAX_EXPOSURE, CAMERA_MAX_SCENE_MARGIN, CAMERA_MIN_EXPOSURE, CAMERA_PIXEL_SIZE, CAMERA_SCENE_SEED, CAMERA_SENSOR_HEIGHT, CAMERA_SENSOR_WIDTH, CAMERA_TEMPERATURE_THRESHOLD, GENERAL_INFO, MAIN_CONTROL, MAX_TRAJECTORY_SAMPLES, SIMULATION, TICK_INTERVAL_MS, TRAJECTORY_PIXELS_PER_SAMPLE } from './constants'
 import { DeviceSimulator } from './device'
 import { FocuserSimulator } from './focuser'
 import { MountSimulator } from './mount'
@@ -450,7 +450,11 @@ export class CameraSimulator extends DeviceSimulator {
 				if (vector.elements.CCD_EXPOSURE_VALUE !== undefined) this.startExposure(vector.elements.CCD_EXPOSURE_VALUE)
 				return
 			case 'CCD_TEMPERATURE':
-				if (vector.elements.CCD_TEMPERATURE_VALUE !== undefined) this.setTargetTemperature(vector.elements.CCD_TEMPERATURE_VALUE)
+				if (vector.elements.CCD_TEMPERATURE_VALUE !== undefined) {
+					this.setTargetTemperature(vector.elements.CCD_TEMPERATURE_VALUE)
+					this.#answerTemperature()
+				}
+
 				return
 			case 'CCD_FRAME':
 				this.setFrame(vector.elements.X, vector.elements.Y, vector.elements.WIDTH, vector.elements.HEIGHT)
@@ -769,7 +773,17 @@ export class CameraSimulator extends DeviceSimulator {
 		}
 	}
 
-	// Applies a simple thermal model based on ambient temperature and cooler power.
+	// Answers a new cooling target the way INDI CCD drivers do: Ok when the reading already stands within
+	// CAMERA_TEMPERATURE_THRESHOLD of it, Busy while it has to ramp.
+	#answerTemperature() {
+		const current = this.#temperature.elements.CCD_TEMPERATURE_VALUE.value
+		this.#temperature.state = Math.abs(current - this.#targetTemperature) <= CAMERA_TEMPERATURE_THRESHOLD ? 'Ok' : 'Busy'
+		this.notify(this.#temperature)
+	}
+
+	// Applies a simple thermal model based on ambient temperature and cooler power. CCD_TEMPERATURE stays Busy
+	// while the cooler ramps towards the target, turns Ok once it stands within CAMERA_TEMPERATURE_THRESHOLD of
+	// it, and Idle while the cooler is off.
 	#advanceTemperature() {
 		const current = this.#temperature.elements.CCD_TEMPERATURE_VALUE.value
 		const coolerEnabled = this.#cooler.elements.COOLER_ON.value
@@ -781,7 +795,9 @@ export class CameraSimulator extends DeviceSimulator {
 		const nextCoolerPower = coolerEnabled ? clamp(deltaFromAmbient * 6.5, 0, 100) : 0
 		this.#temperature.elements.CCD_TEMPERATURE_VALUE.value = nextTemperature
 
-		const updated = Math.abs(nextTemperature - current) >= 0.1 || nextTemperature === target
+		const state = !coolerEnabled ? 'Idle' : Math.abs(target - nextTemperature) <= CAMERA_TEMPERATURE_THRESHOLD ? 'Ok' : 'Busy'
+		const updated = Math.abs(nextTemperature - current) >= 0.1 || nextTemperature === target || state !== this.#temperature.state
+		this.#temperature.state = state
 
 		if (Math.abs(this.#coolerPower.elements.CCD_COOLER_POWER.value - nextCoolerPower) >= 0.5) {
 			this.#coolerPower.elements.CCD_COOLER_POWER.value = nextCoolerPower

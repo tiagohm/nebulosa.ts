@@ -2,6 +2,8 @@
 // the INDI wire model: devices define (defXXX) and update (setXXX) typed property vectors; clients send
 // new target values (newXXX). See https://docs.indilib.org/protocol/ for the protocol semantics.
 
+import type { RequiredOnly } from '../../core/types'
+
 // Lifecycle/health state of a property vector.
 export type PropertyState = 'Idle' | 'Ok' | 'Busy' | 'Alert'
 
@@ -199,6 +201,9 @@ export interface SetBlobVector {
 }
 
 export type SetVector = SetTextVector | SetNumberVector | SetSwitchVector | SetLightVector | SetBlobVector
+
+// A set vector that carries the state the driver published with it.
+export type StatefulSetVector = RequiredOnly<SetVector, 'state'>
 
 // Send a message associated with a device or entire system.
 export interface Message {

@@ -477,6 +477,78 @@ test('dispatches synchronization and mount configuration commands', async () => 
 	expect(await mountCommander.setPark(operationCoordinator, device)).toMatchObject({ ok: true })
 })
 
+test('times out a setting the driver never reports', async () => {
+	const device = await connected()
+	const syncTo = spyOn(mountManager, 'syncTo').mockImplementation(() => {})
+	const geographicCoordinate = spyOn(mountManager, 'geographicCoordinate').mockImplementation(() => {})
+	const time = spyOn(mountManager, 'time').mockImplementation(() => {})
+	const setHome = spyOn(mountManager, 'setHome').mockImplementation(() => {})
+	const setPark = spyOn(mountManager, 'setPark').mockImplementation(() => {})
+	const site = device.geographicCoordinate
+
+	try {
+		const target: MountTargetCoordinate<number> = { type: 'JNOW', JNOW: { x: device.equatorialCoordinate.rightAscension + hour(2), y: deg(10) } }
+		expect(await mountCommander.sync(operationCoordinator, device, target, { timeout: 30 })).toMatchObject(failedOperationResult('timeout'))
+		expect(await mountCommander.setGeographicCoordinate(operationCoordinator, device, { ...site, latitude: site.latitude + deg(1) }, { timeout: 30 })).toMatchObject(failedOperationResult('timeout'))
+		expect(await mountCommander.setTime(operationCoordinator, device, { utc: device.time.utc + 3600000, offset: device.time.offset }, { timeout: 30 })).toMatchObject(failedOperationResult('timeout'))
+		expect(await mountCommander.setHome(operationCoordinator, device, { timeout: 30 })).toMatchObject(failedOperationResult('timeout'))
+		expect(await mountCommander.setPark(operationCoordinator, device, { timeout: 30 })).toMatchObject(failedOperationResult('timeout'))
+		expect(isFree(device)).toBeTrue()
+	} finally {
+		syncTo.mockRestore()
+		geographicCoordinate.mockRestore()
+		time.mockRestore()
+		setHome.mockRestore()
+		setPark.mockRestore()
+	}
+})
+
+test('reads back the home and park positions from the state of their vectors', async () => {
+	const device = await connected()
+	const answer = (name: string, element: string, state: PropertyState) => mountManager.switchVector(client, { device: device.name, name, state, elements: { [element]: { name: element, value: false } } }, 'setSwitchVector')
+	let reply: PropertyState = 'Ok'
+	const setHome = spyOn(mountManager, 'setHome').mockImplementation(() => answer('TELESCOPE_HOME', 'SET', reply))
+	const setPark = spyOn(mountManager, 'setPark').mockImplementation(() => answer('TELESCOPE_PARK_OPTION', 'PARK_CURRENT', reply))
+
+	try {
+		expect(await mountCommander.setHome(operationCoordinator, device, { timeout: 1000 })).toMatchObject({ ok: true })
+		expect(await mountCommander.setPark(operationCoordinator, device, { timeout: 1000 })).toMatchObject({ ok: true })
+
+		reply = 'Alert'
+		expect(await mountCommander.setHome(operationCoordinator, device, { timeout: 1000 })).toMatchObject(failedOperationResult('alert'))
+		expect(await mountCommander.setPark(operationCoordinator, device, { timeout: 1000 })).toMatchObject(failedOperationResult('alert'))
+
+		// Busy is not an answer yet.
+		reply = 'Busy'
+		expect(await mountCommander.setPark(operationCoordinator, device, { timeout: 30 })).toMatchObject(failedOperationResult('timeout'))
+	} finally {
+		setHome.mockRestore()
+		setPark.mockRestore()
+	}
+})
+
+test('accepts a site stored to the arcminute and a clock reported to the second, whatever the elevation', async () => {
+	const device = await connected()
+	const geographicCoordinate = spyOn(mountManager, 'geographicCoordinate').mockImplementation((mount, coordinate) => {
+		// A hand controller that keeps whole arcminutes and ignores the elevation.
+		const minutes = (angle: number) => (Math.round(toDeg(angle) * 60) / 60).toString()
+		mountManager.numberVector(client, { device: mount.name, name: 'GEOGRAPHIC_COORD', state: 'Ok', elements: { LAT: { name: 'LAT', value: +minutes(coordinate.latitude) }, LONG: { name: 'LONG', value: +minutes(coordinate.longitude + deg(360)) }, ELEV: { name: 'ELEV', value: 0 } } }, 'setNumberVector')
+	})
+	const time = spyOn(mountManager, 'time')
+
+	try {
+		const coordinate = { latitude: deg(-22.12345), longitude: deg(-45.6789), elevation: meter(900) }
+		expect(await mountCommander.setGeographicCoordinate(operationCoordinator, device, coordinate, { timeout: 1000 })).toMatchObject({ ok: true })
+
+		const utc = Date.UTC(2030, 5, 1, 12, 0, 0, 750)
+		expect(await mountCommander.setTime(operationCoordinator, device, { utc, offset: -180 }, { timeout: 1000 })).toMatchObject({ ok: true })
+		expect(device.time.utc).toBe(Date.UTC(2030, 5, 1, 12, 0, 0))
+	} finally {
+		geographicCoordinate.mockRestore()
+		time.mockRestore()
+	}
+})
+
 test('converts the target at the instant the caller gives', async () => {
 	const device = await connected()
 	const target: MountTargetCoordinate<number> = { type: 'J2000', J2000: { x: hour(5), y: deg(-29) } }
@@ -486,7 +558,8 @@ test('converts the target at the instant the caller gives', async () => {
 	const commanded: [string, number, number][] = []
 	const record = (kind: string) => (_: Mount, rightAscension: number, declination: number) => {
 		commanded.push([kind, rightAscension, declination])
-		mountCommander.updated(device, 'slewing', 'Alert')
+		// Refused, so every command ends at once: only what was commanded matters here.
+		mountCommander.updated(device, 'equatorialCoordinate', 'Alert')
 	}
 	const goTo = spyOn(mountManager, 'goTo').mockImplementation(record('goTo'))
 	const flipTo = spyOn(mountManager, 'flipTo').mockImplementation(record('flipTo'))

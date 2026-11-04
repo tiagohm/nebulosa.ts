@@ -150,10 +150,25 @@ export class WeatherManager extends DeviceManager<Weather> {
 		return last === undefined ? undefined : performance.now() - last
 	}
 
+	// Whether the driver publishes a writable WEATHER_UPDATE, i.e. setUpdatePeriod would be sent.
+	canSetUpdatePeriod(device: Weather) {
+		return this.hasWritableProperty(device, 'WEATHER_UPDATE')
+	}
+
+	// Whether the backend publishes a writable WEATHER_AVERAGE_PERIOD, i.e. setAveragePeriod would be sent.
+	canSetAveragePeriod(device: Weather) {
+		return this.hasWritableProperty(device, 'WEATHER_AVERAGE_PERIOD')
+	}
+
+	// Whether the backend publishes a writable WEATHER_REFRESH, i.e. refresh would be sent.
+	canRefresh(device: Weather) {
+		return this.hasWritableProperty(device, 'WEATHER_REFRESH')
+	}
+
 	// Sets the driver's hardware re-read period, in seconds. Returns false when the driver has no
 	// writable WEATHER_UPDATE. The value is sent as-is; the driver enforces its own range.
 	setUpdatePeriod(device: Weather, period: number, client = device[CLIENT]!) {
-		if (!this.hasWritableProperty(device, 'WEATHER_UPDATE')) return false
+		if (!this.canSetUpdatePeriod(device)) return false
 		client.sendNumber({ device: device.name, name: 'WEATHER_UPDATE', elements: { PERIOD: period } })
 		return true
 	}
@@ -161,7 +176,7 @@ export class WeatherManager extends DeviceManager<Weather> {
 	// Sets the averaging window, in hours; 0 means an instantaneous reading. Returns false when the
 	// backend cannot configure averaging (no writable WEATHER_AVERAGE_PERIOD).
 	setAveragePeriod(device: Weather, hours: number, client = device[CLIENT]!) {
-		if (!this.hasWritableProperty(device, 'WEATHER_AVERAGE_PERIOD')) return false
+		if (!this.canSetAveragePeriod(device)) return false
 		client.sendNumber({ device: device.name, name: 'WEATHER_AVERAGE_PERIOD', elements: { AVERAGE_PERIOD: hours } })
 		return true
 	}
@@ -169,7 +184,7 @@ export class WeatherManager extends DeviceManager<Weather> {
 	// Triggers an immediate re-read. Returns false when the driver offers no explicit refresh, which the
 	// Alpaca server maps to MethodOrPropertyNotImplemented.
 	refresh(device: Weather, client = device[CLIENT]!) {
-		if (!this.hasWritableProperty(device, 'WEATHER_REFRESH')) return false
+		if (!this.canRefresh(device)) return false
 		client.sendSwitch({ device: device.name, name: 'WEATHER_REFRESH', elements: { REFRESH: true } })
 		return true
 	}
@@ -309,7 +324,8 @@ export class WeatherManager extends DeviceManager<Weather> {
 		}
 	}
 
-	// Tracks writability of the refresh control on top of the common CONNECTION handling.
+	// Tracks writability of the refresh control on top of the common CONNECTION handling, and reports the state
+	// of WEATHER_REFRESH, a momentary switch whose answer is that state alone.
 	switchVector(client: Client, message: DefSwitchVector | SetSwitchVector, tag: string) {
 		const device = this.get(client, message.device)
 
@@ -321,6 +337,8 @@ export class WeatherManager extends DeviceManager<Weather> {
 			if ((message as DefSwitchVector).permission !== 'ro') this.addWritableProperty(device, message.name)
 			else this.removeWritableProperty(device, message.name)
 		}
+
+		if (message.name === 'WEATHER_REFRESH') this.handleVectorState(device, message, tag)
 	}
 
 	// Applies the weather number vectors: the sensor parameters, the driver update period, the averaging
@@ -346,7 +364,8 @@ export class WeatherManager extends DeviceManager<Weather> {
 				// "driver has an update period" flag and is created on first sight.
 				const updatePeriod = device.updatePeriod ?? structuredClone(DEFAULT_MIN_MAX_VALUE_PROPERTY)
 
-				if (handleMinMaxValue(updatePeriod, message.elements.PERIOD, tag) || device.updatePeriod === undefined) {
+				// An Alert that leaves the period unchanged still reaches the observers, so a refused period fails at once.
+				if (handleMinMaxValue(updatePeriod, message.elements.PERIOD, tag) || device.updatePeriod === undefined || message.state === 'Alert') {
 					;(device as Writable<Weather>).updatePeriod = updatePeriod
 					this.updated(device, 'updatePeriod', message.state)
 				}

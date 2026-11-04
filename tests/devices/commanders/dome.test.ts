@@ -172,6 +172,49 @@ test('synchronizes and updates dome configuration through scoped commands', asyn
 	await waitUntil(() => Math.abs(dome.parkPosition.value - dome.azimuth.value) < 1e-9)
 })
 
+test('times out a setting the driver never reports', async () => {
+	const dome = await connected()
+	const speed = spyOn(domeManager, 'speed').mockImplementation(() => {})
+	const syncTo = spyOn(domeManager, 'syncTo').mockImplementation(() => {})
+	const backlash = spyOn(domeManager, 'backlash').mockImplementation(() => {})
+
+	try {
+		expect(await domeCommander.setSpeed(operationCoordinator, dome, dome.speed.value - 1, { timeout: 30 })).toMatchObject(failedOperationResult('timeout'))
+		expect(await domeCommander.syncTo(operationCoordinator, dome, dome.azimuth.value + 0.5, { timeout: 30 })).toMatchObject(failedOperationResult('timeout'))
+		expect(await domeCommander.setBacklash(operationCoordinator, dome, !dome.backlashEnabled, { timeout: 30 })).toMatchObject(failedOperationResult('timeout'))
+		expect(isFree(dome)).toBeTrue()
+	} finally {
+		speed.mockRestore()
+		syncTo.mockRestore()
+		backlash.mockRestore()
+	}
+})
+
+test('reads back a park position stored through DOME_PARK_OPTION from its state', async () => {
+	const dome = await connected()
+	const answer = (state: PropertyState) => domeManager.switchVector(client, { device: dome.name, name: 'DOME_PARK_OPTION', state, elements: { PARK_CURRENT: { name: 'PARK_CURRENT', value: false } } }, 'setSwitchVector')
+	let reply: PropertyState | undefined
+	const setPark = spyOn(domeManager, 'setPark').mockImplementation(() => reply !== undefined && answer(reply))
+	const parkPosition = dome.parkPosition.value
+
+	try {
+		// Far from the park position, so only the answer of the option can resolve the command.
+		dome.parkPosition.value = dome.azimuth.value + 1
+
+		reply = 'Ok'
+		expect(await domeCommander.setPark(operationCoordinator, dome, { timeout: 1000 })).toMatchObject({ ok: true })
+
+		reply = 'Alert'
+		expect(await domeCommander.setPark(operationCoordinator, dome, { timeout: 1000 })).toMatchObject(failedOperationResult('alert'))
+
+		reply = undefined
+		expect(await domeCommander.setPark(operationCoordinator, dome, { timeout: 30 })).toMatchObject(failedOperationResult('timeout'))
+	} finally {
+		setPark.mockRestore()
+		dome.parkPosition.value = parkPosition
+	}
+})
+
 test('homes, parks, and unparks after the corresponding state transitions', async () => {
 	const dome = await connected()
 
