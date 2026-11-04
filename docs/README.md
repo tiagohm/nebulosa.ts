@@ -6755,8 +6755,10 @@ Satellite orbital data comes as a two-line element set (TLE), a text format used
 
 `parseTLE(line1, line2, name?)` parses a TLE into a structured `TLE` with the epoch as a UTC `Time` and angles in radians; `meanMotion` stays in revolutions per day as published, `bstar` is in inverse Earth radii, and the eccentricity is read from its implied decimal point. It checks only that line 1 starts with `1` and line 2 with `2`; it does not validate the checksums. `recordFromTLE(tle, gravity?)` and `recordFromOMM(omm, opsmode?, gravity?)` build the record from a parsed TLE or an OMM object, converting revolutions per day to radians per minute and degrees to radians at that boundary. An OMM epoch must be ISO-8601 (`YYYY-MM-DDThh:mm:ss[.sss]`, with an optional `Z`), or an `Error` is thrown; numeric fields may be numbers or strings. `recordFromSgp4Elements(elements, options?)` builds a record directly from typed mean elements (`epoch`, `eccentricity`, angles in radians, `meanMotion` in radians per minute, optional `bstar` and `satelliteNumber`) when you have neither text format; these must be SGP4 mean elements, not osculating ones. `gravity` selects the constant set bound to the record: `SGP4_WGS72` (the default and the one operational data was generated with), `SGP4_WGS72_OLD`, or `SGP4_WGS84`. `opsmode` or `options.operationMode` is `'i'` (improved, the default) or `'a'` (the legacy AFSPC mode). The record reports `method` as `'n'` for near-Earth or `'d'` for deep space.
 
+Element sets from a network query, a file or an operator are checked before they are parsed or propagated, since a corrupted TLE line still parses into plausible numbers and an OMM for another frame or theory still builds a record. `validateTLE(line1, line2)` and `validateOMM(omm)` return the first problem as an `ElementSetError`, or `undefined` for a usable set: the TLE line numbers, 69-column length, checksums (`tleChecksum(line)`: digits add their value and `-` adds 1, modulo 10) and the catalog number of both lines; for an OMM the `CENTER_NAME` (`EARTH`), `REF_FRAME` (`TEME`), `TIME_SYSTEM` (`UTC`), `MEAN_ELEMENT_THEORY` (`SGP4`) and `EPHEMERIS_TYPE` (0) when present, since CelesTrak omits them, and a `NORAD_CAT_ID` of decimal digits of any length, as a number or a string; for both, numeric fields that read as finite numbers, a valid epoch, an eccentricity in [0, 1), a positive mean motion and a record whose initialization reports no error (`'propagation'`, such as an orbit inside the Earth). `tleCatalogNumber(satelliteNumber)` turns the five TLE columns, digits or the Alpha-5 form (a letter for 10 to 33, I and O skipped, then four digits, for 100000 to 339999), into the canonical decimal string, or `undefined`.
+
 ```ts
-import { parseTLE, recordFromOMM, recordFromSgp4Elements, recordFromTLE, sgp4, SGP4_WGS84, type OMM } from 'nebulosa/src/astronomy/orbits/propagation/sgp4'
+import { parseTLE, recordFromOMM, recordFromSgp4Elements, recordFromTLE, sgp4, SGP4_WGS84, tleCatalogNumber, type OMM, validateOMM, validateTLE } from 'nebulosa/src/astronomy/orbits/propagation/sgp4'
 import { timeToDate } from 'nebulosa/src/astronomy/time/time'
 import { DAYMIN, DEG2RAD, TAU } from 'nebulosa/src/core/constants'
 import { toDeg } from 'nebulosa/src/math/units/angle'
@@ -6796,6 +6798,12 @@ const omm: OMM = {
 }
 
 console.log(sgp4(tle.epoch, recordFromOMM(omm))[0].map(toKilometer)) // [-3737.79, 2970.46, 4831.15] — km, matches the TLE record
+
+// Untrusted element sets are validated first.
+console.log(validateTLE(tle.line1, tle.line2), validateOMM(omm)) // undefined undefined
+console.log(validateTLE(tle.line1, `${tle.line2.slice(0, 68)}0`)) // checksum
+console.log(validateOMM({ ...omm, REF_FRAME: 'GCRF' } as unknown as OMM)) // referenceFrame
+console.log(tleCatalogNumber('A0000')) // 100000
 
 // Directly from typed mean elements: angles in radians and the mean motion in radians per minute.
 const direct = recordFromSgp4Elements({

@@ -483,6 +483,115 @@ export function satelliteRecordErrorMessage(error: SatRecError) {
 	return 'unknown propagation error'
 }
 
+// Reason an externally supplied element set cannot be used with this propagator, from validateTLE or
+// validateOMM.
+// - lineNumber: a TLE line does not start with its line number (1 or 2);
+// - lineLength: a TLE line does not have the 69 columns of the format;
+// - checksum: a TLE line's modulo-10 checksum does not match its last column;
+// - satelliteNumber: the catalog number is missing, malformed, or differs between the two lines;
+// - field: a numeric field is blank or does not read as a finite number;
+// - epoch: the epoch is not a valid calendar instant;
+// - centerName, referenceFrame, timeSystem, meanElementTheory: an OMM declares a central body, frame,
+//   time system, or mean element theory (or ephemeris type) other than SGP4's EARTH, TEME, UTC, SGP4;
+// - eccentricity: the mean eccentricity is outside [0, 1);
+// - meanMotion: the mean motion is not positive;
+// - propagation: SGP4 initialization reported an error for the elements.
+export type ElementSetError = 'lineNumber' | 'lineLength' | 'checksum' | 'satelliteNumber' | 'field' | 'epoch' | 'centerName' | 'referenceFrame' | 'timeSystem' | 'meanElementTheory' | 'eccentricity' | 'meanMotion' | 'propagation'
+
+// Matches the catalog number columns of a TLE once trimmed and zero-padded to five characters: five
+// digits, or the Alpha-5 form of a letter (I and O excluded) followed by four digits for 100000 to 339999.
+const TLE_SATELLITE_NUMBER_REGEX = /^(?:\d{5}|[A-HJ-NP-Z]\d{4})$/
+
+// Matches a canonical decimal catalog number, of any length (OMM NORAD_CAT_ID may exceed 5 digits).
+const CATALOG_NUMBER_REGEX = /^\d+$/
+
+// Computes the modulo-10 checksum of a TLE line over its first 68 columns: each digit adds its value,
+// each minus sign adds 1, and every other character adds nothing.
+export function tleChecksum(line: string) {
+	let sum = 0
+
+	for (let i = 0; i < 68 && i < line.length; i++) {
+		const c = line.charCodeAt(i)
+		if (c >= 48 && c <= 57) sum += c - 48
+		else if (c === 45) sum++
+	}
+
+	return sum % 10
+}
+
+// Converts the catalog number of a TLE (five digits, or Alpha-5 for numbers 100000 to 339999, whose
+// letter stands for 10 to 33 with I and O skipped) into its canonical decimal string, without leading
+// zeros. Returns undefined when the text is neither form.
+export function tleCatalogNumber(satelliteNumber: string) {
+	const text = satelliteNumber.trim().padStart(5, '0')
+	if (!TLE_SATELLITE_NUMBER_REGEX.test(text)) return undefined
+	const first = text.charCodeAt(0)
+	if (first >= 48 && first <= 57) return `${+text}`
+	// Letters A..H are 10..17, J..N are 18..22 (I skipped), P..Z are 23..33 (O skipped).
+	const value = first - 55 - (first > 73 ? 1 : 0) - (first > 79 ? 1 : 0)
+	return `${value}${text.slice(1)}`
+}
+
+// Validates two TLE lines read from an untrusted source before they are parsed and propagated, since
+// parseTLE reads fixed columns and would otherwise turn a corrupted line into plausible elements.
+// Checks the line numbers, the 69-column length, both checksums, the catalog number of both lines,
+// that every numeric field reads as a finite number, the epoch day of year, the eccentricity and
+// mean motion domains, and SGP4 initialization. Returns the first problem found, or undefined.
+export function validateTLE(line1: string, line2: string): ElementSetError | undefined {
+	line1 = line1.trimEnd()
+	line2 = line2.trimEnd()
+
+	if (line1[0] !== '1' || line2[0] !== '2') return 'lineNumber'
+	if (line1.length !== 69 || line2.length !== 69) return 'lineLength'
+	if (tleChecksum(line1) !== +line1[68] || tleChecksum(line2) !== +line2[68]) return 'checksum'
+
+	const satelliteNumber = line1.slice(2, 7)
+	if (satelliteNumber !== line2.slice(2, 7) || tleCatalogNumber(satelliteNumber) === undefined) return 'satelliteNumber'
+
+	const tle = parseTLE(line1, line2)
+	const fields = [tle.meanMotionDot, tle.meanMotionDdot, tle.bstar, tle.inclination, tle.rightAscensionOfAscendingNode, tle.eccentricity, tle.argumentOfPerigee, tle.meanAnomaly, tle.meanMotion]
+	if (!fields.every(Number.isFinite) || !line2.slice(52, 63).trim()) return 'field'
+
+	const year = tle.epochYear < 57 ? tle.epochYear + 2000 : tle.epochYear + 1900
+	if (!/^\d{2}$/.test(line1.slice(18, 20)) || !(tle.epochDays >= 1 && tle.epochDays < (isLeapYear(year) ? 367 : 366))) return 'epoch'
+
+	return validateElements(tle.eccentricity, tle.meanMotion, () => recordFromTLE(tle))
+}
+
+// Validates an OMM read from an untrusted source (a GP query, a file, an operator import) before it
+// is stored or propagated: recordFromOMM reads only the numeric fields, so an OMM for another central
+// body, frame, time system, or theory would otherwise propagate as if it were SGP4 TEME elements.
+// The metadata fields are checked only when present, since CelesTrak omits them. NORAD_CAT_ID must be
+// decimal digits of any length, as a string or a number. Returns the first problem found, or undefined.
+export function validateOMM(omm: OMM): ElementSetError | undefined {
+	if (omm.CENTER_NAME !== undefined && omm.CENTER_NAME !== 'EARTH') return 'centerName'
+	if (omm.REF_FRAME !== undefined && omm.REF_FRAME !== 'TEME') return 'referenceFrame'
+	if (omm.TIME_SYSTEM !== undefined && omm.TIME_SYSTEM !== 'UTC') return 'timeSystem'
+	if ((omm.MEAN_ELEMENT_THEORY !== undefined && omm.MEAN_ELEMENT_THEORY !== 'SGP4') || (omm.EPHEMERIS_TYPE !== undefined && +omm.EPHEMERIS_TYPE !== 0)) return 'meanElementTheory'
+	if (!CATALOG_NUMBER_REGEX.test(`${omm.NORAD_CAT_ID}`.trim())) return 'satelliteNumber'
+
+	const values = [omm.MEAN_MOTION, omm.ECCENTRICITY, omm.INCLINATION, omm.RA_OF_ASC_NODE, omm.ARG_OF_PERICENTER, omm.MEAN_ANOMALY, omm.BSTAR, omm.MEAN_MOTION_DOT, omm.MEAN_MOTION_DDOT]
+	if (!values.every(isFiniteField)) return 'field'
+
+	const match = typeof omm.EPOCH === 'string' ? OMM_EPOCH_REGEX.exec(omm.EPOCH.trim()) : null
+	if (!match || !(+match[2] >= 1 && +match[2] <= 12 && +match[3] >= 1 && +match[3] <= 31 && +match[4] <= 23 && +match[5] <= 59 && +match[6] < 61)) return 'epoch'
+
+	return validateElements(+omm.ECCENTRICITY, +omm.MEAN_MOTION, () => recordFromOMM(omm))
+}
+
+// True when a numeric OMM field is a finite number or a non-blank string that reads as one.
+function isFiniteField(value: string | number) {
+	return typeof value === 'number' ? Number.isFinite(value) : value.trim() !== '' && Number.isFinite(+value)
+}
+
+// Checks the eccentricity (dimensionless) and mean motion (any positive unit) domains, then initializes
+// the record and reports an initialization error. `record` is only called once the domains hold.
+function validateElements(eccentricity: number, meanMotion: number, record: () => SatRec): ElementSetError | undefined {
+	if (!(eccentricity >= 0 && eccentricity < 1)) return 'eccentricity'
+	if (!(meanMotion > 0)) return 'meanMotion'
+	return record().error === SatRecError.None ? undefined : 'propagation'
+}
+
 // Propagates a TLE, OMM, or precomputed SGP4 record to a Julian day in TEME.
 // Direct TLE/OMM arguments use the WGS-72 constant set; pass a SatRec to propagate with another model.
 export function sgp4(time: Time, source: TLE | OMM | SatRec, meanElements?: MeanElements): PositionAndVelocityMut {

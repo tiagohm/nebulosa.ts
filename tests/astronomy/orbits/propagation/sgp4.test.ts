@@ -3,7 +3,26 @@ import fs from 'fs/promises'
 import { vector } from '../../../../src/adapters/ephemeris/horizons'
 import type { PositionAndVelocity } from '../../../../src/astronomy/coordinates/astrometry'
 import { itrfToTemeByGmst, temeToItrfByGmst } from '../../../../src/astronomy/coordinates/frame'
-import { type DsInitOptions, internal, type MeanElements, parseTLE, recordFromOMM, recordFromSgp4Elements, recordFromTLE, SGP4_WGS72, SGP4_WGS72_OLD, SGP4_WGS84, sgp4, type Sgp4ElementSet, type Sgp4GravityModel } from '../../../../src/astronomy/orbits/propagation/sgp4'
+import {
+	type DsInitOptions,
+	internal,
+	type MeanElements,
+	type OMM,
+	parseTLE,
+	recordFromOMM,
+	recordFromSgp4Elements,
+	recordFromTLE,
+	SGP4_WGS72,
+	SGP4_WGS72_OLD,
+	SGP4_WGS84,
+	sgp4,
+	type Sgp4ElementSet,
+	type Sgp4GravityModel,
+	tleCatalogNumber,
+	tleChecksum,
+	validateOMM,
+	validateTLE,
+} from '../../../../src/astronomy/orbits/propagation/sgp4'
 import { Timescale, timeYMDHMS, tt } from '../../../../src/astronomy/time/time'
 import { DAYMIN, DEG2RAD, TAU } from '../../../../src/core/constants'
 import { fileHandleSource } from '../../../../src/io/file'
@@ -164,6 +183,68 @@ test('OMM and TLE produce matching state near epoch', () => {
 
 test('invalid OMM propagation throws', () => {
 	expect(() => sgp4(ISS_TLE.epoch, { ...ISS_OMM, ECCENTRICITY: 1.2 })).toThrow()
+})
+
+// Replaces columns of a TLE line and rewrites its checksum, so a test changes one field at a time.
+function editTle(line: string, column: number, text: string) {
+	const edited = line.slice(0, column) + text + line.slice(column + text.length, 68)
+	return edited + tleChecksum(edited)
+}
+
+test('TLE checksum and catalog number', () => {
+	expect(tleChecksum(ISS_TLE.line1)).toBe(6)
+	expect(tleChecksum(ISS_TLE.line2)).toBe(1)
+	expect(tleCatalogNumber('25544')).toBe('25544')
+	expect(tleCatalogNumber('00005')).toBe('5')
+	expect(tleCatalogNumber('    5')).toBe('5')
+	expect(tleCatalogNumber('A0000')).toBe('100000')
+	expect(tleCatalogNumber('J2931')).toBe('182931')
+	expect(tleCatalogNumber('P0001')).toBe('230001')
+	expect(tleCatalogNumber('Z9999')).toBe('339999')
+	expect(tleCatalogNumber('I0000')).toBeUndefined()
+	expect(tleCatalogNumber('25 44')).toBeUndefined()
+})
+
+test('validate TLE', () => {
+	const { line1, line2 } = ISS_TLE
+	expect(validateTLE(line1, line2)).toBeUndefined()
+	expect(validateTLE(`${line1}  `, line2)).toBeUndefined()
+	expect(validateTLE(line2, line1)).toBe('lineNumber')
+	expect(validateTLE(line1.slice(0, 60), line2)).toBe('lineLength')
+	expect(validateTLE(`${line1.slice(0, 68)}0`, line2)).toBe('checksum')
+	expect(validateTLE(line1, editTle(line2, 2, '25545'))).toBe('satelliteNumber')
+	expect(validateTLE(editTle(line1, 2, 'A0000'), editTle(line2, 2, 'A0000'))).toBeUndefined()
+	expect(validateTLE(line1, editTle(line2, 8, ' 51.6x15'))).toBe('field')
+	expect(validateTLE(line1, editTle(line2, 52, '           '))).toBe('field')
+	expect(validateTLE(editTle(line1, 20, '400.51768399'), line2)).toBe('epoch')
+	expect(validateTLE(line1, editTle(line2, 52, ' 0.00000000'))).toBe('meanMotion')
+})
+
+test('validate OMM', () => {
+	expect(validateOMM(ISS_OMM)).toBeUndefined()
+	// CelesTrak omits the metadata fields; Space-Track sends every value as a string.
+	const strings = Object.fromEntries(Object.entries(ISS_OMM).map(([key, value]) => [key, `${value}`])) as unknown as OMM
+	expect(validateOMM({ ...strings, CENTER_NAME: 'EARTH', REF_FRAME: 'TEME', TIME_SYSTEM: 'UTC', MEAN_ELEMENT_THEORY: 'SGP4' })).toBeUndefined()
+	// Catalog numbers beyond five digits are valid as strings and numbers.
+	expect(validateOMM({ ...ISS_OMM, NORAD_CAT_ID: '270001' })).toBeUndefined()
+	expect(validateOMM({ ...ISS_OMM, NORAD_CAT_ID: 800000001 })).toBeUndefined()
+	expect(validateOMM({ ...ISS_OMM, NORAD_CAT_ID: 'A0000' })).toBe('satelliteNumber')
+
+	expect(validateOMM({ ...ISS_OMM, CENTER_NAME: 'MOON' } as unknown as OMM)).toBe('centerName')
+	expect(validateOMM({ ...ISS_OMM, REF_FRAME: 'GCRF' } as unknown as OMM)).toBe('referenceFrame')
+	expect(validateOMM({ ...ISS_OMM, TIME_SYSTEM: 'TAI' } as unknown as OMM)).toBe('timeSystem')
+	expect(validateOMM({ ...ISS_OMM, MEAN_ELEMENT_THEORY: 'SGP4-XP' } as unknown as OMM)).toBe('meanElementTheory')
+	expect(validateOMM({ ...ISS_OMM, EPHEMERIS_TYPE: 4 } as unknown as OMM)).toBe('meanElementTheory')
+	expect(validateOMM({ ...ISS_OMM, BSTAR: 'n/a' })).toBe('field')
+	expect(validateOMM({ ...ISS_OMM, MEAN_MOTION_DOT: '' })).toBe('field')
+	expect(validateOMM({ ...ISS_OMM, INCLINATION: Number.POSITIVE_INFINITY })).toBe('field')
+	expect(validateOMM({ ...ISS_OMM, EPOCH: '2023-13-19T12:25:27' })).toBe('epoch')
+	expect(validateOMM({ ...ISS_OMM, EPOCH: '2023-08-19 12:25:27' })).toBe('epoch')
+	expect(validateOMM({ ...ISS_OMM, ECCENTRICITY: 1 })).toBe('eccentricity')
+	expect(validateOMM({ ...ISS_OMM, MEAN_MOTION: 0 })).toBe('meanMotion')
+	// At 17.5 rev/day the semi-major axis (about 6270 km) is inside the Earth, so initialization
+	// reports a decayed orbit.
+	expect(validateOMM({ ...ISS_OMM, MEAN_MOTION: 17.5 })).toBe('propagation')
 })
 
 test('SGP4 gravity models match Vallado getgravconst source constants', () => {
