@@ -5187,10 +5187,12 @@ console.log(toDeg(satelliteBetaAngle(iss, sunAt, timeShift(tle.epoch, 1)))) // 1
 
 `satellitePasses(satrec, location, start, stop, options?)` lists the passes of a satellite over a ground site in a time window. The geometric altitude is sampled every `options.step` (default 30 s) and its crossings of the horizon are located with the shared root finder. Each rising crossing is paired with the next setting one, and the culmination is the altitude maximum between them, refined with Brent's minimizer on the negated altitude. A pass is returned only when both its rise and its set lie inside the window: a pass already in progress at `start`, or still in progress at `stop`, is skipped. Passes are chronological.
 
+`satelliteWindowPasses(satrec, location, start, stop, options?)` takes the same options and keeps the passes the window cuts. Each `SatelliteWindowPass` has a `start`, a `culmination` and an `end` event: `start` is the rise, or the window start when `startsBeforeWindow` is true, and `end` is the set, or the window stop when `endsAfterWindow` is true, so a clipped bound is never mistaken for a horizon crossing. The intervals above `minAltitude` come from the shared interval scanner, and the culmination is the highest of the two bounds and of the refined altitude maxima between them: in a clipped pass it can be a bound, and for a high orbit whose altitude is not unimodal it is still the highest point. A satellite above `minAltitude` throughout the window, such as a geostationary one seen from its coverage area, is a single pass with both flags; one that never rises gives no pass.
+
 Every event (`rise`, `culmination`, `set`) is a `SatellitePassEvent`: the `time` plus the azimuth (north through east, radians), the geometric altitude (radians, no refraction) and the slant range (AU) at that instant. `options.minAltitude` (radians, default 0) replaces the ideal horizon, which models a local obstruction or a minimum-elevation constraint. `options.step` must be shorter than the shortest pass that matters, otherwise a brief grazing pass between two samples can be missed, and `options.tolerance` is the root and extremum tolerance.
 
 ```ts
-import { satellitePasses } from 'nebulosa/src/astronomy/events/satellite'
+import { satellitePasses, satelliteWindowPasses } from 'nebulosa/src/astronomy/events/satellite'
 import { geodeticLocation } from 'nebulosa/src/astronomy/observer/location'
 import { parseTLE, recordFromTLE } from 'nebulosa/src/astronomy/orbits/propagation/sgp4'
 import { type Time, timeShift, timeToDate, utc } from 'nebulosa/src/astronomy/time/time'
@@ -5220,6 +5222,10 @@ for (const pass of satellitePasses(iss, site, start, stop, { minAltitude: deg(10
 // 2020-11-25-22-14-13 203.75 10.00
 // 2020-11-25-22-17-27 38.78 651.8
 // 2020-11-25-22-20-38 62.08 10.00
+
+// A window that starts during the first pass keeps it, starting at the window start.
+const [clipped] = satelliteWindowPasses(iss, site, timeShift(start, 53 / 1440), timeShift(start, 70 / 1440))
+console.log(clipped.startsBeforeWindow, clipped.endsAfterWindow, format(clipped.end.time)) // true false 2020-11-25-14-9-53 — the set
 ```
 
 ### Satellite Sub-point
@@ -5359,7 +5365,7 @@ console.log(trail.lengthPixels) // 1800
 
 ### Satellite Visibility Intervals
 
-`satelliteVisibleIntervals(satrec, location, sunAt, start, stop, options)` finds the periods in which a satellite is actually worth watching from a site. An interval is an unbroken stretch of time throughout which **all** the criteria hold: the geometric altitude is at least `minimumAltitude`, the apparent magnitude is at most `maximumMagnitude`, the Sun is at most `maximumSunAltitude` above the observer's horizon, and the satellite is outside the Earth's umbra. All four options are required, because there are no subjective brightness or twilight defaults, and `standardMagnitude` is the empirical value of the satellite (see [Satellite Visual Magnitude](#satellite-visual-magnitude) topic). Angles are in radians.
+`satelliteVisibleIntervals(satrec, location, sunAt, start, stop, options)` finds the periods in which a satellite is actually worth watching from a site. An interval is an unbroken stretch of time throughout which **all** the criteria hold: the geometric altitude is at least `minimumAltitude`, the apparent magnitude is at most `maximumMagnitude`, the Sun is at most `maximumSunAltitude` above the observer's horizon, and the satellite is outside the Earth's umbra. `minimumAltitude` and `maximumSunAltitude` are required, because there are no subjective twilight defaults. `standardMagnitude`, the empirical value of the satellite (see [Satellite Visual Magnitude](#satellite-visual-magnitude) topic), and `maximumMagnitude` are given together or not at all: without them nothing can tell how bright the satellite is, so the brightness criterion is dropped and the events carry no `magnitude`. Angles are in radians.
 
 The four margins are scanned independently every `options.step` (default 30 s), and the boundaries are refined by root finding, so each crossing must be resolved by the step. Intervals that touch the window edges are kept and clipped. The result has only the endpoints and the altitude maximum of each interval, as `SatelliteVisibilityEvent`s: the pass event (`time`, `azimuth`, `altitude`, `range`) plus the `magnitude`, the observer's `sunAltitude` and the `shadow` state. An interval can end on an umbra boundary, so its last event can report `umbra`. Refraction, extinction, flares, terrain and penumbral dimming are not modeled. `sunAt` returns the geocentric Sun position (AU, ICRS).
 

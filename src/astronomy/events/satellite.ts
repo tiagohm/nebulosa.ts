@@ -18,12 +18,12 @@ import { searchExtrema, searchIntervals, searchRoots, type TimeSearchOptions } f
 // Ground-station and shadow events for an SGP4 satellite, layered on the SGP4 propagator, the observer
 // transforms and the time-domain event scanner. Two families of events are provided: topocentric passes
 // over a ground observer (rise, culmination and set, bracketed where the geometric altitude crosses a
-// configurable horizon) and Earth-shadow events (the sunlit/penumbra/umbra illumination state and the
-// umbra or penumbra entry/exit crossings that bound each eclipse). All angles are radians, distances AU
-// and durations seconds.
+// configurable horizon, either complete or clipped to the search window) and Earth-shadow events (the
+// sunlit/penumbra/umbra illumination state and the umbra or penumbra entry/exit crossings that bound each
+// eclipse). All angles are radians, distances AU and durations seconds.
 // Tracking rates use an observer-relative inertial state (AU/day and radians/day), and visible
-// intervals combine altitude, umbra, empirical magnitude and observer solar altitude throughout
-// each interval. The footprint is explicitly a spherical ideal-horizon approximation.
+// intervals combine altitude, umbra, an optional empirical magnitude and observer solar altitude
+// throughout each interval. The footprint is explicitly a spherical ideal-horizon approximation.
 //
 // Look angles are computed entirely in the Earth-fixed ITRS frame: the satellite is propagated in TEME,
 // rotated to ITRS, and differenced against the observer's ITRS position; the topocentric vector is then
@@ -35,6 +35,10 @@ import { searchExtrema, searchIntervals, searchRoots, type TimeSearchOptions } f
 // Default coarse sampling step for the satellite scanners: 30 s. Fine enough to bracket every low-Earth
 // pass and every shadow crossing without missing a short grazing pass between two samples.
 const DEFAULT_STEP = 30 * ONE_SECOND
+
+// Distance in days (~86 µs) within which a pass bound is taken to sit on a window edge: far below the
+// root refinement tolerance, so only bounds the interval scanner clipped to the window match it.
+const WINDOW_EDGE = 1e-9
 
 // Geocentric Earth rest state, used to obtain the observer's inertial position/diurnal velocity.
 const ZERO_EARTH_STATE = zeroPositionAndVelocity()
@@ -63,6 +67,25 @@ export interface SatellitePass {
 	readonly culmination: SatellitePassEvent
 	// Set: the instant the satellite drops back through the horizon altitude.
 	readonly set: SatellitePassEvent
+}
+
+// A pass of a satellite over a ground observer clipped to a search window. Unlike SatellitePass, a pass
+// already in progress at the window start or still in progress at its end is kept, with its bound at the
+// window edge instead of a horizon crossing.
+export interface SatelliteWindowPass {
+	// Rise through the horizon altitude, or the window start when startsBeforeWindow is true.
+	readonly start: SatellitePassEvent
+	// Greatest geometric altitude within the clipped pass, endpoints included; for a clipped pass it can
+	// be an endpoint, so it is not necessarily the culmination of the whole pass.
+	readonly culmination: SatellitePassEvent
+	// Set through the horizon altitude, or the window stop when endsAfterWindow is true.
+	readonly end: SatellitePassEvent
+	// True when the satellite is already above the horizon altitude at the window start, so `start` is
+	// the window start and not a rise.
+	readonly startsBeforeWindow: boolean
+	// True when the satellite is still above the horizon altitude at the window stop, so `end` is the
+	// window stop and not a set.
+	readonly endsAfterWindow: boolean
 }
 
 // Options for the pass finder.
@@ -171,6 +194,39 @@ export function satellitePasses(satrec: SatRec, location: GeographicPosition, st
 			passes.push({ rise: passEvent(satrec, location, rise), culmination, set: passEvent(satrec, location, crossing) })
 			rise = undefined
 		}
+	}
+
+	return passes
+}
+
+// Finds every pass of a satellite over a ground observer in a time window, keeping passes cut by the
+// window edges.
+//
+// The intervals where the geometric altitude is at or above `minAltitude` are found with the shared
+// interval scanner, so their bounds are the refined horizon crossings or the window edges. A bound at a
+// window edge where the altitude is strictly above `minAltitude` is flagged (startsBeforeWindow,
+// endsAfterWindow) rather than reported as a rise or a set; a satellite above the horizon for the whole
+// window (typically a geostationary one) yields a single pass with both flags. The culmination is the
+// highest of the bounds and of the refined interior altitude maxima, so it holds for clipped passes and
+// for the non-unimodal altitude of high orbits. The coarse `step` (days, default 30 s) must be shorter
+// than the passes to be found: a grazing pass between two samples can be missed. Passes are chronological.
+export function satelliteWindowPasses(satrec: SatRec, location: GeographicPosition, start: Time, stop: Time, { minAltitude = 0, step = DEFAULT_STEP, tolerance }: SatellitePassOptions = {}): SatelliteWindowPass[] {
+	const options = { step, tolerance }
+	const margin = (time: Time) => satelliteLookAngles(satrec, location, time).altitude - minAltitude
+	const passes: SatelliteWindowPass[] = []
+
+	for (const interval of searchIntervals([margin], start, stop, options)) {
+		const first = passEvent(satrec, location, interval.start)
+		const last = passEvent(satrec, location, interval.end)
+		let culmination = first.altitude >= last.altitude ? first : last
+
+		for (const peak of searchExtrema((time) => satelliteLookAngles(satrec, location, time).altitude, interval.start, interval.end, options)) {
+			if (peak.kind === 'maximum' && peak.value > culmination.altitude) culmination = passEvent(satrec, location, peak.time)
+		}
+
+		const startsBeforeWindow = timeSubtract(interval.start, start) <= WINDOW_EDGE && first.altitude > minAltitude
+		const endsAfterWindow = timeSubtract(stop, interval.end) <= WINDOW_EDGE && last.altitude > minAltitude
+		passes.push({ start: first, culmination, end: last, startsBeforeWindow, endsAfterWindow })
 	}
 
 	return passes
@@ -450,22 +506,33 @@ export function satelliteBetaAngle(satrec: SatRec, sunAt: PositionOverTime, time
 	return Math.asin(clamp(vecDot(normal, solar) / (vecLength(normal) * vecLength(solar)), -1, 1))
 }
 
-// Explicit observing criteria plus scanner settings; no subjective brightness/twilight defaults.
-export interface SatelliteVisibilityOptions extends TimeSearchOptions {
-	// Empirical standard magnitude at 1000 km and half illumination.
-	readonly standardMagnitude: number
+// Geometric observing criteria plus scanner settings; no subjective twilight defaults.
+export interface SatelliteVisibilityGeometry extends TimeSearchOptions {
 	// Minimum geometric satellite altitude above the observer horizon, radians.
 	readonly minimumAltitude: Angle
-	// Largest (faintest) permitted apparent visual magnitude.
-	readonly maximumMagnitude: number
 	// Largest permitted geometric observer-relative solar altitude, radians.
 	readonly maximumSunAltitude: Angle
 }
 
+// Brightness criterion of the visibility search, given together or not at all: without an empirical
+// standard magnitude no brightness can be estimated, so the interval is limited by geometry, shadow and
+// twilight only and its events carry no magnitude.
+export type SatelliteVisibilityBrightness =
+	| {
+			// Empirical standard magnitude at 1000 km and half illumination.
+			readonly standardMagnitude: number
+			// Largest (faintest) permitted apparent visual magnitude.
+			readonly maximumMagnitude: number
+	  }
+	| { readonly standardMagnitude?: undefined; readonly maximumMagnitude?: undefined }
+
+// Explicit observing criteria plus scanner settings; no subjective brightness/twilight defaults.
+export type SatelliteVisibilityOptions = SatelliteVisibilityGeometry & SatelliteVisibilityBrightness
+
 // Circumstances at an endpoint or altitude maximum of a visible interval.
 export interface SatelliteVisibilityEvent extends SatellitePassEvent {
-	// Empirical apparent visual magnitude at this epoch.
-	readonly magnitude: number
+	// Empirical apparent visual magnitude at this epoch; absent when no standard magnitude was given.
+	readonly magnitude?: number
 	// Observer-relative geometric solar altitude, radians.
 	readonly sunAltitude: Angle
 	// Conical Earth-shadow state at this epoch; endpoints can sit on an umbra boundary.
@@ -484,6 +551,7 @@ export interface SatelliteVisibleInterval {
 
 // Finds intervals throughout which satellite altitude >= minimumAltitude, magnitude <=
 // maximumMagnitude, Sun altitude <= maximumSunAltitude, and the satellite is outside the umbra.
+// Without a standard magnitude the brightness criterion is dropped and no magnitude is reported.
 // sunAt supplies same-epoch geocentric Sun positions in AU/base axes. satrec/location and start/stop
 // specify the satellite, observer and window, which should lie near the TLE epoch. Uses the shared
 // independent-margin interval scanner; options.step (default 30 s) must resolve each crossing.
@@ -491,6 +559,7 @@ export interface SatelliteVisibleInterval {
 // at window boundaries are retained. Returns only endpoints/altitude peaks, not dense tracks.
 export function satelliteVisibleIntervals(satrec: SatRec, location: GeographicPosition, sunAt: PositionOverTime, start: Time, stop: Time, options: SatelliteVisibilityOptions): SatelliteVisibleInterval[] {
 	const scanOptions = { step: options.step ?? DEFAULT_STEP, tolerance: options.tolerance }
+	const { standardMagnitude, maximumMagnitude } = options
 	const satellite = vecZero()
 	const observer = vecZero()
 	const fixed = vecZero()
@@ -499,29 +568,30 @@ export function satelliteVisibleIntervals(satrec: SatRec, location: GeographicPo
 		if (cached && timeSubtract(time, cached.event.time) === 0) return cached
 		frameToFrame(sgp4(time, satrec)[0], TEME, ICRS, time, satellite)
 		const solar = sunAt(time)
-		frameToFrame(itrs(location), ITRS, ICRS, time, observer)
 		const shadow = shadowGeometry(satellite, solar)
 		const state = classifyShadowGeometry(shadow)
-		const magnitude = magnitudeGeometry(satellite, solar, observer, options.standardMagnitude, state)
+		let magnitude: number | undefined
+
+		if (standardMagnitude !== undefined) {
+			frameToFrame(itrs(location), ITRS, ICRS, time, observer)
+			magnitude = magnitudeGeometry(satellite, solar, observer, standardMagnitude, state).magnitude
+		}
+
 		const angles = lookAngles(frameToFrame(satellite, ICRS, ITRS, time, fixed), location)
 		const sunAltitude = lookAngles(frameToFrame(solar, ICRS, ITRS, time, fixed), location).altitude
 		const umbraMargin = shadow.earthApparentRadius > shadow.sunApparentRadius ? shadow.separation - (shadow.earthApparentRadius - shadow.sunApparentRadius) : 1
-		cached = { event: { time, ...angles, magnitude: magnitude.magnitude, sunAltitude, shadow: state }, umbraMargin }
+		cached = { event: { time, ...angles, magnitude, sunAltitude, shadow: state }, umbraMargin }
 		return cached
 	}
-	const intervals = searchIntervals(
-		[
-			(time) => circumstancesAt(time).event.altitude - options.minimumAltitude,
-			(time) => circumstancesAt(time).umbraMargin,
-			// Zero illuminated fraction has infinite magnitude. A bounded monotone margin preserves
-			// its brightness crossing while keeping Brent's endpoints finite at exact new phase.
-			(time) => Math.tanh(options.maximumMagnitude - circumstancesAt(time).event.magnitude),
-			(time) => options.maximumSunAltitude - circumstancesAt(time).event.sunAltitude,
-		],
-		start,
-		stop,
-		scanOptions,
-	)
+	const margins = [(time: Time) => circumstancesAt(time).event.altitude - options.minimumAltitude, (time: Time) => circumstancesAt(time).umbraMargin, (time: Time) => options.maximumSunAltitude - circumstancesAt(time).event.sunAltitude]
+
+	if (maximumMagnitude !== undefined) {
+		// Zero illuminated fraction has infinite magnitude. A bounded monotone margin preserves
+		// its brightness crossing while keeping Brent's endpoints finite at exact new phase.
+		margins.push((time) => Math.tanh(maximumMagnitude - (circumstancesAt(time).event.magnitude ?? Number.POSITIVE_INFINITY)))
+	}
+
+	const intervals = searchIntervals(margins, start, stop, scanOptions)
 	return intervals.map((interval) => {
 		const first = circumstancesAt(interval.start).event
 		const last = circumstancesAt(interval.end).event
