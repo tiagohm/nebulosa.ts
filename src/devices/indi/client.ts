@@ -11,7 +11,7 @@ import { parseIndiNumber } from './number'
 // bound is disconnected.
 // A simple XML-like communications protocol is described for
 // interactive and automated remote control of diverse instrumentation.
-// http://www.clearskyinstitute.com/INDI/INDI.pdf
+// https://docs.indilib.org/protocol/INDI.pdf
 
 // Optional callbacks for received INDI messages. Each property kind can be observed at several
 // granularities (per-tag def*/set*, per-type *Vector, generic def/set/vector); a handler subscribes to

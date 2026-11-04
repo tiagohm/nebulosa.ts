@@ -3,7 +3,7 @@ import type { IndiClientHandler } from '../client'
 // oxfmt-ignore
 import { CLIENT, type Client, DEFAULT_CAMERA, DEFAULT_COVER, DEFAULT_DOME, DEFAULT_FLAT_PANEL, DEFAULT_FOCUSER, DEFAULT_MOUNT, DEFAULT_POWER, DEFAULT_ROTATOR, DEFAULT_WEATHER, DEFAULT_WHEEL, type Device, DeviceInterfaceType, type DeviceType, findDeviceTypes, isInterfaceType, isSubDevice, type MinMaxValueProperty, type Parkable } from '../device'
 import { IndiPropertyRegistry, makeHardwareId } from '../properties'
-import type { BlobEncoding, DefNumber, DefSwitchVector, DefText, DefTextVector, DefVector, DelProperty, OneNumber, PropertyState, SetSwitchVector, SetTextVector, SetVector, VectorType } from '../types'
+import type { BlobEncoding, DefNumber, DefSwitchVector, DefText, DefTextVector, DefVector, DelProperty, OneNumber, PropertyState, SetSwitchVector, SetTextVector, SetVector, StatefulSetVector, VectorType } from '../types'
 
 // Device managers that turn the raw INDI property stream into typed device state. A DeviceManager per
 // device type consumes def*/set* vectors as an IndiClientHandler, maintains the device objects, applies
@@ -26,9 +26,6 @@ export interface DeviceHandler<D extends Device> {
 	// Notified when an image/data BLOB arrives for the device.
 	readonly blobReceived?: (device: D, data: Buffer, encoding: BlobEncoding) => void
 }
-
-// A set vector that carries the state the driver published with it.
-export type StatefulSetVector = SetVector & { readonly state: PropertyState }
 
 // Resolves a device by client and id (optionally constrained to a type).
 export interface DeviceProvider<D extends Device> {
