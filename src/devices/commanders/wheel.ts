@@ -15,7 +15,8 @@ import { resourceKey } from '../orchestration/resource'
 
 // Timing overrides for one wheel command; every duration is in milliseconds.
 export interface WheelCommandOptions {
-	// Maximum time the commanded slot may take to be reached.
+	// Maximum time the commanded slot may take to be reached (30 s by default), or renamed slots to be
+	// reported (10 s by default).
 	readonly timeout?: number
 }
 
@@ -33,6 +34,9 @@ interface WheelUpdate {
 // Default milliseconds a commanded slot change has to complete. A filter wheel crosses its whole carousel
 // in a few seconds, so this is generous even for the longest move a large wheel can be asked for.
 const DEFAULT_MOVE_TIMEOUT = 30000
+
+// Default milliseconds renamed slots have to be reported.
+const DEFAULT_NAMES_TIMEOUT = 10000
 
 // Signal for the quarantine of a canceled move. The wait cannot inherit the operation signal, which is
 // aborted by the time cleanup runs, and would release the wheel on the very cancel it exists to outlast.
@@ -140,17 +144,29 @@ export class WheelCommander implements DeviceHandler<Wheel>, Disposable {
 		}).result
 	}
 
-	// Renames the filter slots, which the driver applies without any movement.
-	// This acquires the wheel like a move: the names are what every later capture stamps into its frames,
-	// and rewriting them under a running sequence would relabel filters it has already used.
-	async setNames(scope: OperationScope, wheel: Wheel, names: readonly string[]): Promise<OperationResult<void>> {
-		return await scope.start<void>('wheelNames', [{ key: resourceKey(wheel), device: wheel }], () => {
+	// Renames the filter slots, which the driver applies without any movement, and resolves once it reports
+	// every name it was given; names beyond the slots the wheel publishes are ignored by the driver and not
+	// waited for. This acquires the wheel like a move: the names are what every later capture stamps into its
+	// frames, and rewriting them under a running sequence would relabel filters it has already used.
+	async setNames(scope: OperationScope, wheel: Wheel, names: readonly string[], options: WheelCommandOptions = {}): Promise<OperationResult<void>> {
+		return await scope.start<void>('wheelNames', [{ key: resourceKey(wheel), device: wheel }], async (context) => {
 			if (!wheel.connected) return failedOperationResult('disconnected')
 			if (!wheel.canSetNames) return failedOperationResult('unexpectedState', `wheel ${wheel.name} cannot rename its slots`)
 
-			this.wheelManager.slots(wheel, names)
+			const observed = await waitForDeviceState<WheelUpdate>({
+				signal: context.signal,
+				timeout: options.timeout ?? DEFAULT_NAMES_TIMEOUT,
+				subscribe: (listener) => this.#subscribe(wheel, listener),
+				current: () => ({ wheel }),
+				evaluate: (update) => {
+					if (!wheel.connected) return 'disconnected'
+					if (update.state === 'Alert' && update.property === 'names') return 'alert'
+					return namesReported(wheel, names) ? 'success' : 'pending'
+				},
+				command: () => this.wheelManager.slots(wheel, names),
+			})
 
-			return successfulOperationResult(undefined)
+			return observed.ok ? successfulOperationResult(undefined) : observed
 		}).result
 	}
 
@@ -203,4 +219,11 @@ export class WheelCommander implements DeviceHandler<Wheel>, Disposable {
 // outside the carousel is never echoed by the driver, and waiting for it would only end in a timeout.
 export function wheelSlot(wheel: Wheel, slot: number) {
 	return Math.round(clamp(slot, 0, Math.max(0, wheel.count - 1)))
+}
+
+// Whether the wheel reports every requested name in the slots it publishes.
+function namesReported(wheel: Wheel, names: readonly string[]) {
+	const n = Math.min(names.length, wheel.names.length)
+	for (let i = 0; i < n; i++) if (wheel.names[i] !== names[i]) return false
+	return true
 }

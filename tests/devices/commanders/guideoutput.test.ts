@@ -95,13 +95,31 @@ test('runs perpendicular pulses in one operation and waits for both', async () =
 	await waitUntil(() => isFree(camera))
 })
 
-test('sets both guide rates under the camera resource', async () => {
+test('sets both guide rates under the camera resource and resolves once they are reported', async () => {
 	const camera = await connected()
-	const guideRate = spyOn(guideOutputManager, 'guideRate').mockImplementation(() => {})
+	// The camera simulator publishes no GUIDE_RATE, so the answer of a driver that has one is fed here.
+	const guideRate = spyOn(guideOutputManager, 'guideRate').mockImplementation((device, rightAscension, declination) => {
+		guideOutputManager.numberVector(client, { device: device.name, name: 'GUIDE_RATE', state: 'Ok', elements: { GUIDE_RATE_WE: { name: 'GUIDE_RATE_WE', value: rightAscension }, GUIDE_RATE_NS: { name: 'GUIDE_RATE_NS', value: declination } } }, 'setNumberVector')
+	})
 
 	try {
 		expect(await guideOutputCommander.setGuideRate(operationCoordinator, camera, 0.25, 0.75)).toMatchObject({ ok: true })
 		expect(guideRate).toHaveBeenCalledWith(camera, 0.25, 0.75)
+		expect(camera.guideRate.rightAscension).toBeCloseTo(0.25, 6)
+		expect(camera.guideRate.declination).toBeCloseTo(0.75, 6)
+		expect(await guideOutputCommander.setGuideRate(operationCoordinator, camera, 0.5, 0.5)).toMatchObject({ ok: true })
+	} finally {
+		guideRate.mockRestore()
+	}
+})
+
+test('times out guide rates the driver never reports', async () => {
+	const camera = await connected()
+	const guideRate = spyOn(guideOutputManager, 'guideRate').mockImplementation(() => {})
+
+	try {
+		expect(await guideOutputCommander.setGuideRate(operationCoordinator, camera, camera.guideRate.rightAscension + 0.1, 0.5, { timeout: 30 })).toMatchObject(failedOperationResult('timeout'))
+		expect(isFree(camera)).toBeTrue()
 	} finally {
 		guideRate.mockRestore()
 	}

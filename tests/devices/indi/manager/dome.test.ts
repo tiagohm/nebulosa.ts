@@ -408,3 +408,15 @@ test('DomeManager does not complete failed home or park operations', () => {
 
 	expect(dome.parking).toBeFalse()
 })
+
+test('reports every answer to the park option, even unchanged', () => {
+	const manager = new DomeManager()
+	const dome = setupDome(manager)
+	const answers: string[] = []
+	manager.addHandler({ added() {}, removed() {}, vectorState: (_, vector) => answers.push(`${vector.name}:${vector.state}`) })
+
+	manager.switchVector(recordingClient, { device: dome.name, name: 'DOME_PARK_OPTION', state: 'Ok', elements: { PARK_CURRENT: { name: 'PARK_CURRENT', value: false } } }, 'setSwitchVector')
+	manager.switchVector(recordingClient, { device: dome.name, name: 'DOME_PARK_OPTION', state: 'Ok', elements: { PARK_CURRENT: { name: 'PARK_CURRENT', value: false } } }, 'setSwitchVector')
+
+	expect(answers).toEqual(['DOME_PARK_OPTION:Ok', 'DOME_PARK_OPTION:Ok'])
+})

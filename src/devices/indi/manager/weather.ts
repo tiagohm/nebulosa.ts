@@ -324,7 +324,8 @@ export class WeatherManager extends DeviceManager<Weather> {
 		}
 	}
 
-	// Tracks writability of the refresh control on top of the common CONNECTION handling.
+	// Tracks writability of the refresh control on top of the common CONNECTION handling, and reports the state
+	// of WEATHER_REFRESH, a momentary switch whose answer is that state alone.
 	switchVector(client: Client, message: DefSwitchVector | SetSwitchVector, tag: string) {
 		const device = this.get(client, message.device)
 
@@ -336,6 +337,8 @@ export class WeatherManager extends DeviceManager<Weather> {
 			if ((message as DefSwitchVector).permission !== 'ro') this.addWritableProperty(device, message.name)
 			else this.removeWritableProperty(device, message.name)
 		}
+
+		if (message.name === 'WEATHER_REFRESH') this.handleVectorState(device, message, tag)
 	}
 
 	// Applies the weather number vectors: the sensor parameters, the driver update period, the averaging

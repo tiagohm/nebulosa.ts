@@ -17,9 +17,18 @@ export interface DeviceHandler<D extends Device> {
 	// it left unchanged, such as a refused move; `property` is the device field name.
 	readonly updated?: (device: D, property: keyof D & string, state?: PropertyState) => void
 	readonly removed: (device: D) => void
+	// Notified on every set of a command vector whose effect the device fields do not reflect (a momentary
+	// switch such as TELESCOPE_HOME, or a setpoint such as CCD_TEMPERATURE), even when nothing changed, so
+	// a command can read back the state the driver answered with. Only the vectors a manager documents are
+	// reported, and only when the set vector carries a state. `vector` is the message as received: it is read
+	// synchronously, since the property registry may not have merged it yet and other handlers may mutate it.
+	readonly vectorState?: (device: D, vector: StatefulSetVector) => void
 	// Notified when an image/data BLOB arrives for the device.
 	readonly blobReceived?: (device: D, data: Buffer, encoding: BlobEncoding) => void
 }
+
+// A set vector that carries the state the driver published with it.
+export type StatefulSetVector = SetVector & { readonly state: PropertyState }
 
 // Resolves a device by client and id (optionally constrained to a type).
 export interface DeviceProvider<D extends Device> {
@@ -124,6 +133,15 @@ export abstract class DeviceManager<D extends Device> implements IndiClientHandl
 
 	removed(device: D) {
 		for (const handler of this.#handlers) handler.removed(device)
+	}
+
+	vectorState(device: D, vector: StatefulSetVector) {
+		for (const handler of this.#handlers) handler.vectorState?.(device, vector)
+	}
+
+	// Reports a set vector to the vectorState handlers when it carries a state; definitions are not answers.
+	protected handleVectorState(device: D, vector: DefVector | SetVector, tag: string) {
+		if (tag[0] === 's' && vector.state !== undefined) this.vectorState(device, vector as StatefulSetVector)
 	}
 
 	blobReceived(device: D, data: Buffer, encoding: BlobEncoding) {

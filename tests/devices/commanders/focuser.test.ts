@@ -142,6 +142,36 @@ test('refuses the backlash toggle without a writable driver compensation or whil
 	}
 })
 
+test('times out a setting the driver never reports', async () => {
+	const device = await connected()
+	const syncTo = spyOn(focuserManager, 'syncTo').mockImplementation(() => {})
+	const reverse = spyOn(focuserManager, 'reverse').mockImplementation(() => {})
+	const backlash = spyOn(focuserManager, 'backlash').mockImplementation(() => {})
+
+	try {
+		expect(await focuserCommander.syncTo(operationCoordinator, device, 42000, { timeout: 30 })).toMatchObject(failedOperationResult('timeout'))
+		expect(await focuserCommander.reverse(operationCoordinator, device, !device.reversed, { timeout: 30 })).toMatchObject(failedOperationResult('timeout'))
+		expect(await focuserCommander.setBacklash(operationCoordinator, device, !device.backlashEnabled, { timeout: 30 })).toMatchObject(failedOperationResult('timeout'))
+		expect(syncTo).toHaveBeenCalledWith(device, 42000)
+		expect(isFree(device)).toBeTrue()
+	} finally {
+		syncTo.mockRestore()
+		reverse.mockRestore()
+		backlash.mockRestore()
+	}
+})
+
+test('resolves a sync at once when the focuser already reports the position', async () => {
+	const device = await connected()
+	const syncTo = spyOn(focuserManager, 'syncTo').mockImplementation(() => {})
+
+	try {
+		expect(await focuserCommander.syncTo(operationCoordinator, device, device.position.value, { timeout: 30 })).toMatchObject({ ok: true })
+	} finally {
+		syncTo.mockRestore()
+	}
+})
+
 test('syncs the reported position and honors capability gates', async () => {
 	const device = await connected()
 	const capabilities = {

@@ -796,3 +796,18 @@ describe('INDI alignment', () => {
 		expect(mount.alignment.available).toBeFalse()
 	})
 })
+
+test('reports every answer to the home and park option vectors, even unchanged, but not their definitions', () => {
+	const manager = new MountManager()
+	const mount = setupTestMount(manager)
+	const answers: string[] = []
+	manager.addHandler({ added() {}, removed() {}, vectorState: (_, vector) => answers.push(`${vector.name}:${vector.state}`) })
+
+	manager.switchVector(recordingClient, { device: mount.name, name: 'TELESCOPE_HOME', permission: 'rw', rule: 'AtMostOne', state: 'Idle', elements: { SET: defSwitch('SET', false) } } satisfies DefSwitchVector, 'defSwitchVector')
+	manager.switchVector(recordingClient, { device: mount.name, name: 'TELESCOPE_HOME', state: 'Ok', elements: { SET: { name: 'SET', value: false } } }, 'setSwitchVector')
+	manager.switchVector(recordingClient, { device: mount.name, name: 'TELESCOPE_HOME', state: 'Ok', elements: { SET: { name: 'SET', value: false } } }, 'setSwitchVector')
+	manager.switchVector(recordingClient, { device: mount.name, name: 'TELESCOPE_PARK_OPTION', state: 'Alert', elements: { PARK_CURRENT: { name: 'PARK_CURRENT', value: false } } }, 'setSwitchVector')
+	manager.switchVector(recordingClient, { device: mount.name, name: 'TELESCOPE_PARK_OPTION', elements: { PARK_CURRENT: { name: 'PARK_CURRENT', value: false } } }, 'setSwitchVector')
+
+	expect(answers).toEqual(['TELESCOPE_HOME:Ok', 'TELESCOPE_HOME:Ok', 'TELESCOPE_PARK_OPTION:Alert'])
+})

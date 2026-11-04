@@ -478,6 +478,13 @@ test('commands refresh only when the driver offers a writable switch', () => {
 	switchCommands.length = 0
 	expect(manager.refresh(weather)).toBeTrue()
 	expect(switchCommands).toEqual([{ device: weather.name, name: 'WEATHER_REFRESH', elements: { REFRESH: true } }])
+
+	// Every answer of the momentary switch reaches the observers, even one that repeats the previous answer.
+	const answers: string[] = []
+	manager.addHandler({ added() {}, removed() {}, vectorState: (_, vector) => answers.push(`${vector.name}:${vector.state}`) })
+	manager.switchVector(recordingClient, { device: weather.name, name: 'WEATHER_REFRESH', state: 'Ok', elements: { REFRESH: { name: 'REFRESH', value: false } } }, 'setSwitchVector')
+	manager.switchVector(recordingClient, { device: weather.name, name: 'WEATHER_REFRESH', state: 'Ok', elements: { REFRESH: { name: 'REFRESH', value: false } } }, 'setSwitchVector')
+	expect(answers).toEqual(['WEATHER_REFRESH:Ok', 'WEATHER_REFRESH:Ok'])
 })
 
 test('clears the sensors on a named deletion but keeps the device', () => {

@@ -6,6 +6,7 @@ import { WeatherManager } from '../../../src/devices/indi/manager/weather'
 import { ClientSimulator } from '../../../src/devices/indi/simulator/client'
 import { WEATHER_DEFAULT_UPDATE_PERIOD, WEATHER_MAX_UPDATE_PERIOD, WEATHER_MIN_UPDATE_PERIOD } from '../../../src/devices/indi/simulator/constants'
 import { WeatherSimulator } from '../../../src/devices/indi/simulator/weather'
+import type { PropertyState } from '../../../src/devices/indi/types'
 import { DeviceLifecycle } from '../../../src/devices/orchestration/device.lifecycle'
 import { OperationCoordinator, failedOperationResult } from '../../../src/devices/orchestration/operation'
 import { ResourceArbiter, resourceKey } from '../../../src/devices/orchestration/resource'
@@ -132,14 +133,38 @@ test('fails an update period the driver answers with an Alert', async () => {
 	}
 })
 
-test('dispatches a refresh to a station with a refresh switch', async () => {
+test('resolves a refresh once the driver answers its switch, even unchanged', async () => {
 	const weather = await connected()
 	const refresh = spyOn(weatherManager, 'refresh')
 
 	try {
 		expect(await weatherCommander.refresh(operationCoordinator, weather)).toMatchObject({ ok: true })
-		expect(refresh).toHaveBeenCalledTimes(1)
+		// The second answer repeats the first one exactly, and still reaches the command.
+		expect(await weatherCommander.refresh(operationCoordinator, weather)).toMatchObject({ ok: true })
+		expect(refresh).toHaveBeenCalledTimes(2)
 		expect(isFree(weather)).toBeTrue()
+	} finally {
+		refresh.mockRestore()
+	}
+})
+
+test('reads back a refresh from the state of WEATHER_REFRESH', async () => {
+	const weather = await connected()
+	let reply: PropertyState | undefined
+	const refresh = spyOn(weatherManager, 'refresh').mockImplementation((device) => {
+		if (reply !== undefined) weatherManager.switchVector(client, { device: device.name, name: 'WEATHER_REFRESH', state: reply, elements: { REFRESH: { name: 'REFRESH', value: false } } }, 'setSwitchVector')
+		return true
+	})
+
+	try {
+		reply = 'Alert'
+		expect(await weatherCommander.refresh(operationCoordinator, weather, { timeout: 1000 })).toMatchObject(failedOperationResult('alert'))
+
+		reply = 'Busy'
+		expect(await weatherCommander.refresh(operationCoordinator, weather, { timeout: 30 })).toMatchObject(failedOperationResult('timeout'))
+
+		reply = undefined
+		expect(await weatherCommander.refresh(operationCoordinator, weather, { timeout: 30 })).toMatchObject(failedOperationResult('timeout'))
 	} finally {
 		refresh.mockRestore()
 	}

@@ -59,6 +59,12 @@ export interface GuidePulseOptions {
 // Axis of a timed-guide vector.
 type GuideAxis = 'NS' | 'WE'
 
+// Timing overrides for setting the guide rate; every duration is in milliseconds.
+export interface GuideRateOptions {
+	// Maximum time the driver may take to report the commanded rates. Defaults to 10 s.
+	readonly timeout?: number
+}
+
 // One observed guide output transition. The device is passed live rather than snapshotted because
 // evaluation always reads the newest values, and the property/state pair is what carries an INDI Alert.
 interface GuideOutputUpdate {
@@ -102,6 +108,14 @@ interface DispatchedPulseEntry {
 // never send the command it exists for. The pulse itself waits on the operation signal, so a stop never has
 // to outlast a device that keeps reporting motion.
 const UNCANCELABLE = new AbortController().signal
+
+// Default milliseconds the commanded guide rates have to be reported.
+const DEFAULT_GUIDE_RATE_TIMEOUT = 10000
+
+// Absolute tolerance, as a fraction of the sidereal rate, for a reported guide rate. The rates are printed
+// with two decimals by most drivers, so 0.005 accepts that rounding while still telling apart the rates a
+// guider is set to, which differ by at least 0.05.
+const GUIDE_RATE_TOLERANCE = 0.005
 
 // Direction sharing an axis with each one. TELESCOPE_TIMED_GUIDE_NS and TELESCOPE_TIMED_GUIDE_WE are
 // single vectors, so a pulse in one direction is stopped by sending zero to the same or the paired one.
@@ -332,18 +346,30 @@ export class GuideOutputCommander implements DeviceHandler<GuideOutput>, Disposa
 		return window
 	}
 
-	// Sets the guide rate of both axes, as a fraction of the sidereal rate.
-	// Nothing moves, so there is nothing to wait for, but the device is acquired all the same: the rate
-	// scales every pulse issued after it, and changing it under a running guider or a DARV leg would
-	// silently rescale a correction already in flight.
-	async setGuideRate(scope: OperationScope, device: GuideOutput, rightAscension: number, declination: number): Promise<OperationResult<void>> {
-		return await scope.start<void>('guideRate', [{ key: resourceKey(device), device }], () => {
+	// Sets the guide rate of both axes, as a fraction of the sidereal rate, and resolves once the driver reports
+	// both within GUIDE_RATE_TOLERANCE. Nothing moves, but the device is acquired all the same: the rate scales
+	// every pulse issued after it, and changing it under a running guider or a DARV leg would silently rescale
+	// a correction already in flight.
+	async setGuideRate(scope: OperationScope, device: GuideOutput, rightAscension: number, declination: number, options: GuideRateOptions = {}): Promise<OperationResult<void>> {
+		return await scope.start<void>('guideRate', [{ key: resourceKey(device), device }], async (context) => {
 			if (!device.connected) return failedOperationResult('disconnected')
 			if (!device.canSetGuideRate) return failedOperationResult('unexpectedState', `guide output ${device.name} cannot set guide rate`)
 
-			this.guideOutputManager.guideRate(device, rightAscension, declination)
+			const observed = await waitForDeviceState<GuideOutputUpdate>({
+				signal: context.signal,
+				timeout: options.timeout ?? DEFAULT_GUIDE_RATE_TIMEOUT,
+				subscribe: (listener) => this.#subscribe(device, listener),
+				current: () => ({ device }),
+				evaluate: (update) => {
+					if (!device.connected) return 'disconnected'
+					if (update.state === 'Alert' && update.property === 'guideRate') return 'alert'
+					const { guideRate } = device
+					return Math.abs(guideRate.rightAscension - rightAscension) <= GUIDE_RATE_TOLERANCE && Math.abs(guideRate.declination - declination) <= GUIDE_RATE_TOLERANCE ? 'success' : 'pending'
+				},
+				command: () => this.guideOutputManager.guideRate(device, rightAscension, declination),
+			})
 
-			return successfulOperationResult(undefined)
+			return observed.ok ? successfulOperationResult(undefined) : observed
 		}).result
 	}
 

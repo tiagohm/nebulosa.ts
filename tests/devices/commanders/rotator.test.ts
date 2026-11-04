@@ -196,6 +196,35 @@ test('homes after observing the homing motion and supports synchronization and r
 	await waitUntil(() => !rotator.reversed)
 })
 
+test('times out a sync or a reversal the driver never reports', async () => {
+	const rotator = await connected()
+	const syncTo = spyOn(rotatorManager, 'syncTo').mockImplementation(() => {})
+	const reverse = spyOn(rotatorManager, 'reverse').mockImplementation(() => {})
+
+	try {
+		expect(await rotatorCommander.syncTo(operationCoordinator, rotator, rotator.angle.value + 45, { timeout: 30 })).toMatchObject(failedOperationResult('timeout'))
+		expect(await rotatorCommander.reverse(operationCoordinator, rotator, !rotator.reversed, { timeout: 30 })).toMatchObject(failedOperationResult('timeout'))
+		expect(isFree(rotator)).toBeTrue()
+	} finally {
+		syncTo.mockRestore()
+		reverse.mockRestore()
+	}
+})
+
+test('accepts a sync reported as another representative of the same direction', async () => {
+	const rotator = await connected()
+	const syncTo = spyOn(rotatorManager, 'syncTo').mockImplementation((device, angle) => {
+		rotatorManager.numberVector(client, { device: device.name, name: 'ABS_ROTATOR_ANGLE', state: 'Ok', elements: { ANGLE: { name: 'ANGLE', value: angle === 0 ? 360 : angle - 360 } } }, 'setNumberVector')
+	})
+
+	try {
+		expect(await rotatorCommander.syncTo(operationCoordinator, rotator, 0, { timeout: 1000 })).toMatchObject({ ok: true })
+		expect(syncTo).toHaveBeenCalledWith(rotator, 0)
+	} finally {
+		syncTo.mockRestore()
+	}
+})
+
 test('stops a canceled rotation before releasing the rotator', async () => {
 	const rotator = await connected()
 	const moving = rotatorCommander.moveTo(operationCoordinator, rotator, 180, { timeout: 3000 })

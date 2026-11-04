@@ -11,12 +11,14 @@ import { resourceKey } from '../orchestration/resource'
 // Coordinated mutations of an INDI focuser.
 // Positions and relative moves are in driver steps, resolved against the device range before being
 // commanded, and every duration is in milliseconds. Moves acquire the focuser and resolve only after it
-// stops at the target; a failed or canceled move is physically aborted first. The emergency stop does not
-// acquire, so it can always reach a focuser moving under another owner.
+// stops at the target; a failed or canceled move is physically aborted first. The settings that move
+// nothing (sync, reverse, backlash) acquire it too and resolve once the driver reports them. The emergency
+// stop does not acquire, so it can always reach a focuser moving under another owner.
 
 // Timing overrides for one focuser command; every duration is in milliseconds.
 export interface FocuserCommandOptions {
-	// Maximum time the commanded position may take to be reached.
+	// Maximum time the commanded position may take to be reached (30 s by default), or a setting that moves
+	// nothing, such as a sync, to be reported (10 s by default).
 	readonly timeout?: number
 	// Maximum time a physical stop has to bring the focuser back to a standstill.
 	readonly settleTimeout?: number
@@ -56,6 +58,9 @@ const DEFAULT_MOVE_TIMEOUT = 30000
 
 // Default milliseconds a physical stop has to bring the focuser to a standstill.
 const DEFAULT_SETTLE_TIMEOUT = 15000
+
+// Default milliseconds a setting that moves nothing has to be reported.
+const DEFAULT_SETTING_TIMEOUT = 10000
 
 // Properties whose Alert state means the commanded move itself failed. An Alert on an unrelated vector,
 // such as the temperature, must not fail a move that is otherwise progressing.
@@ -131,44 +136,57 @@ export class FocuserCommander implements DeviceHandler<Focuser>, FocuserMover, D
 		return await this.#relative(scope, 'focuserMoveOut', focuser, steps, false, options)
 	}
 
-	// Redefines the position the focuser reports without moving it, so there is no transition to wait for.
-	async syncTo(scope: OperationScope, focuser: Focuser, position: number): Promise<OperationResult<void>> {
-		return await this.#mutate(
+	// Redefines the position the focuser reports without moving it, in steps resolved against its range, and
+	// resolves once the focuser reports that position.
+	async syncTo(scope: OperationScope, focuser: Focuser, position: number, options: FocuserCommandOptions = {}): Promise<OperationResult<void>> {
+		const target = focuserPosition(focuser, position)
+
+		return await this.#setting(
 			scope,
 			'focuserSync',
 			focuser,
 			() => focuser.canSync,
 			'sync',
-			() => this.focuserManager.syncTo(focuser, focuserPosition(focuser, position)),
+			'position',
+			() => focuser.position.value === target,
+			() => this.focuserManager.syncTo(focuser, target),
+			options,
 		)
 	}
 
 	// Inverts the motor direction at the driver, for a focuser mounted so that inward would otherwise drive it
 	// outward; the reported position keeps decreasing inward. This acquires the focuser like any other
 	// command: it silently changes the physical sense of every later move, which a move in flight would feel.
-	async reverse(scope: OperationScope, focuser: Focuser, enabled: boolean): Promise<OperationResult<void>> {
-		return await this.#mutate(
+	// Resolves once the driver reports the requested direction.
+	async reverse(scope: OperationScope, focuser: Focuser, enabled: boolean, options: FocuserCommandOptions = {}): Promise<OperationResult<void>> {
+		return await this.#setting(
 			scope,
 			'focuserReverse',
 			focuser,
 			() => focuser.canReverse,
 			'reverse its motion',
+			'reversed',
+			() => focuser.reversed === enabled,
 			() => this.focuserManager.reverse(focuser, enabled),
+			options,
 		)
 	}
 
 	// Enables or disables the backlash compensation of the driver itself, which then overshoots and returns on
 	// every later move that reverses direction. This acquires the focuser like any other command: a move in
-	// flight would otherwise end at a position compensated differently from the one it was planned for. The
-	// command is not waited for, since the switch takes effect at once and moves nothing.
-	async setBacklash(scope: OperationScope, focuser: Focuser, enabled: boolean): Promise<OperationResult<void>> {
-		return await this.#mutate(
+	// flight would otherwise end at a position compensated differently from the one it was planned for.
+	// Resolves once the driver reports the compensation in the requested state.
+	async setBacklash(scope: OperationScope, focuser: Focuser, enabled: boolean, options: FocuserCommandOptions = {}): Promise<OperationResult<void>> {
+		return await this.#setting(
 			scope,
 			'focuserBacklash',
 			focuser,
 			() => focuser.hasBacklash,
 			'toggle its backlash compensation',
+			'backlashEnabled',
+			() => focuser.backlashEnabled === enabled,
 			() => this.focuserManager.backlash(focuser, enabled),
+			options,
 		)
 	}
 
@@ -241,16 +259,28 @@ export class FocuserCommander implements DeviceHandler<Focuser>, FocuserMover, D
 		}).result
 	}
 
-	// Runs a mutation that has no observable completion under a scope owning the focuser, so it cannot be
-	// interleaved with a move or with any other operation already holding the device.
-	async #mutate(scope: OperationScope, kind: string, focuser: Focuser, supported: () => boolean, description: string, command: VoidFunction): Promise<OperationResult<void>> {
-		return await scope.start<void>(kind, [{ key: resourceKey(focuser), device: focuser }], () => {
+	// Runs a setting that moves nothing under a scope owning the focuser, so it cannot be interleaved with a
+	// move or with any other operation already holding the device, and resolves once `reached` holds for the
+	// reported state. An Alert on `property` fails it as `alert`.
+	async #setting(scope: OperationScope, kind: string, focuser: Focuser, supported: () => boolean, description: string, property: keyof Focuser & string, reached: () => boolean, command: VoidFunction, options: FocuserCommandOptions): Promise<OperationResult<void>> {
+		return await scope.start<void>(kind, [{ key: resourceKey(focuser), device: focuser }], async (context) => {
 			if (!focuser.connected) return failedOperationResult('disconnected')
 			if (!supported()) return unsupported(focuser, description)
 
-			command()
+			const observed = await waitForDeviceState<FocuserUpdate>({
+				signal: context.signal,
+				timeout: options.timeout ?? DEFAULT_SETTING_TIMEOUT,
+				subscribe: (listener) => this.#subscribe(focuser, listener),
+				current: () => ({ focuser }),
+				evaluate: (update) => {
+					if (!focuser.connected) return 'disconnected'
+					if (update.state === 'Alert' && update.property === property) return 'alert'
+					return reached() ? 'success' : 'pending'
+				},
+				command,
+			})
 
-			return successfulOperationResult(undefined)
+			return observed.ok ? successfulOperationResult(undefined) : observed
 		}).result
 	}
 

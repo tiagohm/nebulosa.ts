@@ -1,6 +1,6 @@
 import { clamp } from '../../math/numerical/math'
 import type { Weather } from '../indi/device'
-import type { DeviceHandler } from '../indi/manager/device'
+import type { DeviceHandler, StatefulSetVector } from '../indi/manager/device'
 import type { WeatherManager } from '../indi/manager/weather'
 import type { PropertyState } from '../indi/types'
 import { failedOperationResult, successfulOperationResult, type OperationResult, type OperationScope } from '../orchestration/operation'
@@ -11,13 +11,13 @@ import { resourceKey } from '../orchestration/resource'
 // Nothing here moves: the commands set how often the driver re-reads its sensors (seconds), the window it
 // averages them over (hours), and ask for an immediate re-read. The two periods resolve only once the driver
 // reports them, so a safety decision taken right after never relies on readings sampled the old way; the
-// refresh is only dispatched, since a re-read may legitimately publish the very same values. Every command
-// acquires the station all the same, because a feature watching the conditions owns how they are sampled.
-// Every duration of the options is in milliseconds.
+// refresh resolves once the driver answers WEATHER_REFRESH, since a re-read may legitimately publish the very
+// same values. Every command acquires the station all the same, because a feature watching the conditions
+// owns how they are sampled. Every duration of the options is in milliseconds.
 
 // Timing overrides for one weather command; every duration is in milliseconds.
 export interface WeatherCommandOptions {
-	// Maximum time the driver may take to report the commanded period.
+	// Maximum time the driver may take to report the commanded period or answer the refresh.
 	readonly timeout?: number
 }
 
@@ -30,6 +30,8 @@ interface WeatherUpdate {
 	readonly property?: keyof Weather & string
 	// INDI state published with the change, absent when the update is a poll of the current state.
 	readonly state?: PropertyState
+	// Command vector the driver answered, for the commands whose effect no device field reflects.
+	readonly vector?: StatefulSetVector
 }
 
 // Default milliseconds a period change has to be reported. Drivers apply it at once, so this only leaves room
@@ -74,6 +76,11 @@ export class WeatherCommander implements DeviceHandler<Weather>, Disposable {
 	// Feeds every waiter observing the device, which is how a command learns it took effect or hit an Alert.
 	updated(weather: Weather, property: keyof Weather & string, state?: PropertyState) {
 		this.#emit({ weather, property, state })
+	}
+
+	// Feeds every waiter with the answer to a command vector, such as the WEATHER_REFRESH state.
+	vectorState(weather: Weather, vector: StatefulSetVector) {
+		this.#emit({ weather, vector, state: vector.state })
 	}
 
 	// Wakes every waiter so it reevaluates; removal is reported as a disconnected device by evaluation,
@@ -142,17 +149,32 @@ export class WeatherCommander implements DeviceHandler<Weather>, Disposable {
 		}).result
 	}
 
-	// Asks the driver for an immediate re-read of every sensor. Only dispatched: the readings it publishes
-	// afterwards are reported as device updates and may equal the previous ones. A station without a
-	// writable refresh switch is refused as `unexpectedState`.
-	async refresh(scope: OperationScope, weather: Weather): Promise<OperationResult<void>> {
-		return await scope.start<void>('weatherRefresh', [{ key: resourceKey(weather), device: weather }], () => {
+	// Asks the driver for an immediate re-read of every sensor and resolves once it answers WEATHER_REFRESH with
+	// Ok or Idle; Busy is still pending and an Alert fails it as `alert`. The readings it publishes afterwards
+	// are reported as device updates and may equal the previous ones. A station without a writable refresh
+	// switch is refused as `unexpectedState`.
+	async refresh(scope: OperationScope, weather: Weather, options: WeatherCommandOptions = {}): Promise<OperationResult<void>> {
+		return await scope.start<void>('weatherRefresh', [{ key: resourceKey(weather), device: weather }], async (context) => {
 			if (!weather.connected) return failedOperationResult('disconnected')
 			if (!this.weatherManager.canRefresh(weather)) return unsupported(weather, 'refresh its readings')
 
-			this.weatherManager.refresh(weather)
+			const observed = await waitForDeviceState<WeatherUpdate>({
+				signal: context.signal,
+				timeout: options.timeout ?? DEFAULT_COMMAND_TIMEOUT,
+				subscribe: (listener) => this.#subscribe(weather, listener),
+				current: () => ({ weather }),
+				evaluate: ({ vector }) => {
+					if (!weather.connected) return 'disconnected'
+					if (vector?.name !== 'WEATHER_REFRESH') return 'pending'
+					if (vector.state === 'Alert') return 'alert'
+					return vector.state === 'Ok' || vector.state === 'Idle' ? 'success' : 'pending'
+				},
+				command: () => {
+					this.weatherManager.refresh(weather)
+				},
+			})
 
-			return successfulOperationResult(undefined)
+			return observed.ok ? successfulOperationResult(undefined) : observed
 		}).result
 	}
 
