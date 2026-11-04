@@ -7,10 +7,12 @@
 	"scripts": {
 		"postinstall": "bun run postinstall.ts",
 		"index": "bun run scripts/codebase.index.ts",
-		"review": "bun run scripts/review/review.ts",
 		"docs": "docsify serve ./docs"
 	},
 	"devDependencies": {
 		"@types/bun": "latest"
+	},
+	"overrides": {
+		"bun-types": "canary"
 	}
 }

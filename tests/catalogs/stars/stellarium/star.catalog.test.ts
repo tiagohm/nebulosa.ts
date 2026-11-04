@@ -181,7 +181,7 @@ describe('open', () => {
 	})
 
 	test('required levels', async () => {
-		expect(openStellariumStarCatalog(rootA, { requiredLevels: [0, 3, 4] })).rejects.toThrow('missing required Stellarium star catalog levels: 3, 4')
+		await expect(openStellariumStarCatalog(rootA, { requiredLevels: [0, 3, 4] })).rejects.toThrow('missing required Stellarium star catalog levels: 3, 4')
 		await using catalog = await openStellariumStarCatalog(rootA, { requiredLevels: [0, 1, 2] })
 		expect(catalog.isOpen).toBeTrue()
 	})
@@ -194,19 +194,19 @@ describe('open', () => {
 			return root
 		}
 
-		expect(openStellariumStarCatalog(join(base, 'missing'))).rejects.toThrow('not readable')
-		expect(openStellariumStarCatalog(await make('empty', {}))).rejects.toThrow('no Stellarium star catalog file')
-		expect(openStellariumStarCatalog(await make('ambiguous', { 'stars_0_a.cat': level0, 'stars_0_b.cat': level0 }))).rejects.toThrow('ambiguous Stellarium star catalog level 0: stars_0_a.cat, stars_0_b.cat')
-		expect(openStellariumStarCatalog(await make('mismatch', { 'stars_1_x.cat': level0 }))).rejects.toThrow('stars_1_x.cat (level 1): header level 0 does not match')
-		expect(openStellariumStarCatalog(await make('truncated', { 'stars_1_x.cat': level1.subarray(0, level1.byteLength - 1) }))).rejects.toThrow('stars_1_x.cat (level 1): file size')
-		expect(openStellariumStarCatalog(await make('trailing', { 'stars_1_x.cat': Buffer.concat([level1, Buffer.alloc(1)]) }))).rejects.toThrow('file size')
-		expect(openStellariumStarCatalog(await make('table', { 'stars_2_x.cat': level2.subarray(0, 100) }))).rejects.toThrow('zone table is truncated')
-		expect(openStellariumStarCatalog(await make('header', { 'stars_2_x.cat': level2.subarray(0, 20) }))).rejects.toThrow('smaller than the header')
-		expect(openStellariumStarCatalog(await make('valid-and-invalid', { 'stars_0_x.cat': level0, 'stars_1_x.cat': level1.subarray(0, 50) }))).rejects.toThrow('stars_1_x.cat')
-		expect(openStellariumStarCatalog(await make('escape', { 'starsConfig.json': JSON.stringify({ catalogs: [{ fileName: '../stars_0_0v0_21.cat', id: 'stars0' }] }) }))).rejects.toThrow('not a plain file name')
-		expect(openStellariumStarCatalog(await make('json', { 'defaultStarsConfig.json': '{' }))).rejects.toThrow('malformed JSON')
-		expect(openStellariumStarCatalog(await make('duplicate', { 'starsConfig.json': JSON.stringify({ catalogs: [{ fileName: 'stars_0_a.cat' }, { fileName: 'b.cat', id: 'stars0' }] }) }))).rejects.toThrow('level 0 is listed more than once')
-		expect(openStellariumStarCatalog(await make('nolevel', { 'starsConfig.json': JSON.stringify({ catalogs: [{ fileName: 'b.cat' }] }) }))).rejects.toThrow('no level for b.cat')
+		await expect(openStellariumStarCatalog(join(base, 'missing'))).rejects.toThrow('not readable')
+		await expect(openStellariumStarCatalog(await make('empty', {}))).rejects.toThrow('no Stellarium star catalog file')
+		await expect(openStellariumStarCatalog(await make('ambiguous', { 'stars_0_a.cat': level0, 'stars_0_b.cat': level0 }))).rejects.toThrow('ambiguous Stellarium star catalog level 0: stars_0_a.cat, stars_0_b.cat')
+		await expect(openStellariumStarCatalog(await make('mismatch', { 'stars_1_x.cat': level0 }))).rejects.toThrow('stars_1_x.cat (level 1): header level 0 does not match')
+		await expect(openStellariumStarCatalog(await make('truncated', { 'stars_1_x.cat': level1.subarray(0, level1.byteLength - 1) }))).rejects.toThrow('stars_1_x.cat (level 1): file size')
+		await expect(openStellariumStarCatalog(await make('trailing', { 'stars_1_x.cat': Buffer.concat([level1, Buffer.alloc(1)]) }))).rejects.toThrow('file size')
+		await expect(openStellariumStarCatalog(await make('table', { 'stars_2_x.cat': level2.subarray(0, 100) }))).rejects.toThrow('zone table is truncated')
+		await expect(openStellariumStarCatalog(await make('header', { 'stars_2_x.cat': level2.subarray(0, 20) }))).rejects.toThrow('smaller than the header')
+		await expect(openStellariumStarCatalog(await make('valid-and-invalid', { 'stars_0_x.cat': level0, 'stars_1_x.cat': level1.subarray(0, 50) }))).rejects.toThrow('stars_1_x.cat')
+		await expect(openStellariumStarCatalog(await make('escape', { 'starsConfig.json': JSON.stringify({ catalogs: [{ fileName: '../stars_0_0v0_21.cat', id: 'stars0' }] }) }))).rejects.toThrow('not a plain file name')
+		await expect(openStellariumStarCatalog(await make('json', { 'defaultStarsConfig.json': '{' }))).rejects.toThrow('malformed JSON')
+		await expect(openStellariumStarCatalog(await make('duplicate', { 'starsConfig.json': JSON.stringify({ catalogs: [{ fileName: 'stars_0_a.cat' }, { fileName: 'b.cat', id: 'stars0' }] }) }))).rejects.toThrow('level 0 is listed more than once')
+		await expect(openStellariumStarCatalog(await make('nolevel', { 'starsConfig.json': JSON.stringify({ catalogs: [{ fileName: 'b.cat' }] }) }))).rejects.toThrow('no level for b.cat')
 	})
 
 	test('state errors and options', async () => {
@@ -223,19 +223,19 @@ describe('open', () => {
 		const catalog = new StellariumStarCatalog()
 		expect(catalog.isOpen).toBeFalse()
 		expect(catalog.levels).toEqual([])
-		expect(catalog.queryCone(0, 0, 1)).rejects.toThrow('not open')
-		expect(catalog.get(0, 0, 0)).rejects.toThrow('not open')
+		await expect(catalog.queryCone(0, 0, 1)).rejects.toThrow('not open')
+		await expect(catalog.get(0, 0, 0)).rejects.toThrow('not open')
 
 		const opening = catalog.open(rootA)
-		expect(catalog.open(rootA)).rejects.toThrow('already open')
+		await expect(catalog.open(rootA)).rejects.toThrow('already open')
 		await opening
-		expect(catalog.open(rootA)).rejects.toThrow('already open')
+		await expect(catalog.open(rootA)).rejects.toThrow('already open')
 		await catalog.close()
 		await catalog.close()
 		expect(catalog.isOpen).toBeFalse()
 
 		// A failed open leaves the catalog closed and reusable.
-		expect(catalog.open(join(base, 'missing'))).rejects.toThrow()
+		await expect(catalog.open(join(base, 'missing'))).rejects.toThrow()
 		await catalog.open(rootB)
 		expect(catalog.levels).toHaveLength(2)
 		await catalog.close()
@@ -454,8 +454,8 @@ describe('lifecycle', () => {
 		await using catalog = await openStellariumStarCatalog(root, { maxConcurrentReads: 1 })
 		await fs.truncate(join(root, 'stars_1_x.cat'), level1.byteLength - 40)
 
-		expect(catalog.queryCone(0, 0, PI)).rejects.toThrow('stars_1_x.cat (level 1)')
-		expect(catalog.verifyChecksums()).rejects.toThrow('unexpected end of file')
+		await expect(catalog.queryCone(0, 0, PI)).rejects.toThrow('stars_1_x.cat (level 1)')
+		await expect(catalog.verifyChecksums()).rejects.toThrow('unexpected end of file')
 
 		// The failed operations released the only read buffer: a record before the truncation is still readable.
 		expect((await catalog.get(1, zoneOf(ORION_RA, ORION_DEC, 1), 0))?.gaiaId).toBe(11n)

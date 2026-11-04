@@ -462,7 +462,10 @@ test('write keyword', () => {
 	expect(write(['SIMPLE', true, 'file does conform to FITS standard'])).toBe('SIMPLE  =                    T / file does conform to FITS standard             ')
 	expect(write(['BITPIX', 16, 'number of bits per data pixel'])).toBe('BITPIX  =                   16 / number of bits per data pixel                  ')
 	expect(write(['DATE', '2007-08-08T19:29:51.619', 'date this file was written'])).toBe("DATE    = '2007-08-08T19:29:51.619' / date this file was written                ")
-	expect(write(['CDELT1', -2.23453599999999991165e-4, 'arcsec per x-pixel in degrees'])).toBe('CDELT1  = -2.23453599999999991165E-4 / arcsec per x-pixel in degrees            ')
+	expect(write(['CDELT1', -2.234536e-4, 'arcsec per x-pixel in degrees'])).toBe('CDELT1  =         -2.234536E-4 / arcsec per x-pixel in degrees                  ')
+	// The fewest digits that read back as the same double, always with a decimal point in the mantissa.
+	expect(write(['CCD-TEMP', 19.539999999999999, 'sensor'])).toBe('CCD-TEMP=             1.954E+1 / sensor                                         ')
+	expect(write(['EXPTIME', 0.5, 'seconds'])).toBe('EXPTIME =               5.0E-1 / seconds                                        ')
 	expect(write(['COMMENT', undefined, "FITS (Flexible Image Transport System) format is defined in 'Astronomy"])).toBe("COMMENT  FITS (Flexible Image Transport System) format is defined in 'Astronomy ")
 	expect(write(['COMMENT', undefined, '/'])).toBe('COMMENT  /                                                                      ')
 	expect(write(['END', undefined, undefined])).toBe('END                                                                             ')
@@ -483,7 +486,7 @@ test('write all keywords', () => {
 	expect(write({ SIMPLE: true })).toBe('SIMPLE  =                    T / Primary HDU                                    ')
 	expect(write({ BITPIX: 16 })).toBe('BITPIX  =                   16 / Bits per data element                          ')
 	expect(write({ DATE: '2007-08-08T19:29:51.619' })).toBe("DATE    = '2007-08-08T19:29:51.619' / Date of file creation                     ")
-	expect(write({ CDELT1: -2.23453599999999991165e-4 })).toBe('CDELT1  = -2.23453599999999991165E-4 / Coordinate spacing along axis            ')
+	expect(write({ CDELT1: -2.234536e-4 })).toBe('CDELT1  =         -2.234536E-4 / Coordinate spacing along axis                  ')
 	expect(write({ COMMENT: "FITS (Flexible Image Transport System) format is defined in 'Astronomy" })).toBe("COMMENT  FITS (Flexible Image Transport System) format is defined in 'Astronomy ")
 	expect(write({ COMMENT: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\nBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB' }, 160)).toBe(
 		'COMMENT  AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA COMMENT  BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB ',
@@ -603,7 +606,7 @@ test('escape keyword', () => {
 	expect(sink).toEqual(source)
 })
 
-test('rejects a non-Rice compressed image HDU', () => {
+test('rejects a non-Rice compressed image HDU', async () => {
 	const header: FitsHeader = {
 		XTENSION: 'BINTABLE',
 		BITPIX: 8,
@@ -622,7 +625,7 @@ test('rejects a non-Rice compressed image HDU', () => {
 	const hdu: FitsHdu = { header, data: { offset: 0, size: 800 } }
 	const output = new Float64Array(8 * 100)
 
-	expect(new FitsImageReader(hdu).read(bufferSource(Buffer.alloc(800)), output)).rejects.toThrow('unsupported FITS compression')
+	await expect(new FitsImageReader(hdu).read(bufferSource(Buffer.alloc(800)), output)).rejects.toThrow('unsupported FITS compression')
 })
 
 test('fits image reader and writer honor non-zero backing buffer offsets', async () => {
@@ -958,7 +961,7 @@ describe('row access', () => {
 		const fits = await readFits(source)
 		const reader = new FitsImageReader(fits!.hdus[1])
 		expect(reader.rowAddressable).toBeFalse()
-		expect(reader.readRows(source, new Float32Array(2), 0, 1)).rejects.toThrow('not addressable')
+		await expect(reader.readRows(source, new Float32Array(2), 0, 1)).rejects.toThrow('not addressable')
 	})
 
 	test('streams floating-point rows in physical units with no normalization', async () => {
@@ -987,6 +990,6 @@ describe('row access', () => {
 		const writer = new FitsImageRowWriter(sink, { BITPIX: -32, NAXIS1: 2, NAXIS2: 1 })
 		await writer.begin()
 		await writer.write(new Float32Array([1]))
-		expect(writer.end()).rejects.toThrow('incomplete')
+		await expect(writer.end()).rejects.toThrow('incomplete')
 	})
 })

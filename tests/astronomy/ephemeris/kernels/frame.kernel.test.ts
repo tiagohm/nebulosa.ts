@@ -144,18 +144,18 @@ test('TKFRAME MATRIX composes onto MOON_PA_DE421', async () => {
 
 test('unknown frames and missing binary PCK segments fail explicitly', async () => {
 	const empty = new SpiceFrames(new SpiceKernelPool())
-	expect(empty.frame('MOON_PA')).rejects.toThrow('unknown frame: MOON_PA')
-	expect(empty.frame(31006)).rejects.toThrow('unknown frame: 31006')
+	await expect(empty.frame('MOON_PA')).rejects.toThrow('unknown frame: MOON_PA')
+	await expect(empty.frame(31006)).rejects.toThrow('unknown frame: 31006')
 
 	const pool = new SpiceKernelPool()
 	await using fk = fileHandleSource(await fs.open('data/moon_080317.tf'))
 	pool.load(await readTextKernel(fk))
 
 	const frames = new SpiceFrames(pool)
-	expect(frames.frame('MOON_PA_DE421')).rejects.toThrow('missing binary PCK segment for frame 31006')
+	await expect(frames.frame('MOON_PA_DE421')).rejects.toThrow('missing binary PCK segment for frame 31006')
 })
 
-test('cyclic TK chains are rejected', () => {
+test('cyclic TK chains are rejected', async () => {
 	const pool = new SpiceKernelPool()
 	pool.load(
 		new Map([
@@ -174,10 +174,10 @@ test('cyclic TK chains are rejected', () => {
 		]),
 	)
 
-	expect(new SpiceFrames(pool).frame('A')).rejects.toThrow('cyclic frame definition: 100')
+	await expect(new SpiceFrames(pool).frame('A')).rejects.toThrow('cyclic frame definition: 100')
 })
 
-test('unsupported frame classes are rejected', () => {
+test('unsupported frame classes are rejected', async () => {
 	const pool = new SpiceKernelPool()
 	pool.load(
 		new Map([
@@ -187,7 +187,7 @@ test('unsupported frame classes are rejected', () => {
 		]),
 	)
 
-	expect(new SpiceFrames(pool).frame('CK')).rejects.toThrow('unsupported frame class 3 for frame 3')
+	await expect(new SpiceFrames(pool).frame('CK')).rejects.toThrow('unsupported frame class 3 for frame 3')
 })
 
 test('lunar libration at 2019-12-20 11:05 UTC matches Skyfield', async () => {

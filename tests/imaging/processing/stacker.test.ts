@@ -1,16 +1,19 @@
 import { describe, expect, test } from 'bun:test'
+import { applyTransformToPoint } from '../../../src/astrometry/matching/star.matching'
 import type { StreakClassification } from '../../../src/imaging/analysis/streak/classification.types'
 import { createStreakMask, type StreakMask } from '../../../src/imaging/analysis/streak/mask'
 import type { Streak } from '../../../src/imaging/analysis/streak/types'
 import { createStreakDetectionWorkspace } from '../../../src/imaging/analysis/streak/workspace'
 import { readImageFromBuffer } from '../../../src/imaging/model/image'
 import { type CfaPattern, type Image, shiftCfaPattern } from '../../../src/imaging/model/types'
+import { calibrate } from '../../../src/imaging/processing/calibration'
 import { bayer } from '../../../src/imaging/processing/debayer'
-import { LiveStacker, type StackingFrame, type StackingOptions, stackFrames } from '../../../src/imaging/processing/stacker'
+import { LiveStacker, referenceQualityScore, type StackingFrame, type StackingOptions, stackFrames } from '../../../src/imaging/processing/stacker'
 import type { DetectedStar } from '../../../src/imaging/stars/detector'
 import { renderSyntheticStreak } from '../../../src/imaging/synthetic/streak'
 import { Bitpix, writeFits } from '../../../src/io/formats/fits/fits'
 import { bufferSink } from '../../../src/io/io'
+import { SYNTHETIC_FILTERS, type SyntheticFilter, type SyntheticFrame, syntheticField, syntheticLight, syntheticMasters, syntheticTransform, syntheticTruth } from '../../util/stacking'
 
 const DEFAULT_STACK_OPTIONS = {
 	minAcceptedStars: 3,
@@ -1057,6 +1060,35 @@ describe('stacker batch mode', () => {
 	})
 })
 
+describe('stacked image headers', () => {
+	test('a resampled stack of integer frames is written as floating point without source scaling', async () => {
+		const reference = makeImage(18, 18, 1, (x, y) => 0.123456 + ((x * 3 + y * 5) % 11) / 64)
+		Object.assign(reference.header, { BITPIX: Bitpix.SHORT, NAXIS: 2, NAXIS1: 18, NAXIS2: 18, BZERO: 32768, BSCALE: 1, CHECKSUM: 'stale', ZCMPTYPE: 'RICE_1' })
+		const current = translateImage(reference, 2, -1)
+		const result = stackFrames([makeFrame(reference, makeStars()), makeFrame(current, makeStars(-2, 1))], { ...DEFAULT_STACK_OPTIONS, interpolationMode: 'nearest' })
+		const image = result.finalImage!
+		expect(image.header.BITPIX).toBe(Bitpix.FLOAT)
+		expect(image.header.BZERO).toBeUndefined()
+		expect(image.header.BSCALE).toBeUndefined()
+		expect(image.header.CHECKSUM).toBeUndefined()
+		expect(image.header.ZCMPTYPE).toBeUndefined()
+		expect(reference.header.BZERO).toBe(32768)
+
+		const storage = Buffer.alloc(32768)
+		const sink = bufferSink(storage)
+		await writeFits(sink, [image])
+		const restored = (await readImageFromBuffer(storage.subarray(0, sink.position), { raw: 32 }))!
+		expectRawClose(restored.raw, image.raw, 1e-7)
+	})
+
+	test('reference quality score penalizes star-poor and masked frames', () => {
+		const quality = { starCount: 20, medianSNR: 30, medianHFD: 2, qualityScore: 100, estimatedBackground: 0.01, noise: 0.001, normalizedScore: 0.8 }
+		expect(referenceQualityScore(quality, 10)).toBeCloseTo(99.99, 12)
+		expect(referenceQualityScore(quality, 30)).toBeCloseTo(24.99, 12)
+		expect(referenceQualityScore(quality, 10, 0.5)).toBeCloseTo(49.99, 12)
+	})
+})
+
 describe('stacker normalization modes', () => {
 	// A frame large enough for a local grid, with enough structure for the cell estimators.
 	function localFrames(scale: (x: number, y: number) => number, offset: (x: number, y: number) => number) {
@@ -1077,6 +1109,31 @@ describe('stacker normalization modes', () => {
 		normalizationMode: 'local',
 		localNormalization: { gridSize: 4, minSamplesPerCell: 32, offsetDegree: 2, scaleDegree: 1 },
 	} as const satisfies StackingOptions
+
+	test('a frame registered at half a pixel matches a reference of the same sky with a unit scale', () => {
+		let state = 12345
+		// Independent, roughly Gaussian noise around one sky level from a deterministic generator.
+		const sky = () =>
+			makeImage(64, 64, 1, () => {
+				let noise = 0
+				for (let k = 0; k < 4; k++) noise += ((state = (state * 1103515245 + 12345) % 2147483648) / 2147483648 - 0.5) * 0.02
+				return 0.1 + noise
+			})
+		const reference = sky()
+		const current = sky()
+		const options = { ...DEFAULT_STACK_OPTIONS, combinationMethod: 'average', normalizationMode: 'background-scale', interpolationMode: 'bilinear' } as const satisfies StackingOptions
+
+		// Bilinear resampling at half a pixel in both axes halves the noise of the current frame, which a dispersion
+		// estimator measured after the resampling read as a gain of two.
+		const batch = stackFrames([makeFrame(reference, makeStars()), makeFrame(current, makeStars(0.5, 0.5))], options)
+		expect(batch.acceptedFrames).toBe(2)
+		expect(batch.diagnostics[1].normalization!.scales[0]).toBeCloseTo(1, 1)
+
+		const live = new LiveStacker(options)
+		live.add(makeFrame(reference, makeStars()))
+		const accepted = live.add(makeFrame(current, makeStars(0.5, 0.5)))
+		expect(accepted.normalization!.scales[0]).toBeCloseTo(1, 1)
+	})
 
 	test('local mode reports the global anchor and local diagnostics', () => {
 		const { reference, current } = localFrames(
@@ -1282,5 +1339,121 @@ describe('stacker normalization modes', () => {
 		const live = new LiveStacker(options)
 		live.add(frames[0])
 		expect(live.add(frames[1]).overlapFraction).toBeGreaterThan(0.9)
+	})
+})
+
+describe('stacker over a synthetic multi-filter acquisition', () => {
+	const EXPOSURE = 300
+	const FRAMES = 8
+	const NOISE = 2e-4
+	const field = syntheticField(96, 96, 40, 7)
+	const masters = syntheticMasters(field, EXPOSURE, 11)
+	const options = { minAcceptedStars: 6, minAcceptedInliers: 6, normalizationMode: 'none', interpolationMode: 'bicubic' } as const satisfies StackingOptions
+	// Interior pixels at least 10 px from every star and off every hot pixel: sky and nebula only.
+	const background: number[] = []
+
+	for (let y = 8; y < field.height - 8; y++) {
+		for (let x = 8; x < field.width - 8; x++) {
+			const index = y * field.width + x
+			if (field.stars.every((s) => (s.x - x) ** 2 + (s.y - y) ** 2 > 100) && !masters.hotPixels.includes(index)) background.push(index)
+		}
+	}
+
+	function calibratedFrames(filter: SyntheticFilter, cosmicRays: number, varied: boolean = false) {
+		const frames: StackingFrame[] = []
+
+		for (let i = 0; i < FRAMES; i++) {
+			const toReference = syntheticTransform(field, i === 0 ? 0 : 3 * Math.sin(i * 1.7), i === 0 ? 0 : 2.5 * Math.cos(i * 2.3), i === 0 ? 0 : 0.01 * (i - 4))
+			const transparency = varied ? 1 - 0.1 * (i % 3) : 1
+			const light = syntheticLight(field, masters, { filter, seed: 1000 + i, exposure: EXPOSURE, toReference, transparency, noise: NOISE, cosmicRays })
+			calibrate(light.image, { dark: masters.dark, flat: masters.flat, flatRepresentation: 'calibratedNormalized', darkScaling: 'none' })
+			// Varied frames also take distinct explicit weights, since the SNR factor of these bright fixtures saturates at its clamp.
+			frames.push({ image: light.image, stars: light.stars, id: i, weight: varied ? 1 + 0.15 * i : undefined })
+		}
+
+		return frames
+	}
+
+	function backgroundResidual(raw: ArrayLike<number>, truth: Image) {
+		let sumSq = 0
+		for (const index of background) sumSq += (raw[index] - truth.raw[index]) ** 2
+		return Math.sqrt(sumSq / background.length)
+	}
+
+	test('fixtures are deterministic and report their geometry', () => {
+		const a = syntheticLight(field, masters, { filter: 'Ha', seed: 5, toReference: syntheticTransform(field, 1.5, -2, 0.02), cosmicRays: 3 })
+		const b = syntheticLight(field, masters, { filter: 'Ha', seed: 5, toReference: syntheticTransform(field, 1.5, -2, 0.02), cosmicRays: 3 })
+		expect(a.image.raw).toEqual(b.image.raw)
+		expect(a.cosmicRays).toEqual(b.cosmicRays)
+		expect(a.image.header.FILTER).toBe('Ha')
+		expect(masters.hotPixels.length).toBeGreaterThan(0)
+		expect(background.length).toBeGreaterThan(500)
+
+		for (const star of a.stars) {
+			const reference = applyTransformToPoint(star.x, star.y, a.toReference)
+			expect(field.stars.some((s) => Math.abs(s.x - reference.x) < 1e-9 && Math.abs(s.y - reference.y) < 1e-9)).toBeTrue()
+		}
+	})
+
+	test('each filter integrates toward its calibrated truth, and rejection removes cosmic rays', () => {
+		// One frame's calibrated noise is at most NOISE / min(flat); averaging and resampling only reduce it.
+		const expected = NOISE / Math.min(...masters.flat.raw) / Math.sqrt(FRAMES)
+
+		for (const filter of SYNTHETIC_FILTERS) {
+			const truth = syntheticTruth(field, filter, EXPOSURE)
+			const frames = calibratedFrames(filter, 4)
+			const average = stackFrames(frames, { ...options, combinationMethod: 'average' })
+			const clipped = stackFrames(frames, { ...options, combinationMethod: 'sigma-clip' })
+			expect(average.acceptedFrames).toBe(FRAMES)
+			expect(clipped.acceptedFrames).toBe(FRAMES)
+			expect(backgroundResidual(clipped.finalImage!.raw, truth)).toBeLessThan(expected)
+			expect(backgroundResidual(average.finalImage!.raw, truth)).toBeGreaterThan(10 * expected)
+		}
+	})
+
+	test('weighted sigma clipping removes impulses in batch and is refused live', () => {
+		const truth = syntheticTruth(field, 'OIII', EXPOSURE)
+		const frames = calibratedFrames('OIII', 4)
+		const expected = NOISE / Math.min(...masters.flat.raw) / Math.sqrt(FRAMES)
+		const result = stackFrames(frames, { ...options, combinationMethod: 'weighted-sigma-clip', weightingMode: 'snr' })
+		expect(result.acceptedFrames).toBe(FRAMES)
+		expect(result.statistics.method).toBe('weighted-sigma-clip')
+		expect(backgroundResidual(result.finalImage!.raw, truth)).toBeLessThan(expected)
+
+		const live = new LiveStacker({ ...options, combinationMethod: 'weighted-sigma-clip' })
+		expect(live.add(frames[0]).reason).toBe('combination-method-not-supported-in-live-mode')
+	})
+
+	test('batch and live outputs stay byte-identical while the stacker internals are refactored', () => {
+		const frames = calibratedFrames('Ha', 4, true)
+		const hashes: Record<string, string> = {}
+		const digest = (...buffers: ArrayBufferView[]) => {
+			const hasher = new Bun.CryptoHasher('sha256')
+			for (const buffer of buffers) hasher.update(new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength))
+			return hasher.digest('hex').slice(0, 16)
+		}
+
+		for (const combinationMethod of ['sum', 'average', 'weighted-average', 'median', 'sigma-clip', 'min-max-average', 'winsorized-mean', 'percentile-clip-average'] as const) {
+			const result = stackFrames(frames, { ...options, combinationMethod, weightingMode: 'snr', normalizationMode: 'background-scale', cropMode: 'intersection', percentileClip: { lower: 0.25, upper: 0.75 } })
+			hashes[combinationMethod] = digest(result.finalImage!.raw, result.coverageMap!, result.validityMask!)
+		}
+
+		const live = new LiveStacker({ ...options, combinationMethod: 'weighted-average', weightingMode: 'snr', normalizationMode: 'background-scale' })
+		for (const frame of frames) live.add(frame)
+		const snapshot = live.snapshot()!
+		hashes.live = digest(snapshot.finalImage!.raw, snapshot.coverageMap!)
+
+		// Regression alarms recorded once normalization was measured on a nearest-neighbour resampling.
+		expect(hashes).toEqual({
+			sum: 'fb6490be2f81398e',
+			average: '5f3f6adf73276eca',
+			'weighted-average': 'a04c11083a5cf26e',
+			median: 'ae18b9726ac5175d',
+			'sigma-clip': 'fc1337e11e32e827',
+			'min-max-average': '8047310d6a398522',
+			'winsorized-mean': '6ed1aa4d1cc5bb4e',
+			'percentile-clip-average': '1d26f2cd4821e26e',
+			live: '0ebade1433fef44c',
+		})
 	})
 })

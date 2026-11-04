@@ -866,7 +866,7 @@ describe('caller destinations', () => {
 		await writeFrameExclusively(path, Buffer.from('first'))
 		expect(await Bun.file(path).text()).toBe('first')
 
-		expect(writeFrameExclusively(path, Buffer.from('second'))).rejects.toThrow(`the output file "${path}" already exists`)
+		await expect(writeFrameExclusively(path, Buffer.from('second'))).rejects.toThrow(`the output file "${path}" already exists`)
 		expect(await Bun.file(path).text()).toBe('first')
 		expect(await Array.fromAsync(new Bun.Glob('*').scan(directory))).toEqual(['frame.fit'])
 	})

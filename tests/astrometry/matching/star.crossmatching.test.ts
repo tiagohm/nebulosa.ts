@@ -263,13 +263,13 @@ describe('image-based star crossmatching', () => {
 		expect(result.summary.matchedCount).toBe(0)
 	})
 
-	test('rejects invalid right ascension, declination, radius, and camera geometry', () => {
+	test('rejects invalid right ascension, declination, radius, and camera geometry', async () => {
 		const catalog = new MockCatalog([])
 		const camera = { width: 1200, height: 900 }
 		const detectedStars: readonly DetectedStar[] = [{ x: 200, y: 250, flux: 2000, snr: 20, hfd: 2.2 }]
 
-		expect(crossMatchStars(detectedStars, catalog, { centerRA: Number.NaN, centerDEC: deg(10), radius: deg(1), camera })).rejects.toThrow()
-		expect(crossMatchStars(detectedStars, catalog, { centerRA: deg(10), centerDEC: deg(120), radius: deg(1), camera })).rejects.toThrow()
+		await expect(crossMatchStars(detectedStars, catalog, { centerRA: Number.NaN, centerDEC: deg(10), radius: deg(1), camera })).rejects.toThrow()
+		await expect(crossMatchStars(detectedStars, catalog, { centerRA: deg(10), centerDEC: deg(120), radius: deg(1), camera })).rejects.toThrow()
 	})
 
 	test('keeps extra detected stars unmatched while preserving solved associations', async () => {

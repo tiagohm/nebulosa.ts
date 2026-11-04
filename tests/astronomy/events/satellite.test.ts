@@ -9,7 +9,21 @@ import { earth, sun } from '../../../src/astronomy/ephemeris/models/analytical/v
 import { customEphemerisEndpoint, ephemerisPath, naifEphemerisEndpoint, relativeEphemerisPath } from '../../../src/astronomy/ephemeris/path'
 import { earthObserverEphemerisPath, sgp4EphemerisPath } from '../../../src/astronomy/ephemeris/path.adapter'
 import { earthOccultation } from '../../../src/astronomy/events/occultation.earth'
-import { isSatelliteSunlit, satelliteBetaAngle, satelliteConjunctions, satelliteEclipses, satelliteGroundFootprint, satelliteLookAngles, satelliteMagnitude, satellitePasses, satelliteShadowState, satelliteSubpoint, satelliteTrackingState, satelliteVisibleIntervals } from '../../../src/astronomy/events/satellite'
+import {
+	isSatelliteSunlit,
+	satelliteBetaAngle,
+	satelliteConjunctions,
+	satelliteEclipses,
+	satelliteGroundFootprint,
+	satelliteLookAngles,
+	satelliteMagnitude,
+	satellitePasses,
+	satelliteShadowState,
+	satelliteSubpoint,
+	satelliteTrackingState,
+	satelliteVisibleIntervals,
+	satelliteWindowPasses,
+} from '../../../src/astronomy/events/satellite'
 import { radialDopplerShift } from '../../../src/astronomy/formulas'
 import { Ellipsoid, geodeticLocation } from '../../../src/astronomy/observer/location'
 import { parseTLE, recordFromTLE, sgp4 } from '../../../src/astronomy/orbits/propagation/sgp4'
@@ -169,6 +183,80 @@ test('a raised horizon rejects the low passes', () => {
 	const passes = satellitePasses(ISS, SITE, EPOCH, timeShift(EPOCH, 1), { minAltitude: deg(30) })
 	expect(passes.length).toBe(2)
 	for (const pass of passes) expect(toDeg(pass.culmination.altitude)).toBeGreaterThan(30)
+})
+
+test('window passes match the complete passes inside the window', () => {
+	const complete = satellitePasses(ISS, SITE, EPOCH, timeShift(EPOCH, 1))
+	const window = satelliteWindowPasses(ISS, SITE, EPOCH, timeShift(EPOCH, 1))
+	expect(window).toHaveLength(complete.length)
+
+	for (let i = 0; i < window.length; i++) {
+		expect(window[i].startsBeforeWindow).toBe(false)
+		expect(window[i].endsAfterWindow).toBe(false)
+		expect(timeSubtract(window[i].start.time, complete[i].rise.time) * DAYSEC).toBeCloseTo(0, 2)
+		expect(timeSubtract(window[i].end.time, complete[i].set.time) * DAYSEC).toBeCloseTo(0, 2)
+		expect(toDeg(window[i].culmination.altitude)).toBeCloseTo(toDeg(complete[i].culmination.altitude), 4)
+	}
+})
+
+test('window passes keep a pass cut by either window edge', () => {
+	// The first pass rises at +50.25 min, culminates at +55.533 min and sets at +60.883 min (Skyfield).
+	const start = timeShift(EPOCH, 53 / 1440)
+	const stop = timeShift(EPOCH, 70 / 1440)
+	expect(satellitePasses(ISS, SITE, start, stop)).toEqual([])
+
+	const [leading] = satelliteWindowPasses(ISS, SITE, start, stop)
+	expect(leading.startsBeforeWindow).toBe(true)
+	expect(leading.endsAfterWindow).toBe(false)
+	expect(timeSubtract(leading.start.time, start)).toBeCloseTo(0, 12)
+	expect(leading.start.altitude).toBeGreaterThan(0)
+	expect(minutesAfterEpoch(leading.culmination.time)).toBeCloseTo(55.533, 1)
+	expect(minutesAfterEpoch(leading.end.time)).toBeCloseTo(60.883, 1)
+
+	// Inside the pass after its culmination: the highest point is the clipped start, not the true peak.
+	const inside = satelliteWindowPasses(ISS, SITE, timeShift(EPOCH, 57 / 1440), timeShift(EPOCH, 59 / 1440))
+	expect(inside).toHaveLength(1)
+	expect(inside[0].startsBeforeWindow).toBe(true)
+	expect(inside[0].endsAfterWindow).toBe(true)
+	expect(timeSubtract(inside[0].culmination.time, inside[0].start.time)).toBeCloseTo(0, 12)
+	expect(inside[0].culmination.altitude).toBeGreaterThan(inside[0].end.altitude)
+
+	const [trailing] = satelliteWindowPasses(ISS, SITE, timeShift(EPOCH, 45 / 1440), timeShift(EPOCH, 54 / 1440))
+	expect(trailing.startsBeforeWindow).toBe(false)
+	expect(trailing.endsAfterWindow).toBe(true)
+	expect(minutesAfterEpoch(trailing.start.time)).toBeCloseTo(50.25, 1)
+	expect(minutesAfterEpoch(trailing.end.time)).toBeCloseTo(54, 6)
+})
+
+test('window passes find a grazing pass with a fine enough step', () => {
+	// The highest pass of the day culminates at 38.774 deg, so a 38.6 deg mask leaves a pass of a few seconds.
+	const minAltitude = deg(38.6)
+	const passes = satelliteWindowPasses(ISS, SITE, EPOCH, timeShift(EPOCH, 1), { minAltitude, step: 2 * ONE_SECOND, tolerance: 1e-9 })
+	expect(passes).toHaveLength(1)
+	expect(toDeg(passes[0].culmination.altitude)).toBeCloseTo(38.774, 1)
+	expect(timeSubtract(passes[0].end.time, passes[0].start.time) * DAYSEC).toBeLessThan(30)
+	expect(passes[0].start.altitude).toBeCloseTo(minAltitude, 6)
+	expect(passes[0].end.altitude).toBeCloseTo(minAltitude, 6)
+})
+
+test('a geostationary satellite is one pass over the whole window or none', () => {
+	// Synthetic near-circular, near-equatorial orbit of one revolution per sidereal day.
+	const geo = recordFromTLE(parseTLE('1 41866U 16071A   20330.50000000 -.00000245  00000-0  00000-0 0  9990', '2 41866   0.0430 263.6000 0001000 180.0000 180.0000  1.00271000 14600', 'GEO'))
+	const subpoint = satelliteSubpoint(geo, EPOCH)
+	const below = geodeticLocation(subpoint.longitude + deg(30), deg(-10), 0)
+	const stop = timeShift(EPOCH, 1)
+
+	const [pass, ...rest] = satelliteWindowPasses(geo, below, EPOCH, stop, { step: 10 / 1440 })
+	expect(rest).toEqual([])
+	expect(pass.startsBeforeWindow).toBe(true)
+	expect(pass.endsAfterWindow).toBe(true)
+	expect(timeSubtract(pass.start.time, EPOCH)).toBeCloseTo(0, 12)
+	expect(timeSubtract(pass.end.time, stop)).toBeCloseTo(0, 12)
+	expect(toDeg(pass.culmination.altitude)).toBeGreaterThan(40)
+	expect(satellitePasses(geo, below, EPOCH, stop, { step: 10 / 1440 })).toEqual([])
+
+	const antipode = geodeticLocation(subpoint.longitude + Math.PI, deg(-10), 0)
+	expect(satelliteWindowPasses(geo, antipode, EPOCH, stop, { step: 10 / 1440 })).toEqual([])
 })
 
 test('the illumination state tracks the Earth shadow', () => {
@@ -402,6 +490,25 @@ test('visible intervals clip minimum altitude, magnitude and partial-window boun
 	expect(partial).toHaveLength(1)
 	expect(timeSubtract(partial[0].start.time, clippedStart)).toBeCloseTo(0, 12)
 	expect(timeSubtract(partial[0].end.time, clippedStop)).toBeCloseTo(0, 12)
+})
+
+test('visible intervals without a standard magnitude are limited by geometry, shadow and twilight only', () => {
+	const start = timeShift(EPOCH, 49 / 1440)
+	const stop = timeShift(EPOCH, 62 / 1440)
+	const { standardMagnitude, maximumMagnitude, ...geometry } = VISIBLE_OPTIONS
+	expect(standardMagnitude).toBeDefined()
+	expect(maximumMagnitude).toBeDefined()
+	const [unbounded] = satelliteVisibleIntervals(ISS, SITE, CACHED_SUN, start, stop, VISIBLE_OPTIONS)
+	const intervals = satelliteVisibleIntervals(ISS, SITE, CACHED_SUN, start, stop, geometry)
+	expect(intervals).toHaveLength(1)
+	expect(timeSubtract(intervals[0].start.time, unbounded.start.time) * DAYSEC).toBeCloseTo(0, 3)
+	expect(timeSubtract(intervals[0].end.time, unbounded.end.time) * DAYSEC).toBeCloseTo(0, 3)
+	expect(intervals[0].start.magnitude).toBeUndefined()
+	expect(intervals[0].culmination.magnitude).toBeUndefined()
+	expect(intervals[0].culmination.shadow).toBe('sunlit')
+
+	// The twilight ceiling still applies without brightness.
+	expect(satelliteVisibleIntervals(ISS, SITE, CACHED_SUN, start, stop, { ...geometry, maximumSunAltitude: deg(-6) })).toEqual([])
 })
 
 test('observer solar altitude clips an interval and daylight rejects a bright sunlit culmination', () => {

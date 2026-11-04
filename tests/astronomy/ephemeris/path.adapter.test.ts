@@ -95,7 +95,7 @@ test('SPK adapter accepts J2000 and rejects any other reference frame', async ()
 	expect(path.center).toEqual(naifEphemerisEndpoint(Naif.SSB))
 	expect(path.target).toEqual(naifEphemerisEndpoint(Naif.EARTH))
 	expect(path.stateAt(TIME)).toEqual([vecX(), vecZero()])
-	expect(spkEphemerisPath(spkFor(17), Naif.SSB, Naif.EARTH)).rejects.toThrow('SPK frame 17 is not the library base frame')
+	await expect(spkEphemerisPath(spkFor(17), Naif.SSB, Naif.EARTH)).rejects.toThrow('SPK frame 17 is not the library base frame')
 })
 
 test('SGP4 adapter uses a stable NORAD target and full TEME-to-ICRS state conversion', () => {

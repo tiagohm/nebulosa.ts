@@ -961,6 +961,14 @@ function commentaryCardTexts(text: string) {
 	return cards
 }
 
+// Formats a non-integer real header value in exponential notation with the fewest digits that read back as the
+// same double, so 19.54 is written 1.954E+1 rather than with the 21 digits of a fixed precision, whose tail is
+// only the binary rounding of the value. The mantissa always keeps a decimal point.
+function fitsReal(value: number) {
+	const [mantissa, exponent] = value.toExponential().toUpperCase().split('E')
+	return `${mantissa.includes('.') ? mantissa : `${mantissa}.0`}E${exponent}`
+}
+
 // Formats header cards into their fixed 80-byte FITS representation: value alignment, default comments
 // from the keyword dictionary, commentary cards, and CONTINUE-based long-string splitting. Throws
 // FITS_HEADER_BUFFER_TOO_SMALL when the output buffer cannot hold a card, signaling the caller to grow it.
@@ -1108,7 +1116,7 @@ export class FitsKeywordWriter {
 		} else if (Number.isInteger(value)) {
 			this.#appendText(output, value.toFixed(0), position)
 		} else {
-			this.#appendText(output, value.toExponential(20).toUpperCase(), position)
+			this.#appendText(output, fitsReal(value), position)
 		}
 
 		return start

@@ -91,56 +91,62 @@ describe.skipIf(SKIP)('focuser simulator', () => {
 		expect(thermometerManager.properties.length).toBe(0)
 	})
 
-	test('simulates asymmetric backlash with persistent partial slack', async () => {
+	test('simulates gear play with persistent partial slack', async () => {
 		using client = new ClientSimulator('focuser', new IndiClientHandlerSet())
-		using simulator = new FocuserSimulator('Focuser Simulator', client)
+		using simulator = new FocuserSimulator('Focuser Simulator', client, { backlash: 80 })
 
+		expect(simulator.backlash).toBe(80)
 		simulator.connect()
-		client.sendNumber({ device: simulator.name, name: 'SIMULATOR_BACKLASH', elements: { BACKLASH_IN: 100, BACKLASH_OUT: 200 } })
-		expect(simulator.backlashIn).toBe(100)
-		expect(simulator.backlashOut).toBe(200)
+		client.sendNumber({ device: simulator.name, name: 'SIMULATOR_BACKLASH', elements: { BACKLASH: 150 } })
+		expect(simulator.backlash).toBe(150)
 		simulator.syncTo(50000)
 
-		simulator.moveTo(51000)
-		await waitUntil(() => !simulator.isMoving)
-		expect(simulator.position).toBe(51000)
-		expect(simulator.effectivePosition).toBeCloseTo(51000, 6)
+		async function moveTo(position: number) {
+			simulator.moveTo(position)
+			await waitUntil(() => !simulator.isMoving)
+			expect(simulator.position).toBe(position)
+			expect(Math.abs(simulator.position - simulator.effectivePosition)).toBeLessThanOrEqual(simulator.backlash + 1e-9)
+			return simulator.effectivePosition
+		}
 
-		// A partial inward reversal consumes slack without moving the optical mechanism.
-		simulator.moveTo(50960)
-		await waitUntil(() => !simulator.isMoving)
-		expect(simulator.position).toBe(50960)
-		expect(simulator.effectivePosition).toBeCloseTo(51000, 6)
+		// An unloaded gear train engages immediately.
+		expect(await moveTo(51000)).toBeCloseTo(51000, 6)
 
-		// Returning toward the engaged side first recovers the partially consumed slack.
-		simulator.moveTo(50980)
-		await waitUntil(() => !simulator.isMoving)
-		expect(simulator.effectivePosition).toBeCloseTo(51000, 6)
-		simulator.moveTo(51020)
-		await waitUntil(() => !simulator.isMoving)
-		expect(simulator.effectivePosition).toBeCloseTo(51020, 6)
+		// A partial inward reversal opens 40 of the 150 steps of slack without moving the optics.
+		expect(await moveTo(50960)).toBeCloseTo(51000, 6)
 
-		// Each direction has an independent lost-motion distance.
-		simulator.moveTo(50920)
-		await waitUntil(() => !simulator.isMoving)
-		expect(simulator.effectivePosition).toBeCloseTo(51020, 6)
-		simulator.moveTo(50870)
-		await waitUntil(() => !simulator.isMoving)
-		expect(simulator.effectivePosition).toBeCloseTo(50970, 6)
-		simulator.moveTo(51020)
-		await waitUntil(() => !simulator.isMoving)
-		expect(simulator.effectivePosition).toBeCloseTo(50970, 6)
-		simulator.moveTo(51120)
-		await waitUntil(() => !simulator.isMoving)
-		expect(simulator.position).toBe(51120)
-		expect(simulator.effectivePosition).toBeCloseTo(51020, 6)
+		// Returning outward only has to close the 40 steps opened on the other flank.
+		expect(await moveTo(50980)).toBeCloseTo(51000, 6)
+		expect(await moveTo(51020)).toBeCloseTo(51020, 6)
 
-		// Sync establishes a new optical reference and clears the engagement history.
+		// A full reversal costs the whole gap.
+		expect(await moveTo(50870)).toBeCloseTo(51020, 6)
+		expect(await moveTo(50820)).toBeCloseTo(50970, 6)
+
+		// The play is the same in both directions, so IN/OUT cycles never drift the optics.
+		const outward: number[] = []
+		const inward: number[] = []
+
+		for (let i = 0; i < 5; i++) {
+			outward.push(await moveTo(51500))
+			inward.push(await moveTo(50500))
+		}
+
+		for (let i = 0; i < 5; i++) {
+			expect(outward[i]).toBeCloseTo(51500, 6)
+			expect(inward[i]).toBeCloseTo(50650, 6)
+		}
+
+		// Shrinking the gap to 40 clamps the 50 steps of slack a partial reversal left open.
+		expect(await moveTo(50600)).toBeCloseTo(50650, 6)
+		client.sendNumber({ device: simulator.name, name: 'SIMULATOR_BACKLASH', elements: { BACKLASH: 40 } })
+		expect(simulator.backlash).toBe(40)
+		expect(await moveTo(50700)).toBeCloseTo(50710, 6)
+
+		// Sync establishes a new optical reference and unloads the gear train.
 		simulator.syncTo(30000)
 		expect(simulator.effectivePosition).toBeCloseTo(30000, 6)
-		simulator.moveTo(29950)
-		await waitUntil(() => !simulator.isMoving)
-		expect(simulator.effectivePosition).toBeCloseTo(29950, 6)
+		expect(await moveTo(29950)).toBeCloseTo(29950, 6)
 	})
 
 	test('retargets an active move to the current position', async () => {
