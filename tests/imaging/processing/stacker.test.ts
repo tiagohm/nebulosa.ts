@@ -1110,6 +1110,31 @@ describe('stacker normalization modes', () => {
 		localNormalization: { gridSize: 4, minSamplesPerCell: 32, offsetDegree: 2, scaleDegree: 1 },
 	} as const satisfies StackingOptions
 
+	test('a frame registered at half a pixel matches a reference of the same sky with a unit scale', () => {
+		let state = 12345
+		// Independent, roughly Gaussian noise around one sky level from a deterministic generator.
+		const sky = () =>
+			makeImage(64, 64, 1, () => {
+				let noise = 0
+				for (let k = 0; k < 4; k++) noise += ((state = (state * 1103515245 + 12345) % 2147483648) / 2147483648 - 0.5) * 0.02
+				return 0.1 + noise
+			})
+		const reference = sky()
+		const current = sky()
+		const options = { ...DEFAULT_STACK_OPTIONS, combinationMethod: 'average', normalizationMode: 'background-scale', interpolationMode: 'bilinear' } as const satisfies StackingOptions
+
+		// Bilinear resampling at half a pixel in both axes halves the noise of the current frame, which a dispersion
+		// estimator measured after the resampling read as a gain of two.
+		const batch = stackFrames([makeFrame(reference, makeStars()), makeFrame(current, makeStars(0.5, 0.5))], options)
+		expect(batch.acceptedFrames).toBe(2)
+		expect(batch.diagnostics[1].normalization!.scales[0]).toBeCloseTo(1, 1)
+
+		const live = new LiveStacker(options)
+		live.add(makeFrame(reference, makeStars()))
+		const accepted = live.add(makeFrame(current, makeStars(0.5, 0.5)))
+		expect(accepted.normalization!.scales[0]).toBeCloseTo(1, 1)
+	})
+
 	test('local mode reports the global anchor and local diagnostics', () => {
 		const { reference, current } = localFrames(
 			() => 1.3,
@@ -1418,17 +1443,17 @@ describe('stacker over a synthetic multi-filter acquisition', () => {
 		const snapshot = live.snapshot()!
 		hashes.live = digest(snapshot.finalImage!.raw, snapshot.coverageMap!)
 
-		// Regression alarms recorded before the combination primitives moved out of stacker.ts.
+		// Regression alarms recorded once normalization was measured on a nearest-neighbour resampling.
 		expect(hashes).toEqual({
-			sum: '3711e54d6b7c627f',
-			average: '8f4a503ecd586ac2',
-			'weighted-average': '00b99c741418ef13',
-			median: '5c970f6c71142960',
-			'sigma-clip': '0a0b5a821b5167d9',
-			'min-max-average': '5e30680de7bf5e89',
-			'winsorized-mean': '7bdf6f70cd16f1e0',
-			'percentile-clip-average': 'ebd4e302c7731255',
-			live: 'b426c8375e28436d',
+			sum: 'fb6490be2f81398e',
+			average: '5f3f6adf73276eca',
+			'weighted-average': 'a04c11083a5cf26e',
+			median: 'ae18b9726ac5175d',
+			'sigma-clip': 'fc1337e11e32e827',
+			'min-max-average': '8047310d6a398522',
+			'winsorized-mean': '6ed1aa4d1cc5bb4e',
+			'percentile-clip-average': '1d26f2cd4821e26e',
+			live: '0ebade1433fef44c',
 		})
 	})
 })

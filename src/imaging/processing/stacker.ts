@@ -16,7 +16,7 @@ import type { SigmaClipCenterMethod, SigmaClipDispersionMethod } from './computa
 import { createDrizzleAccumulator, depositDrizzle, type DrizzleAccumulator, drizzleNormalization, drizzleOverlap, prepareDrizzleFootprint } from './drizzle'
 // oxfmt-ignore
 import { applyGlobalNormalizationInPlace, applyLocalNormalizationInPlace, broadcastNormalizationPlanes, DEFAULT_LOCAL_NORMALIZATION_OPTIONS, type FrameNormalizationSummary, fitLocalNormalizationRaw, type GlobalNormalizationMode, isLocalNormalizationFallback, type LocalNormalizationFallbackReason, type LocalNormalizationModel, type LocalNormalizationOptions, localNormalizationFailureReason, localNormalizationSummary, MIN_GLOBAL_NORMALIZATION_SAMPLES, type NormalizationColorMode, resolveLocalNormalizationOptions, solveGlobalNormalizationPlanes } from './normalization'
-import { type ImageInterpolationMode, type ImageRegistrationFailureReason, type ImageRegistrationSuccess, registerImage, registerStars, toAffineMatrix } from './registration'
+import { type ImageInterpolationMode, type ImageRegistrationFailureReason, type ImageRegistrationSuccess, registerImage, registerStars, toAffineMatrix, warpImage } from './registration'
 // oxfmt-ignore
 import { accumulateSamples, combineStrip, coverageBounds, coverageThreshold as countThreshold, createCombinationScratch, DEFAULT_COMBINATION_PARAMETERS, finalizeOnlineSamples, frameWeight, isOnlineCombinationMethod, resolveCombinationParameters } from './stacking.combination'
 import { measureSubframeQuality, type SubframeQualityMetrics } from './subframe.selector'
@@ -515,6 +515,9 @@ export class LiveStacker {
 	#coverageMap?: Uint32Array
 	#workRaw?: ImageRawType
 	#workMask?: Uint8Array
+	// Reusable nearest-neighbour resampling the normalization of a frame is measured on.
+	#normalizationRaw?: ImageRawType
+	#normalizationMask?: Uint8Array
 	// Owns Drizzle buffers exclusively; resampling work buffers stay unallocated in this mode.
 	#drizzle?: DrizzleAccumulator
 
@@ -540,6 +543,8 @@ export class LiveStacker {
 		this.#coverageMap = undefined
 		this.#workRaw = undefined
 		this.#workMask = undefined
+		this.#normalizationRaw = undefined
+		this.#normalizationMask = undefined
 		this.#drizzle = undefined
 	}
 
@@ -616,7 +621,14 @@ export class LiveStacker {
 		if (overlapFraction <= 0) return this.#reject(frameIndex, frame, quality, 'no-overlap')
 		if (overlapFraction < this.#options.minOverlapFraction) return this.#reject(frameIndex, frame, quality, 'insufficient-overlap', overlapFraction, registration.transform.summary)
 
-		const normalization = computeNormalization(raw, valid, registration.finitePairCounts, frame, this.#referenceFrame, quality, this.#options)
+		const samples = normalizationSamples(frame, this.#referenceFrame, registration, this.#options, this.#normalizationRaw, this.#normalizationMask)
+
+		if (samples.raw !== raw) {
+			this.#normalizationRaw = samples.raw
+			this.#normalizationMask = samples.valid
+		}
+
+		const normalization = computeNormalization(samples, frame, this.#referenceFrame, quality, this.#options)
 		if (normalization.transform.kind === 'rejected') return this.#reject(frameIndex, frame, quality, 'normalization-failed', overlapFraction, registration.transform.summary)
 		applyNormalizationInPlace(raw, valid, frame.image.metadata.channels, normalization.transform)
 		accumulateSamples(this.#referenceFrame.image.metadata.channels, raw, valid, this.#sum!, this.#weightSum!, this.#coverageMap, this.#options.combinationMethod, normalization.summary.weight)
@@ -656,6 +668,8 @@ export class LiveStacker {
 		this.#coverageMap = new Uint32Array(pixelCount)
 		this.#workRaw = undefined
 		this.#workMask = undefined
+		this.#normalizationRaw = undefined
+		this.#normalizationMask = undefined
 		const weight = resolveFrameWeight(frame, quality, this.#options)
 		accumulateSamples(channels, frame.image.raw, sourceValidity(frame), this.#sum, this.#weightSum, this.#coverageMap, this.#options.combinationMethod, weight)
 	}
@@ -901,7 +915,7 @@ function createAlignedFrame(frame: PreparedStackingFrame, index: number, quality
 	const { raw } = registration.image
 	const valid = registration.validityMask
 	const coveredPixels = registration.coveredPixels
-	const normalization = computeNormalization(raw, valid, registration.finitePairCounts, frame, referenceFrame, quality, options)
+	const normalization = computeNormalization(normalizationSamples(frame, referenceFrame, registration, options), frame, referenceFrame, quality, options)
 	if (normalization.transform.kind === 'rejected') return undefined
 	applyNormalizationInPlace(raw, valid, channels, normalization.transform)
 	return { raw, valid, weight: normalization.summary.weight, coveredPixels, index, id: frame.id, quality, normalization: normalization.summary, transform: registration.transform.summary }
@@ -980,14 +994,49 @@ interface ComputedNormalization {
 	readonly summary: FrameNormalizationSummary
 }
 
-// Computes the normalization of one aligned frame against the reference.
+// Samples of a registered frame on the reference grid that its normalization is measured on.
+interface NormalizationSamples {
+	// Interleaved samples on the reference grid.
+	readonly raw: ImageRawType
+	// One byte per reference pixel; nonzero where raw holds a sample of the frame.
+	readonly valid: Uint8Array
+	// Pre-mask finite pairs per fitted plane, capped as the registration capped them; undefined unless requested.
+	readonly availableSamples?: readonly number[]
+}
+
+// Returns the samples of a registered frame that its normalization is measured on. Interpolation smooths the noise
+// of a resampled frame by an amount that depends on its subpixel phase, which every dispersion-based gain estimator
+// reads as a gain (up to 2 for bilinear at half a pixel in both axes), so an interpolated registration is measured
+// on a nearest-neighbour resampling through the same inverse transform, which keeps the samples of the frame and the
+// overlap of the registration. outputRaw and validityMask are reused when their sizes fit; the registered samples are
+// returned as they are when the registration did not interpolate or nothing is normalized.
+function normalizationSamples(frame: PreparedStackingFrame, referenceFrame: PreparedStackingFrame, registration: ImageRegistrationSuccess, options: ResolvedStackingOptions, outputRaw?: ImageRawType, validityMask?: Uint8Array): NormalizationSamples {
+	if (options.normalizationMode === 'none' || options.interpolationMode === 'nearest') return { raw: registration.image.raw, valid: registration.validityMask, availableSamples: registration.finitePairCounts }
+	const { pixelCount, channels } = referenceFrame.image.metadata
+	const finitePairSupport = registration.finitePairCounts === undefined ? undefined : { limit: MIN_GLOBAL_NORMALIZATION_SAMPLES, luminance: options.colorHandlingMode === 'luminance' }
+	const reusable = outputRaw?.length === pixelCount * channels && outputRaw.BYTES_PER_ELEMENT === registration.image.raw.BYTES_PER_ELEMENT && validityMask?.length === pixelCount
+	const warped = warpImage(frame.image, referenceFrame.image, registration.transform.inverseTransform, {
+		interpolationMode: 'nearest',
+		outputPrecision: options.samplePrecision,
+		outputRaw: reusable ? outputRaw : undefined,
+		validityMask: reusable ? validityMask : undefined,
+		rejectionMask: frame.rejectionMask,
+		finitePairSupport,
+	})
+	return { raw: warped.image.raw, valid: warped.validityMask, availableSamples: warped.finitePairCounts }
+}
+
+// Computes the normalization of one aligned frame against the reference, measured on its normalization samples and
+// applied by the caller to the registered samples.
 //
 // In `local` mode the global solution is still computed first and reported as `scales`/`offsets`: it is
 // the anchor the local model corrects around, and it is what a caller inspecting the summary expects to
 // see. A `reject` fallback surfaces here as a `rejected` transform, not as an exception.
 // With streak masks, availableSamples holds pre-mask finite pairs per fitted plane, capped at 32
 // during registration. Each plane must retain that support and contain at least one usable pair.
-function computeNormalization(alignedRaw: ImageRawType, valid: Uint8Array, availableSamples: readonly number[] | undefined, frame: PreparedStackingFrame, referenceFrame: PreparedStackingFrame, quality: StackingFrameQualityMetrics, options: ResolvedStackingOptions): ComputedNormalization {
+function computeNormalization(samples: NormalizationSamples, frame: PreparedStackingFrame, referenceFrame: PreparedStackingFrame, quality: StackingFrameQualityMetrics, options: ResolvedStackingOptions): ComputedNormalization {
+	const { raw: alignedRaw, availableSamples } = samples
+	let valid = samples.valid
 	const weight = resolveFrameWeight(frame, quality, options)
 	const { width, height, channels } = referenceFrame.image.metadata
 
