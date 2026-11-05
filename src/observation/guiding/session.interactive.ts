@@ -1,6 +1,6 @@
 import { errorMessage } from '../../core/util'
 import { GUIDE_PULSE_STOP_SETTLE_TIMEOUT, type GuideOutputCommander, guidePulseReleaseBound } from '../../devices/commanders/guideoutput'
-import type { Camera, GuideDirection, GuideOutput } from '../../devices/indi/device'
+import type { Camera, GuideDirection, GuideOutput, Mount } from '../../devices/indi/device'
 import { failedOperationResult, type OperationContext, type OperationFailureReason, type OperationHandle, type OperationResult, type OperationScope, successfulOperationResult } from '../../devices/orchestration/operation'
 import { type AbortableDelay, abortableDelay, abortReason } from '../../devices/orchestration/operation.wait'
 import { type ResourceRequest, resourceKey } from '../../devices/orchestration/resource'
@@ -20,8 +20,10 @@ import { DEFAULT_GUIDING_CLOCK, type GuidingInterruptionKind, GuidingInterruptio
 // - the root `guiding`, opened by `startLoop`, holds the physical key of the guide camera for the whole session, since
 //   the client exposes the camera directly and only that lease keeps a second owner off it;
 // - its child `guidingRun`, opened by `startGuiding` (or a `resume` after a releasing pause) and ended by
-//   `stopGuiding`, holds the physical key of the guide output and its logical lifecycle resource, so the mount or
-//   camera behind the guide output is only taken while guiding is wanted, and losing it cancels the run.
+//   `stopGuiding`, holds the physical key of the guide output, its logical lifecycle resource and, given `mount`, the
+//   physical key of the mount the guide output drives, atomically, so the mount or camera behind the guide output and
+//   the mount it moves are only taken while guiding is wanted, nothing else moves that mount between two pulses (a
+//   guide output on the ST4 port of a camera shares no key with it), and losing any of them cancels the run.
 //
 // Every pulse of the client goes through its pulse admission, installed closed by `beginRun` (or `startLoop`) with a
 // ceiling frozen at construction (`pulseCeiling`, ms), and is dispatched through `GuideOutputCommander.dispatch` under
@@ -78,6 +80,9 @@ export interface InteractiveGuidingSessionOptions {
 	readonly interruptionCapacity?: number
 	// Abortable wait of the settle timeouts; default `abortableDelay`.
 	readonly delay?: AbortableDelay
+	// Mount the guide output drives, leased by every `guidingRun` with the guide output; absent, the run leases only the
+	// guide output and its lifecycle resource. The same key as the guide output when it is the mount's own port.
+	readonly mount?: Mount
 }
 
 // Options of `startLoop`.
@@ -186,12 +191,14 @@ export class InteractiveGuidingSession {
 	}
 
 	// Physical key of the guide camera, held by the root, and the physical key and lifecycle resource of the guide
-	// output, held by the run; together what an owner reserves for the session.
+	// output and the physical key of the mount it drives (when `options.mount` names one), held by the run; together what
+	// an owner reserves for the session.
 	resources() {
 		const camera: ResourceRequest = { key: resourceKey(this.camera), device: this.camera }
 		const guideOutput: ResourceRequest = { key: resourceKey(this.guideOutput), device: this.guideOutput }
 		const lifecycle: ResourceRequest = { key: guideOutputLifecycleKey(this.guideOutput), device: this.guideOutput }
-		return { camera, guideOutput, lifecycle } as const
+		const { mount } = this.options
+		return { camera, guideOutput, lifecycle, mount: mount && { key: resourceKey(mount), device: mount } } as const
 	}
 
 	// Current projection of the session.
@@ -608,7 +615,7 @@ export class InteractiveGuidingSession {
 		return successfulOperationResult(undefined)
 	}
 
-	// Opens the `guidingRun` under the root, leasing the guide output and its lifecycle resource, unless it is open. A
+	// Opens the `guidingRun` under the root, leasing the guide output, its lifecycle resource and the mount it drives, unless it is open. A
 	// cancellation from outside (the device lifecycle losing the guide output) closes the gate and ends the whole
 	// session as lost.
 	async #openRun(): Promise<OperationResult<void>> {
@@ -617,9 +624,9 @@ export class InteractiveGuidingSession {
 		const root = this.#root
 		if (root === undefined) return failedOperationResult('unexpectedState', 'the guiding session is not looping')
 
-		const { guideOutput, lifecycle } = this.resources()
+		const { guideOutput, lifecycle, mount } = this.resources()
 
-		const opened = await this.#pending(root.context, 'guidingRun', [guideOutput, lifecycle], (context) => {
+		const opened = await this.#pending(root.context, 'guidingRun', mount ? [guideOutput, lifecycle, mount] : [guideOutput, lifecycle], (context) => {
 			if (this.#run?.context === context) this.#run = undefined
 			this.#admission?.close()
 			// Cancelling the root waits for this run, so it is not awaited here; the root ends the session as lost.

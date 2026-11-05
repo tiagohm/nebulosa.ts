@@ -42,11 +42,11 @@ export class LocalGuidingSession implements GuidingSession, Ditherer {
 		return this.interactive.pulseCeiling
 	}
 
-	// Reserves the guide camera, the guide output and its lifecycle resource; the root holds the guide camera, the run
-	// leases the other two under the same reservation while guiding.
+	// Reserves the guide camera, the guide output, its lifecycle resource and the mount it drives when the session names
+	// one; the root holds the guide camera, the run leases the others under the same reservation while guiding.
 	resources(): GuidingSessionResources {
-		const { camera, guideOutput, lifecycle } = this.interactive.resources()
-		return { reserve: [camera, guideOutput, lifecycle], hold: [camera] }
+		const { camera, guideOutput, lifecycle, mount } = this.interactive.resources()
+		return { reserve: mount ? [camera, guideOutput, lifecycle, mount] : [camera, guideOutput, lifecycle], hold: [camera] }
 	}
 
 	// State from the client: calibrating, guiding (settling while a settle runs), paused, lost for a lost lock, and

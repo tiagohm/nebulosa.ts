@@ -187,6 +187,32 @@ describe('guiding run', () => {
 		expect(session.snapshot().runId).not.toBe(run)
 	}, 20000)
 
+	test('a run through the ST4 port of a camera also leases the mount it drives, so nothing moves it between two pulses', async () => {
+		const { camera, mount } = rig.devices()
+		const cameraManager = new RecordingCameraManager()
+		const client = new GuiderClient(cameraManager as unknown as CameraManager, rig.managers.guideOutput, fixtureStarTracker(), { decodeImage: fixtureImageDecoder })
+		const clock = new ManualClock()
+		const session = new InteractiveGuidingSession(client, GUIDE_CAMERA, camera, rig.commanders.guideOutput, { delay: clock.delay, mount })
+		sessions.push({ client, session })
+		const context = { client, session, cameraManager, clock }
+
+		expect(session.resources().mount).toEqual({ key: resourceKey(mount), device: mount })
+		expect(await session.startLoop(rig.coordinator)).toEqual(successfulOperationResult(undefined))
+		const root = session.operationId()!
+		expect(rig.arbiter.ownersOf(resourceKey(mount))).toEqual([])
+
+		expect(await startGuiding(context)).toEqual(successfulOperationResult(undefined))
+		expect(rig.arbiter.ownersOf(resourceKey(camera)).map((owner) => owner.id)).toEqual([root])
+		expect(rig.arbiter.ownersOf(resourceKey(mount)).map((owner) => owner.id)).toEqual([root])
+		// The mount shares no key with the camera, and still nothing else moves it while guiding.
+		expect(await rig.commanders.mount.setTracking(rig.coordinator, mount, true)).toMatchObject({ ok: false, reason: 'busy' })
+
+		expect(await session.stopGuiding(rig.coordinator)).toEqual(successfulOperationResult(undefined))
+		expect(rig.arbiter.ownersOf(resourceKey(mount))).toEqual([])
+		expect(rig.arbiter.ownersOf(resourceKey(camera))).toEqual([])
+		expect(await rig.commanders.mount.setTracking(rig.coordinator, mount, false)).toEqual(successfulOperationResult(undefined))
+	}, 20000)
+
 	test('starting guiding is refused while the guide output is taken, and looping goes on', async () => {
 		const context = setup()
 		const { client, session } = context
