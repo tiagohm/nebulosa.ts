@@ -1,8 +1,9 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, spyOn, test } from 'bun:test'
-import { positionAngleBetween } from '../../../src/astronomy/coordinates/coordinate'
+import { type EquatorialCoordinate, positionAngleBetween } from '../../../src/astronomy/coordinates/coordinate'
 import { eraSeps } from '../../../src/astronomy/coordinates/erfa/erfa'
 import { PIOVERTWO, TAU } from '../../../src/core/constants'
 import { guidePulseReleaseBound } from '../../../src/devices/commanders/guideoutput'
+import { failedOperationResult } from '../../../src/devices/orchestration/operation'
 import { resourceKey } from '../../../src/devices/orchestration/resource'
 import { mulberry32 } from '../../../src/math/numerical/random'
 import { arcsec, deg, safeAngularDifference, toArcsec } from '../../../src/math/units/angle'
@@ -249,6 +250,32 @@ describe('49.10 MountDitherer by slew', () => {
 			expect(rightAscension).toBeCloseTo(expected.rightAscension, 10)
 			expect(declination).toBeCloseTo(expected.declination, 10)
 			expect(rightAscension).toBeLessThan(arcsec(60))
+		} finally {
+			goTo.mockRestore()
+		}
+	}, 20000)
+
+	test('a slew beforeSlew refuses fails with its refusal without moving the mount, and its target is the one slewed to', async () => {
+		const { mount } = rig.devices()
+		const synced = await rig.commanders.mount.sync(rig.coordinator, mount, { type: 'JNOW', JNOW: { x: 1, y: deg(20) } })
+		expect(synced.ok).toBeTrue()
+		await waitUntil(() => Math.abs(mount.equatorialCoordinate.rightAscension - 1) < arcsec(60), 3000, 10)
+
+		const goTo = spyOn(rig.managers.mount, 'goTo')
+
+		try {
+			const targets: EquatorialCoordinate[] = []
+			const before = { ...mount.equatorialCoordinate }
+			const refusing = ditherer({ method: 'slew', settleTimeout: 10000, beforeSlew: (target) => (targets.push(target), failedOperationResult('unexpectedState', 'crosses the meridian')) })
+			expect(await refusing.dither(rig.coordinator, request(arcsec(30)))).toEqual({ ok: false, reason: 'unexpectedState', error: 'crosses the meridian' })
+			expect(goTo).not.toHaveBeenCalled()
+			expect(targets).toEqual([ditherSlewTarget(before.rightAscension, before.declination, { rightAscension: 0, declination: arcsec(30) }, false)!])
+
+			const accepting = ditherer({ method: 'slew', settleTimeout: 10000, beforeSlew: (target) => void targets.push(target) })
+			expect((await accepting.dither(rig.coordinator, request(arcsec(30)))).ok).toBeTrue()
+			const [, rightAscension, declination] = goTo.mock.calls[0] as unknown as [unknown, number, number]
+			expect(rightAscension).toBeCloseTo(targets[1].rightAscension, 10)
+			expect(declination).toBeCloseTo(targets[1].declination, 10)
 		} finally {
 			goTo.mockRestore()
 		}

@@ -4,7 +4,7 @@ import { PIOVERTWO } from '../../core/constants'
 import { type GuidePulse, type GuideOutputCommander, type GuidePulseQuiescenceWindow, guidePulseReleaseBound } from '../../devices/commanders/guideoutput'
 import type { MountCommander } from '../../devices/commanders/mount'
 import type { GuideOutput, Mount } from '../../devices/indi/device'
-import { failedOperationResult, type OperationResult, type OperationScope, successfulOperationResult } from '../../devices/orchestration/operation'
+import { type FailedOperationResult, failedOperationResult, type OperationResult, type OperationScope, successfulOperationResult } from '../../devices/orchestration/operation'
 import { type AbortableDelay, abortableDelay, abortReason } from '../../devices/orchestration/operation.wait'
 import { type ResourceRequest, resourceKey } from '../../devices/orchestration/resource'
 import { sphericalOffsetVector } from '../../math/numerical/geometry'
@@ -115,6 +115,10 @@ export interface MountDithererOptions {
 	// Settle timeout of a dither slew, in ms, passed explicitly to the commander (the hard-protection mount stop
 	// timeout in the Sequencer); default the commander's.
 	readonly settleTimeout?: number
+	// Last decision before a dither slew is commanded, with its exact JNOW target (radians, as `ditherSlewTarget`
+	// computed it): a failure ends the dither with it without moving the mount, so a caller can refuse a target its mount
+	// would reach by a meridian flip. Synchronous; it must not command devices. Absent, every slew is commanded.
+	readonly beforeSlew?: (target: EquatorialCoordinate) => FailedOperationResult | undefined
 }
 
 // Commanders and wait of a mount ditherer.
@@ -160,8 +164,9 @@ export function ditherSlewTarget(rightAscension: Angle, declination: Angle, offs
 // Ditherer of an unguided mount. 'pulse' converts each pattern increment (radians) into one timed pulse per axis from the
 // guide rate and the current declination (`ditherPulsePlanFromGuideRate`) and sends them through the guide output
 // commander, which resolves only after the end of every pulse was observed; 'slew' slews to `ditherSlewTarget` of the
-// reported pointing, as a JNOW target. A dither whose disc contains the pole, or whose pulse would exceed
-// `maxPulseDuration`, fails with 'unexpectedState' without moving. The settle is the mechanical wait of the request.
+// reported pointing, as a JNOW target, once `beforeSlew` accepted it. A dither whose disc contains the pole, or whose
+// pulse would exceed `maxPulseDuration`, fails with 'unexpectedState' without moving, and one `beforeSlew` refuses fails
+// with its refusal. The settle is the mechanical wait of the request.
 // Accepts only angular amounts and mechanical settles; it must never run while a guider guides the same mount.
 export class MountDitherer implements Ditherer {
 	readonly #generator: DitherGenerator
@@ -288,6 +293,8 @@ export class MountDitherer implements Ditherer {
 		const { rightAscension, declination } = mount.equatorialCoordinate
 		const target = ditherSlewTarget(rightAscension, declination, offset, raOnly)
 		if (target === undefined) return failedOperationResult('unexpectedState', 'the dither disc contains the celestial pole')
+		const refused = options.beforeSlew?.(target)
+		if (refused !== undefined) return refused
 
 		const slewed = await mountCommander.goTo(scope, mount, { type: 'JNOW', JNOW: { x: target.rightAscension, y: target.declination } }, { tolerance: 0, arrivalTolerance: options.slewTolerance, settleTimeout: options.settleTimeout })
 		return slewed.ok ? successfulOperationResult(undefined) : slewed
