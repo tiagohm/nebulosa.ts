@@ -8,7 +8,7 @@ import { readImageFromBuffer } from '../../../src/imaging/model/image'
 import { type CfaPattern, type Image, shiftCfaPattern } from '../../../src/imaging/model/types'
 import { calibrate } from '../../../src/imaging/processing/calibration'
 import { bayer } from '../../../src/imaging/processing/debayer'
-import { LiveStacker, referenceQualityScore, type StackingFrame, type StackingOptions, stackFrames } from '../../../src/imaging/processing/stacker'
+import { LiveStacker, liveStackerMemoryBytes, referenceQualityScore, type StackingFrame, type StackingOptions, stackFrames } from '../../../src/imaging/processing/stacker'
 import type { DetectedStar } from '../../../src/imaging/stars/detector'
 import { renderSyntheticStreak } from '../../../src/imaging/synthetic/streak'
 import { Bitpix, writeFits } from '../../../src/io/formats/fits/fits'
@@ -891,6 +891,74 @@ describe('stacker live mode', () => {
 		expect(snapshot.acceptedFrames).toBe(2)
 		expect(snapshot.diagnostics.length).toBe(diagnosticsLength)
 		expect(Array.from(snapshot.coverageMap!)).toEqual(coverageBefore)
+	})
+
+	test('stacks of a shared field register onto its grid and normalize to their own first frame', () => {
+		const ha = makeImage(18, 18, 1, (x, y) => (x === y || x + y === 17 ? 1 : ((x * 3 + y * 5) % 11) / 32))
+		const oiii = makeImage(18, 18, 1, (x, y) => 0.3 * ha.raw[y * 18 + x] + 0.05)
+		const field = { image: ha, stars: makeStars() }
+		const options = { ...DEFAULT_STACK_OPTIONS, combinationMethod: 'average', interpolationMode: 'nearest', normalizationMode: 'background-scale' } as const satisfies StackingOptions
+
+		const hydrogen = new LiveStacker(options, field)
+		expect(hydrogen.add(makeFrame(ha, makeStars())).transform?.model).toBe('identity')
+		expect(hydrogen.add(makeFrame(translateImage(ha, 1, 1), makeStars(-1, -1))).accepted).toBeTrue()
+		expectRawClose(hydrogen.snapshot()!.finalImage!.raw, ha.raw, 1e-5)
+
+		const oxygen = new LiveStacker(options, field)
+		const first = oxygen.add(makeFrame(translateImage(oiii, 2, -1), makeStars(-2, 1)))
+		expect(first.accepted).toBeTrue()
+		expect(first.transform?.translationX).toBeCloseTo(2, 6)
+		expect(oxygen.add(makeFrame(oiii, makeStars())).accepted).toBeTrue()
+
+		const snapshot = oxygen.snapshot()!
+		expect(snapshot.acceptedFrames).toBe(2)
+		expect(snapshot.referenceFrameIndex).toBe(0)
+		expect(snapshot.finalImage!.metadata.width).toBe(18)
+		expectRawClose(snapshot.finalImage!.raw, oiii.raw, 1e-5)
+	})
+
+	test('a frame rejected on a shared field neither creates nor changes the stack', () => {
+		const reference = makeImage(18, 18, 1, (x, y) => (x === y || x + y === 17 ? 1 : ((x * 3 + y * 5) % 11) / 32))
+		const stacker = new LiveStacker({ ...DEFAULT_STACK_OPTIONS, combinationMethod: 'average', interpolationMode: 'nearest' }, { image: reference, stars: makeStars() })
+
+		expect(stacker.add(makeFrame(translateImage(reference, 2, -1), makeStars().slice(0, 2))).reason).toBe('too-few-stars')
+		expect(stacker.add(makeFrame(makeImage(18, 18, 3, 0.5), makeStars())).reason).toBe('channel-mismatch')
+		expect(stacker.snapshot()).toBeUndefined()
+
+		expect(stacker.add(makeFrame(translateImage(reference, 2, -1), makeStars(-2, 1))).accepted).toBeTrue()
+		const before = stacker.snapshot()!
+		expect(before.referenceFrameIndex).toBe(2)
+
+		expect(stacker.add(makeFrame(reference, makeStars().slice(0, 2))).reason).toBe('too-few-stars')
+		const after = stacker.snapshot()!
+		expect(after.acceptedFrames).toBe(1)
+		expect(after.rejectedFrames).toBe(3)
+		expect(Array.from(after.finalImage!.raw)).toEqual(Array.from(before.finalImage!.raw))
+		expect(Array.from(after.coverageMap!)).toEqual(Array.from(before.coverageMap!))
+	})
+
+	test('a stack on the field of its first frame matches the batch stack', () => {
+		const reference = makeImage(18, 18, 1, (x, y) => (x === y || x + y === 17 ? 1 : ((x * 3 + y * 5) % 11) / 32))
+		const frames = [makeFrame(reference, makeStars(), 1), makeFrame(translateImage(reference, 2, -1), makeStars(-2, 1), 3), makeFrame(translateImage(reference, -1, 2), makeStars(1, -2), 2)]
+
+		for (const combinationMethod of ['average', 'weighted-average'] as const) {
+			const options = { ...DEFAULT_STACK_OPTIONS, combinationMethod, interpolationMode: 'bilinear' } as const satisfies StackingOptions
+			const live = new LiveStacker(options, { image: reference, stars: frames[0].stars })
+			for (const frame of frames) expect(live.add(frame).accepted).toBeTrue()
+			const batch = stackFrames(frames, { ...options, batchReference: { mode: 'index', index: 0 } })
+			expectRawClose(live.snapshot()!.finalImage!.raw, batch.finalImage!.raw, 1e-12)
+			expect(Array.from(live.snapshot()!.coverageMap!)).toEqual(Array.from(batch.coverageMap!))
+		}
+	})
+
+	test('a shared field requires the resample reconstruction', () => {
+		const image = makeImage(8, 8, 1, 1)
+		expect(() => new LiveStacker({ reconstructionMode: 'drizzle' }, { image, stars: makeStars() })).toThrow(RangeError)
+	})
+
+	test('estimates the memory a resampling live stack retains', () => {
+		expect(liveStackerMemoryBytes(10, 10, 1, 4)).toBe(100 * (8 + 8 + 4 + 12 + 2))
+		expect(liveStackerMemoryBytes(10, 10, 3, 4)).toBe(100 * (24 + 8 + 4 + 36 + 2))
 	})
 
 	test('rejects live methods that are not exact online', () => {

@@ -502,9 +502,33 @@ export function isLiveCombinationMethodSupported(method: StackingCombinationMeth
 	return isOnlineCombinationMethod(method)
 }
 
+// Geometric reference shared by the live stacks of one field, such as one stack per filter. Every frame
+// of such a stack is registered against these stars and resampled onto this grid, while its photometric
+// normalization reference is the first frame the stack itself accepts, so frames of one filter are never
+// normalized to the brightness of another. The field never changes after it is created.
+export interface LiveStackingField {
+	// Frame whose pixel grid (width, height, channels and CFA phase) every frame is resampled onto. Its
+	// samples are read only when that same image object is added, as the field reference itself.
+	readonly image: Image
+	// Stars of the field reference, in its zero-based pixel centers, x right and y down.
+	readonly stars: readonly DetectedStar[]
+}
+
+// Returns the bytes a resampling `LiveStacker` retains for a grid of `width` × `height` pixels of
+// `channels` samples of `sampleBytes` (4 or 8) bytes: the Float64 sums and weights, the coverage
+// counts, the photometric reference and the reused warp and normalization buffers. A snapshot
+// allocates another image of samples, a coverage copy and a validity mask on top of it.
+export function liveStackerMemoryBytes(width: number, height: number, channels: number, sampleBytes: number) {
+	const pixels = width * height
+	return pixels * (channels * 8 + 8 + 4 + channels * sampleBytes * 3 + 2)
+}
+
 // Implements live stacking and exposes a batch helper through the same API surface.
 export class LiveStacker {
 	#options: ResolvedStackingOptions = DEFAULT_STACKING_OPTIONS
+	// External geometric reference; absent when the first accepted frame is the field itself.
+	#field?: LiveStackingField
+	// Photometric reference on the stack grid: the first accepted frame, resampled onto the field when there is one.
 	#referenceFrame?: PreparedStackingFrame
 	#referenceIndex = -1
 	#diagnostics: FrameAcceptanceResult[] = []
@@ -521,13 +545,22 @@ export class LiveStacker {
 	// Owns Drizzle buffers exclusively; resampling work buffers stay unallocated in this mode.
 	#drizzle?: DrizzleAccumulator
 
-	constructor(options: StackingOptions = {}) {
-		this.initialize(options)
+	// Creates a stacker whose reference is its first accepted frame, or, with a `field`, a stacker that
+	// registers every frame onto that shared grid (see `initialize`).
+	constructor(options: StackingOptions = {}, field?: LiveStackingField) {
+		this.initialize(options, field)
 	}
 
-	// Initializes or reinitializes the live stacker state.
-	initialize(options: StackingOptions = {}) {
-		this.#options = resolveStackingOptions(options)
+	// Initializes or reinitializes the live stacker state. With a `field`, which only the resampling
+	// reconstruction supports (a `RangeError` otherwise, since drizzle grids are built from their own
+	// reference), every frame is registered against the stars of the field and resampled onto its grid,
+	// and the first frame accepted becomes the photometric reference only.
+	initialize(options: StackingOptions = {}, field?: LiveStackingField) {
+		const resolved = resolveStackingOptions(options)
+		// A drizzle reconstruction would silently ignore the shared grid.
+		if (field !== undefined && resolved.reconstructionMode !== 'resample') throw new RangeError('a live stacking field requires the resample reconstruction')
+		this.#options = resolved
+		this.#field = field
 		this.reset()
 	}
 
@@ -588,9 +621,12 @@ export class LiveStacker {
 			return result
 		}
 
+		if (this.#referenceFrame === undefined && this.#field !== undefined && frame.image !== this.#field.image) return this.#addFirstFieldFrame(this.#field, frame, frameIndex, quality)
+
 		if (this.#referenceFrame === undefined) {
+			if (this.#field !== undefined && frame.image.metadata.channels !== this.#field.image.metadata.channels) return this.#reject(frameIndex, frame, quality, 'channel-mismatch')
 			if (!this.#options.allowStarlessReference && frame.stars.length < this.#options.minAcceptedStars) return this.#reject(frameIndex, frame, quality, 'too-few-stars')
-			this.#acceptReferenceFrame(frame, frameIndex, quality)
+			this.#acceptReferenceFrame(this.#field === undefined ? frame : { ...frame, stars: this.#field.stars }, frameIndex, quality)
 
 			const accepted: FrameAcceptanceResult = {
 				accepted: true,
@@ -611,7 +647,7 @@ export class LiveStacker {
 		if (frame.stars.length < this.#options.minAcceptedStars) return this.#reject(frameIndex, frame, quality, 'too-few-stars')
 		if (this.#referenceFrame.stars.length < this.#options.minAcceptedStars) return this.#reject(frameIndex, frame, quality, 'reference-has-no-stars')
 
-		this.#ensureWorkBuffers(this.#referenceFrame.image.metadata.pixelCount * this.#referenceFrame.image.metadata.channels, this.#referenceFrame.image.raw.BYTES_PER_ELEMENT)
+		this.#ensureWorkBuffers(this.#referenceFrame.image.metadata.pixelCount, this.#referenceFrame.image.metadata.channels, this.#referenceFrame.image.raw.BYTES_PER_ELEMENT)
 		const registration = registerImage(this.#referenceFrame, frame, registrationOptions(this.#options, this.#workRaw, this.#workMask, frame.rejectionMask, this.#referenceFrame.rejectionMask))
 		if (!registration.success) return this.#reject(frameIndex, frame, quality, stackingRegistrationFailureReason(registration.reason))
 
@@ -685,12 +721,73 @@ export class LiveStacker {
 		return result
 	}
 
-	// Reuses registration output buffers between live add calls.
-	#ensureWorkBuffers(length: number, byteLength: number) {
+	// Reuses registration output buffers between live add calls, for a grid of `pixels` with `channels`
+	// samples each of `byteLength` bytes in the source.
+	#ensureWorkBuffers(pixels: number, channels: number, byteLength: number) {
 		const samplePrecision = this.#options.samplePrecision === 'auto' ? byteLength * 8 : this.#options.samplePrecision
 		const ImageType = samplePrecision === 64 ? Float64Array : Float32Array
-		if (this.#workRaw === undefined || this.#workRaw.length !== length) this.#workRaw = new ImageType(length)
-		if (this.#workMask === undefined || this.#workMask.length !== length / (this.#referenceFrame?.image.metadata.channels ?? 1)) this.#workMask = new Uint8Array(length / (this.#referenceFrame?.image.metadata.channels ?? 1))
+		const length = pixels * channels
+		if (this.#workRaw === undefined || this.#workRaw.length !== length || this.#workRaw.BYTES_PER_ELEMENT !== ImageType.BYTES_PER_ELEMENT) this.#workRaw = new ImageType(length)
+		if (this.#workMask === undefined || this.#workMask.length !== pixels) this.#workMask = new Uint8Array(pixels)
+	}
+
+	// Accepts the first frame of a stack on an external field, which is not the field reference itself:
+	// it is registered against the field and resampled onto its grid, and its nearest-neighbour samples,
+	// NaN where it does not cover the grid, become the photometric reference of the stack. Nothing is
+	// retained when the frame is rejected. Its own contribution is the interpolated resampling with an
+	// identity normalization.
+	#addFirstFieldFrame(field: LiveStackingField, frame: PreparedStackingFrame, frameIndex: number, quality: StackingFrameQualityMetrics): FrameAcceptanceResult {
+		const { width, height, channels, pixelCount, bayer } = field.image.metadata
+		if (frame.image.metadata.channels !== channels) return this.#reject(frameIndex, frame, quality, 'channel-mismatch')
+		if (frame.stars.length < this.#options.minAcceptedStars) return this.#reject(frameIndex, frame, quality, 'too-few-stars')
+		if (field.stars.length < this.#options.minAcceptedStars) return this.#reject(frameIndex, frame, quality, 'reference-has-no-stars')
+
+		this.#ensureWorkBuffers(pixelCount, channels, field.image.raw.BYTES_PER_ELEMENT)
+		const fieldFrame: PreparedStackingFrame = { image: field.image, stars: field.stars }
+		const registration = registerImage(fieldFrame, frame, registrationOptions(this.#options, this.#workRaw, this.#workMask, frame.rejectionMask))
+		if (!registration.success) return this.#reject(frameIndex, frame, quality, stackingRegistrationFailureReason(registration.reason))
+
+		const { raw } = registration.image
+		const valid = registration.validityMask
+		const overlapFraction = registration.coveredPixels / Math.max(valid.length, 1)
+		if (overlapFraction <= 0) return this.#reject(frameIndex, frame, quality, 'no-overlap')
+		if (overlapFraction < this.#options.minOverlapFraction) return this.#reject(frameIndex, frame, quality, 'insufficient-overlap', overlapFraction, registration.transform.summary)
+
+		// The reference keeps the samples of the frame as they are (see normalizationSamples), copied before
+		// the warp buffers they may alias are reused.
+		const samples = normalizationSamples(frame, fieldFrame, registration, this.#options)
+		const reference = createLike(raw, pixelCount * channels)
+		reference.set(samples.raw)
+
+		for (let pixel = 0; pixel < pixelCount; pixel++) {
+			if (samples.valid[pixel] !== 0) continue
+			for (let channel = 0; channel < channels; channel++) reference[pixel * channels + channel] = Number.NaN
+		}
+
+		const header: FitsHeader = { ...frame.image.header, NAXIS1: width, NAXIS2: height }
+		const image = buildImage(reference, header, width, height, channels, reference instanceof Float64Array ? Bitpix.DOUBLE : Bitpix.FLOAT, bayer)
+		this.#referenceFrame = { image, stars: field.stars, id: frame.id, weight: frame.weight }
+		this.#referenceIndex = frameIndex
+		this.#acceptedFrames = 1
+		this.#sum = new Float64Array(pixelCount * channels)
+		this.#weightSum = new Float64Array(pixelCount)
+		this.#coverageMap = new Uint32Array(pixelCount)
+		const weight = resolveFrameWeight(frame, quality, this.#options)
+		accumulateSamples(channels, raw, valid, this.#sum, this.#weightSum, this.#coverageMap, this.#options.combinationMethod, weight)
+
+		const accepted: FrameAcceptanceResult = {
+			accepted: true,
+			frameIndex,
+			frameId: frame.id,
+			overlapFraction,
+			quality,
+			transform: registration.transform.summary,
+			normalization: { scales: channelArray(channels, 1), offsets: channelArray(channels, 0), weight },
+		}
+
+		this.#diagnostics.push(accepted)
+
+		return accepted
 	}
 }
 

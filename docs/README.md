@@ -10578,9 +10578,11 @@ console.log(warpImage(source, reference, half).finitePairCounts) // undefined
 
 `LiveStacker` builds a stack one frame at a time, as they arrive from the camera, and can return the current result at any moment, with a memory that depends on the frame size and not on the number of frames. It takes the same `StackingOptions` as `stackFrames` (see [Image Stacking](#image-stacking) for the registration, normalization, weighting and the diagnostics) but it only supports the combinations that can be accumulated exactly: the `'sum'`, `'average'` and `'weighted-average'` methods, which keep a sum and a weight per pixel, with the resampling or the drizzle reconstruction (see [Drizzle Integration](#drizzle-integration)). A frame added with another method is rejected with `'combination-method-not-supported-in-live-mode'`, and `isLiveCombinationMethodSupported(method)` tells whether a method qualifies. `add(frame)` registers the `StackingFrame` to the reference, normalizes it, accumulates it and returns its `FrameAcceptanceResult` (accepted or not, with the `reason`, the fitted `transform`, the `overlapFraction`, the `quality` and the `normalization`; the pixels of the frame are not retained). The first frame that is accepted is the reference (a frame with fewer stars than `minAcceptedStars` is refused when `allowStarlessReference` is false); there is no choice among frames, so `batchReference` has no effect and `cropMode` applies when a snapshot is taken. `snapshot()` returns the current `StackResult` (`undefined` before the first accepted frame) built from copies of the accumulators, so the stack can go on after it and a snapshot is not changed by later frames; it costs a pass over the image, which is the price of every preview. `reset()` forgets the frames, the reference and the diagnostics, and `initialize(options?)` does that with new options (the constructor calls it). The stacker is not safe to call from two places at once: `add` is a synchronous, CPU-bound call, so a long session on large frames is better run away from a UI thread, and the order of the frames is the order of the calls.
 
+Several live stacks can share one geometric field, for example one stack per filter of a narrowband sequence that must be composed into color later. `new LiveStacker(options, field)` (or `initialize(options, field)`) takes a `LiveStackingField`, `{ image, stars }`: the reference frame of the field and its stars. Every frame of the stack is registered against those stars and resampled onto the grid of that image (its width, height, channels and CFA phase), so all the stacks of the field are on the same pixels; the field image is itself accepted with an identity transform when it is added to a stack. The photometric reference is not the field: it is the first frame that the stack accepts, resampled onto the field grid with the nearest-neighbour kernel and NaN where it does not cover it, so the frames of one filter are normalized to that filter and never to the brightness of another; that first frame contributes with an identity normalization. A field needs the resampling reconstruction (a `RangeError` for drizzle) and never changes; a frame that is rejected leaves the stack as it was, and nothing is allocated until a frame is accepted. `liveStackerMemoryBytes(width, height, channels, sampleBytes)` gives the bytes a resampling stack retains on a grid (the Float64 sums and weights, the coverage counts, the photometric reference and the reused warp buffers), so a caller can bound the memory of many stacks before creating them; a snapshot allocates an image, a coverage copy and a validity mask on top of it.
+
 ```ts
 import type { Image } from 'nebulosa/src/imaging/model/types'
-import { isLiveCombinationMethodSupported, LiveStacker } from 'nebulosa/src/imaging/processing/stacker'
+import { isLiveCombinationMethodSupported, LiveStacker, liveStackerMemoryBytes } from 'nebulosa/src/imaging/processing/stacker'
 import type { StackingFrame } from 'nebulosa/src/imaging/processing/stacker'
 import type { DetectedStar } from 'nebulosa/src/imaging/stars/detector'
 
@@ -10661,6 +10663,21 @@ live.reset()
 console.log(live.snapshot(), live.add(frame(0, 0)).accepted, live.snapshot()?.acceptedFrames) // undefined true 1
 live.initialize({ allowStarlessReference: false })
 console.log(live.add(frame(0, 0, 2)).reason, live.snapshot(), live.add(frame(0, 0)).accepted) // too-few-stars undefined true
+
+// Two stacks on one field: the second filter has a third of the signal and is normalized to its own first frame.
+const dimmer = (dx: number, dy: number): StackingFrame => {
+	const source = frame(dx, dy)
+	return { ...source, image: { ...source.image, raw: source.image.raw.map((value) => value / 3) } }
+}
+const reference = frame(0, 0)
+const field = { image: reference.image, stars: reference.stars }
+const red = new LiveStacker({}, field)
+const blue = new LiveStacker({}, field)
+console.log(red.add(reference).transform?.model, red.add(frame(3, -2)).accepted) // identity true
+const first = blue.add(dimmer(-4, 5))
+console.log(first.accepted, first.transform?.translationX, first.transform?.translationY, first.overlapFraction) // true 4 -5 0.908
+console.log(blue.add(dimmer(2, 2)).normalization?.scales[0], red.snapshot()?.finalImage?.raw[50 * width + 50], blue.snapshot()?.finalImage?.raw[50 * width + 50]) // 1.010 0.09964 0.03283
+console.log(blue.snapshot()?.finalImage?.metadata.width, liveStackerMemoryBytes(width, height, 1, 8)) // 96 423936
 ```
 
 ### Local Image Normalization
