@@ -11,6 +11,8 @@ import type { BlobEncoding } from '../../devices/indi/types'
 import { type Image, type ImageRawType, makeImageRawTypedArray } from '../../imaging/model/types'
 import { clamp } from '../../math/numerical/math'
 import { DEFAULT_GUIDING_ASSISTANT_CONFIG, GuidingAssistant, type GuidingAssistantConfig, type GuidingAssistantResult } from './assistant'
+// oxfmt-ignore
+import { effectiveGuidingCalibration, GUIDING_CALIBRATION_RECORD_VERSION, type GuidingCalibrationApplicability, type GuidingCalibrationContext, type GuidingCalibrationRecord } from './calibration.transform'
 import { type CalibrationPulseCommand, flipGuidingCalibration, type GuidingCalibrationConfig, type GuidingCalibrationDiagnostics, type GuidingCalibrationResult, GuidingCalibrator } from './calibrator'
 import { DitherGenerator, type DitherMode } from './dither'
 import type { GuiderState, GuidingEvent, GuidingEventData, GuidingEventType } from './events'
@@ -121,6 +123,10 @@ export interface GuiderClientOptions {
 	readonly decodeImage: GuideImageDecoder
 	// Whether to reverse DEC output after flipping the calibration on a meridian flip.
 	readonly reverseDecOutputAfterMeridianFlip?: boolean
+	// Whether a calibration restored or reassessed for another declination has its RA response scaled by the cosine of
+	// the declination (see effectiveGuidingCalibration); off for a mount whose RA guide rate already follows the
+	// declination. Defaults to true.
+	readonly declinationCompensation?: boolean
 	// Star-image search-region side, in pixels (clamped to [16, 128]).
 	readonly searchRegion?: number
 	// Whether to preserve the exact lock position across guider re-initialization.
@@ -170,6 +176,10 @@ export interface GuiderClientHandler {
 	// only assembled while at least one handler has this callback.
 	readonly frame?: (client: GuiderClient, frame: GuideFrameImage) => void
 }
+
+// Outcome of restoring or reassessing a calibration: how it applies in the given context, or `busy` when the client is
+// calibrating, or guiding for a restore, and nothing changed.
+export type GuidingCalibrationRestore = GuidingCalibrationApplicability | { readonly status: 'busy' }
 
 // Ceiling imposed on every pulse the client dispatches while the admission is active, and the emission gate
 // only its owner controls. One admission at a time per client; the ceiling never changes during its life. It
@@ -246,7 +256,14 @@ export class GuiderClient {
 	#id?: string
 	readonly #calibrator: GuidingCalibrator
 	readonly #tracker: GuideTracker
+	// Calibration the guider uses: the source transformed for the mount context it was last derived for.
 	#calibration?: GuidingCalibrationResult
+	// Immutable source the guider's calibration is derived from: the last solved, restored or hand-flipped one.
+	#source?: GuidingCalibrationRecord
+	// Mount context the caller last declared, recorded with the next solved calibration.
+	#calibrationContext: GuidingCalibrationContext = {}
+	// Incremented whenever the calibration the guider uses changes, so a sample can be told from one taken with another.
+	#calibrationGeneration = 0
 	#frame?: GuideFrame
 	#image?: Image
 	#frameId = 0
@@ -599,11 +616,19 @@ export class GuiderClient {
 		return true
 	}
 
-	// Clears the solved calibration and resets the guider/calibrator state machines.
+	// Clears the solved calibration and its source and resets the guider/calibrator state machines.
 	clearCalibration() {
-		this.#abortGuidingAssistantForTransition('calibration cleared')
+		this.#source = undefined
+		this.#dropCalibration('calibration cleared')
+	}
+
+	// Drops the calibration the guider uses, keeping its source, resets the guider/calibrator state machines and returns
+	// a calibrating or guiding session to looping or selected; reason names why, for the assistant and the settle.
+	#dropCalibration(reason: string) {
+		this.#abortGuidingAssistantForTransition(reason)
 
 		this.#calibration = undefined
+		this.#calibrationGeneration++
 		this.#calibrator.reset()
 		this.#tracker.reset()
 		this.#guider = this.#makeGuider(undefined)
@@ -615,7 +640,7 @@ export class GuiderClient {
 		this.#lockShiftOffsetY = 0
 		this.#lockShiftTimestamp = 0
 		this.#lockShiftLimitReached = false
-		this.#abortSettling('calibration cleared')
+		this.#abortSettling(reason)
 		this.emitEvent('calibrationCleared')
 
 		if (this.#appState === 'Calibrating' || this.#appState === 'Guiding' || this.#appState === 'LostLock' || this.#appState === 'Paused') {
@@ -733,11 +758,15 @@ export class GuiderClient {
 	}
 
 	// Flips the solved calibration for a meridian flip and applies the transformed axis parity to the
-	// running guider so lock, hysteresis, and dither survive the flip.
+	// running guider so lock, hysteresis, and dither survive the flip. The source is flipped with it, its pier side
+	// swapped when known, so a later reassessment derives the same calibration instead of undoing the flip.
 	flipCalibration() {
 		if (this.#calibration === undefined || this.#appState === 'Calibrating') return false
 
-		this.#calibration = flipGuidingCalibration(this.#calibration, this.options.reverseDecOutputAfterMeridianFlip === true)
+		const reverse = this.options.reverseDecOutputAfterMeridianFlip === true
+		this.#calibration = flipGuidingCalibration(this.#calibration, reverse)
+		if (this.#source !== undefined) this.#source = flippedRecord(this.#source, reverse)
+		this.#calibrationGeneration++
 		this.#applyCalibrationToGuider(this.#calibration)
 		this.#syncGuideTargetOffset()
 		this.emitEvent('calibrationFlipped', { guideOutput: this.#guideOutput?.name ?? '' })
@@ -758,6 +787,82 @@ export class GuiderClient {
 	// Returns whether a valid calibration has been solved.
 	getCalibrated() {
 		return this.#calibration !== undefined
+	}
+
+	// Declares the current mount context: recorded with the next calibration that completes, as the context its source is
+	// valid in. The calibration in use is left as it is (see reassessCalibration).
+	setCalibrationContext(context: GuidingCalibrationContext) {
+		this.#calibrationContext = context
+	}
+
+	// Returns the source of the calibration in use (the solution as solved or restored, with the context it is valid in),
+	// or undefined without one. The record is immutable and safe to keep.
+	exportCalibration() {
+		return this.#source
+	}
+
+	// Returns the generation of the calibration in use, which changes whenever it does.
+	getCalibrationGeneration() {
+		return this.#calibrationGeneration
+	}
+
+	// Restores a source calibration solved earlier, possibly by another client, for the current mount context: derives
+	// the calibration to guide with (effectiveGuidingCalibration, with declinationCompensation and
+	// reverseDecOutputAfterMeridianFlip), and when it applies makes the record the source and that calibration the one
+	// the next guide() uses without calibrating, declares context as current and emits calibrationRestored. Refused as
+	// busy while calibrating or guiding (paused included), which a restore must not retarget. A refusal of the record
+	// changes nothing. The record must be valid (validateGuidingCalibrationRecord at a storage boundary).
+	restoreCalibration(record: GuidingCalibrationRecord, context: GuidingCalibrationContext): GuidingCalibrationRestore {
+		const sessionState = this.#paused ? this.#resumeState : this.#appState
+		if (sessionState === 'Calibrating' || sessionState === 'Guiding' || sessionState === 'LostLock') return { status: 'busy' }
+
+		const applicability = this.#applicabilityOf(record, context)
+		if (applicability.status !== 'direct' && applicability.status !== 'transformed') return applicability
+
+		this.#source = record
+		this.#calibrationContext = context
+		this.#useCalibration(applicability.calibration)
+		this.emitEvent('calibrationRestored', { guideOutput: this.#guideOutput?.name ?? '', transformations: applicability.transformations, declinationScale: applicability.declinationScale })
+		return applicability
+	}
+
+	// Derives the calibration in use again from its source for a new mount context, such as after a slew or a meridian
+	// flip, and declares context as current: an applicable result replaces the calibration in use (on a running guider
+	// too, keeping its lock as flipCalibration does) and emits calibrationTransformed; a refusal drops the calibration in
+	// use, keeping the source, so nothing guides with a geometry that may be wrong, and the next guide() calibrates.
+	// Refused as busy while calibrating; without a source the result is insufficientEvidence and nothing changes.
+	reassessCalibration(context: GuidingCalibrationContext): GuidingCalibrationRestore {
+		if (this.#appState === 'Calibrating' || (this.#paused && this.#resumeState === 'Calibrating')) return { status: 'busy' }
+		this.#calibrationContext = context
+		if (this.#source === undefined) return { status: 'insufficientEvidence', reasons: [] }
+
+		const applicability = this.#applicabilityOf(this.#source, context)
+
+		if (applicability.status !== 'direct' && applicability.status !== 'transformed') {
+			if (this.#calibration !== undefined) this.#dropCalibration('calibration not valid for the mount context')
+			return applicability
+		}
+
+		this.#useCalibration(applicability.calibration)
+		this.emitEvent('calibrationTransformed', { guideOutput: this.#guideOutput?.name ?? '', transformations: applicability.transformations, declinationScale: applicability.declinationScale })
+		return applicability
+	}
+
+	// Returns how the record applies in context with the transform options of this client.
+	#applicabilityOf(record: GuidingCalibrationRecord, context: GuidingCalibrationContext) {
+		return effectiveGuidingCalibration(record, context, { declinationCompensation: this.options.declinationCompensation !== false, reverseDecOutputAfterMeridianFlip: this.options.reverseDecOutputAfterMeridianFlip === true })
+	}
+
+	// Makes calibration the one in use: on the running guider when guiding (keeping its lock), else for the next guider.
+	#useCalibration(calibration: GuidingCalibrationResult) {
+		this.#calibration = calibration
+		this.#calibrationGeneration++
+		const sessionState = this.#paused ? this.#resumeState : this.#appState
+
+		if (sessionState === 'Guiding' || sessionState === 'LostLock') {
+			this.#applyCalibrationToGuider(calibration)
+			this.#syncGuideTargetOffset()
+		}
 	}
 
 	// Returns a PHD2-shaped snapshot of the current calibration solution.
@@ -962,7 +1067,12 @@ export class GuiderClient {
 		this.emitEvent('settleStarted')
 
 		if (recalibrate || this.#calibration === undefined) {
-			if (recalibrate) this.#calibration = undefined
+			if (recalibrate && this.#calibration !== undefined) {
+				this.#calibration = undefined
+				this.#source = undefined
+				this.#calibrationGeneration++
+			}
+
 			this.#calibrator.reset()
 			this.emitEvent('calibrationStarted', { guideOutput: this.#guideOutput.name })
 			this.#setAppState('Calibrating')
@@ -1390,6 +1500,8 @@ export class GuiderClient {
 
 		if (step.completed !== undefined) {
 			this.#calibration = step.completed
+			this.#source = { version: GUIDING_CALIBRATION_RECORD_VERSION, calibration: step.completed, context: this.#calibrationContext, acquiredAt: Date.now() }
+			this.#calibrationGeneration++
 			this.#guider = this.#makeGuider(this.#calibration)
 			this.#guidingStartTime = Date.now()
 			this.#avgDistanceNeedReset = true
@@ -1950,7 +2062,12 @@ export class GuiderClient {
 		this.#lockShiftParams.axes = 'X/Y'
 		this.#calibrator.reset()
 		this.#tracker.reset()
-		if (clearCalibration) this.#calibration = undefined
+		if (clearCalibration && this.#calibration !== undefined) {
+			this.#calibration = undefined
+			this.#calibrationGeneration++
+		}
+
+		if (clearCalibration) this.#source = undefined
 		this.#guider = this.#makeGuider(this.#calibration)
 	}
 
@@ -2064,6 +2181,7 @@ export class GuiderClient {
 
 		this.emitEvent('guideStep', {
 			frameId: frame.frameId ?? 0,
+			calibrationGeneration: this.#calibrationGeneration,
 			guidingTime: this.#guidingElapsedTime(frame.timestamp ?? 0),
 			// Uses an empty name if the guide-output device is unavailable.
 			guideOutput: this.#guideOutput?.name ?? '',
@@ -2188,6 +2306,14 @@ function axisUnitThreshold(pixelThreshold: number, ratePxPerMs: number) {
 function axisErrorToPixels(axisError: number | undefined, ratePxPerMs: number) {
 	const error = axisError ?? 0
 	return ratePxPerMs > 0 ? error * ratePxPerMs : error
+}
+
+// Returns the source record flipped by hand: its calibration flipped as flipGuidingCalibration with reverseDecOutput, and
+// its known pier side swapped, since the flipped solution is valid on the other side.
+function flippedRecord(record: GuidingCalibrationRecord, reverseDecOutput: boolean): GuidingCalibrationRecord {
+	const { pierSide } = record.context
+	const flippedSide = pierSide === 'EAST' ? 'WEST' : pierSide === 'WEST' ? 'EAST' : pierSide
+	return { ...record, calibration: flipGuidingCalibration(record.calibration, reverseDecOutput), context: { ...record.context, pierSide: flippedSide } }
 }
 
 // Converts the local calibration result into PHD2-compatible calibration data.

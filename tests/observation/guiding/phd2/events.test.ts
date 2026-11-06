@@ -81,6 +81,7 @@ describe('translation', () => {
 			type: 'guideStep',
 			timestamp: AT,
 			frameId: 7,
+			calibrationGeneration: 1,
 			guidingTime: 12.5,
 			guideOutput: 'Mount',
 			dx: 0.5,

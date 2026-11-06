@@ -200,6 +200,8 @@ class MountSimulator {
 	// Image-space unit vector for north/south pulses. Defaults to DEC_AXIS; a test can point it
 	// along RA_AXIS to model a mount whose axes are degenerate.
 	decAxis: readonly [number, number] = DEC_AXIS
+	// Multiplier of the RA travel of a pulse; cos(declination) of a pointing away from the equator.
+	raScale = 1
 
 	// Number of recorded pulses already converted into motion.
 	#consumed = 0
@@ -208,8 +210,8 @@ class MountSimulator {
 	advance(pulses: readonly PulseRecord[]) {
 		for (let i = this.#consumed; i < pulses.length; i++) {
 			const { direction, duration } = pulses[i]
-			const travel = duration * MOUNT_RATE_PX_PER_MS
 			const ra = direction === 'WEST' || direction === 'EAST'
+			const travel = duration * MOUNT_RATE_PX_PER_MS * (ra ? this.raScale : 1)
 			const axis = ra ? RA_AXIS : this.decAxis
 			const polarity = ra ? this.raPolarity : this.decPolarity
 			const sign = (direction === 'WEST' || direction === 'NORTH' ? 1 : -1) * polarity
@@ -3334,6 +3336,106 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		expect(distances[1]).toBeLessThan(distances[0])
 		expect(distances.at(-1)!).toBeLessThan(distances[0])
 		expect(harness.client.getAppState()).toBe('Guiding')
+	})
+
+	test('a calibration exported from one client guides another one without calibrating', async () => {
+		const context = { declination: 0, pierSide: 'EAST' } as const
+		const first = makeHarness({ calibrator: FAST_CALIBRATION })
+		first.client.setCalibrationContext(context)
+		await calibrate(first)
+
+		const record = first.client.exportCalibration()!
+		expect(record.context).toEqual(context)
+		expect(record.calibration).toEqual(nativeOf(first.native, 'calibrationCompleted')[0].calibration)
+		expect(first.client.restoreCalibration(record, context).status).toBe('busy')
+
+		const second = makeHarness({ calibrator: FAST_CALIBRATION })
+		connect(second)
+		second.client.loop()
+		await feedFrame(second)
+		expect(second.client.restoreCalibration(record, context).status).toBe('direct')
+		expect(nativeOf(second.native, 'calibrationRestored')).toHaveLength(1)
+		expect(second.client.exportCalibration()).toBe(record)
+		expect(second.client.guide(false, IMMEDIATE_SETTLE)).toBeTrue()
+		expect(second.client.getAppState()).toBe('Guiding')
+		expect(nativeOf(second.native, 'calibrationStarted')).toHaveLength(0)
+
+		await establishLockReference(second)
+		second.mount.offsetX += RA_AXIS[0] * 3
+		second.mount.offsetY += RA_AXIS[1] * 3
+		const distances: number[] = []
+
+		for (let i = 0; i < 8; i++) {
+			await feedFrame(second)
+			const step = nativeOf(second.native, 'guideStep').at(-1)!
+			distances.push(Math.hypot(step.dx, step.dy))
+		}
+
+		expect(distances[0]).toBeGreaterThan(1.5)
+		expect(distances.at(-1)!).toBeLessThan(distances[0] / 2)
+	})
+
+	test('reassessing for another declination scales the RA response the guider corrects with', async () => {
+		const harness = makeHarness({ calibrator: FAST_CALIBRATION })
+		harness.client.setCalibrationContext({ declination: 0, pierSide: 'WEST' })
+		await calibrate(harness)
+		await establishLockReference(harness)
+
+		const before = harness.client.getCalibrationData()
+		const generation = harness.client.getCalibrationGeneration()
+		const reassessed = harness.client.reassessCalibration({ declination: 60 * DEG2RAD, pierSide: 'WEST' })
+		expect(reassessed.status).toBe('transformed')
+		expect(harness.client.getCalibrationData().xRate).toBeCloseTo(before.xRate * 0.5, 9)
+		expect(harness.client.getCalibrationData().yRate).toBeCloseTo(before.yRate, 12)
+		expect(harness.client.getCalibrationGeneration()).toBe(generation + 1)
+		expect(harness.client.getAppState()).toBe('Guiding')
+		// The source stays as measured.
+		expect(harness.client.exportCalibration()!.calibration.ra.ratePxPerMs).toBeCloseTo(before.xRate, 12)
+
+		harness.mount.raScale = 0.5
+		harness.mount.offsetX += RA_AXIS[0] * 3
+		harness.mount.offsetY += RA_AXIS[1] * 3
+		const distances: number[] = []
+
+		for (let i = 0; i < 8; i++) {
+			await feedFrame(harness)
+			const step = nativeOf(harness.native, 'guideStep').at(-1)!
+			expect(step.calibrationGeneration).toBe(generation + 1)
+			distances.push(Math.hypot(step.dx, step.dy))
+		}
+
+		expect(distances.at(-1)!).toBeLessThan(distances[0] / 2)
+	})
+
+	test('reassessing for a context that cannot be trusted drops the calibration but keeps its source', async () => {
+		const harness = makeHarness({ calibrator: FAST_CALIBRATION })
+		harness.client.setCalibrationContext({ declination: 0, pierSide: 'EAST' })
+		await calibrate(harness)
+		const source = harness.client.exportCalibration()
+
+		expect(harness.client.reassessCalibration({ declination: 0 })).toEqual({ status: 'insufficientEvidence', reasons: ['pierSideUnknown'] })
+		expect(harness.client.getCalibrated()).toBeFalse()
+		expect(harness.client.getAppState()).toBe('Selected')
+		expect(harness.client.exportCalibration()).toBe(source)
+
+		// Back in a known context the source applies again.
+		expect(harness.client.reassessCalibration({ declination: 0, pierSide: 'WEST' }).status).toBe('transformed')
+		expect(harness.client.getCalibrated()).toBeTrue()
+
+		harness.client.clearCalibration()
+		expect(harness.client.exportCalibration()).toBeUndefined()
+	})
+
+	test('a hand flip flips the source with its pier side, so a reassessment does not undo it', async () => {
+		const harness = makeHarness({ calibrator: FAST_CALIBRATION })
+		harness.client.setCalibrationContext({ declination: 0, pierSide: 'EAST' })
+		await calibrate(harness)
+		const measured = harness.client.getCalibrationData()
+
+		expect(harness.client.flipCalibration()).toBeTrue()
+		expect(harness.client.exportCalibration()!.context.pierSide).toBe('WEST')
+		expect(harness.client.reassessCalibration({ declination: 0, pierSide: 'WEST' }).status).toBe('direct')
+		expect(Math.cos(harness.client.getCalibrationData().xAngle - measured.xAngle)).toBeCloseTo(-1, 9)
 	})
 
 	test('flip and DEC mode keep the dithered lock', async () => {

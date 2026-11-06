@@ -13,8 +13,11 @@ import { starTrackingOf } from './tracker.star'
 // clearing move back toward the origin that keeps pulsing until the measurement is close enough, crosses the
 // origin, or hits `maxClearingSteps` (with longer pulses first when `fastClearing`, PHD2's fast recenter of its east
 // leg), DEC backlash absorption, an optional DEC return toward the origin once both axes are solved (PHD2's south
-// leg and nudges), and rejects frames that are noisy, edge-clipped, or show impossible jumps. Positions/distances are pixels; pulse durations are
-// milliseconds; angles are radians.
+// leg and nudges), and rejects frames that are noisy, edge-clipped, or show impossible jumps. With
+// `assumeDecOrthogonalToRa`, the DEC axis is taken perpendicular to the measured RA axis while the measured DEC fit is kept for
+// review. Every measured step is recorded with its leg, and the completed result carries a detached review of them (the
+// steps excluded from the fits included) for display. Positions/distances are pixels; pulse durations are milliseconds;
+// angles are radians.
 
 // Phase of the calibration state machine.
 export type GuidingCalibrationPhase =
@@ -146,10 +149,27 @@ export interface GuidingCalibrationConfig {
 	readonly minRatePxPerMs: number
 	// Maximum accepted axis rate, in pixels per millisecond.
 	readonly maxRatePxPerMs: number
+	// Whether the solved DEC axis is the measured RA axis turned by 90° toward the measured DEC motion, with the DEC rate
+	// projected on it, instead of the measured DEC axis (PHD2's "Assume Dec orthogonal to RA"). The DEC leg is measured and
+	// validated as without it, and the measured DEC axis stays in the review.
+	readonly assumeDecOrthogonalToRa: boolean
 }
+
+// Leg of the calibration a sample was measured in: the RA forward pulses, the RA clearing back toward the origin, the
+// DEC forward pulses (the backlash absorption included) or the DEC return toward the origin.
+export type GuidingCalibrationLeg = 'raForward' | 'raClearing' | 'decForward' | 'decReturn'
+
+// Why a forward step was measured but left out of its axis fit: the target did not move by `minMovePerStepPx`, while
+// absorbing the DEC backlash before any DEC motion (`backlash`) or otherwise (`noMotion`).
+export type GuidingCalibrationSampleExclusion = 'noMotion' | 'backlash'
 
 // One recorded calibration measurement for a single pulse step.
 export interface GuidingCalibrationSample {
+	// Leg the step belongs to.
+	readonly leg: GuidingCalibrationLeg
+	// Why the step was left out of its axis fit; absent for a step the fit used, and always absent on the clearing and
+	// return legs, which no fit uses.
+	readonly excluded?: GuidingCalibrationSampleExclusion
 	// 1-based step index within its leg.
 	readonly step: number
 	// Pulse duration applied for this step, in milliseconds.
@@ -248,6 +268,33 @@ export interface GuidingCalibrationResult {
 	readonly decReturnSteps: number
 	// Non-fatal warnings raised during the solve and the DEC return.
 	readonly warnings: readonly string[]
+	// Whether `dec` was assumed perpendicular to `ra` (see `assumeDecOrthogonalToRa`).
+	readonly orthogonalAssumed: boolean
+	// Measurements behind the solution, for review; a transformation of the solution (a flip) leaves it as measured.
+	readonly review: GuidingCalibrationReview
+}
+
+// Measurements of a completed calibration, detached from the calibrator: fresh arrays never written again. Sample
+// positions are guide-image pixels as measured, the RA forward, clearing and DEC return legs against the RA origin
+// (`startX`, `startY`), the DEC forward leg against the DEC origin.
+export interface GuidingCalibrationReview {
+	// RA forward steps the RA fit used, in order.
+	readonly raSamples: readonly GuidingCalibrationSample[]
+	// RA clearing steps, in order.
+	readonly clearingSamples: readonly GuidingCalibrationSample[]
+	// DEC forward steps the DEC fit used, in order.
+	readonly decSamples: readonly GuidingCalibrationSample[]
+	// DEC return steps, nudges included, in order.
+	readonly decReturnSamples: readonly GuidingCalibrationSample[]
+	// Forward steps measured but left out of the fits, in order, each with its `excluded` reason.
+	readonly excludedSamples: readonly GuidingCalibrationSample[]
+	// Ordered phase transitions of the run.
+	readonly phaseHistory: readonly GuidingCalibrationPhase[]
+	// DEC axis as fitted from `decSamples`, before the orthogonal assumption; the same geometry as the result's `dec`
+	// without it.
+	readonly measuredDec: GuidingCalibrationAxisSolution
+	// How far the measured RA and DEC axes are from perpendicular, |π/2 − separation|, in radians within [0, π/2].
+	readonly orthogonalityError: Angle
 }
 
 // Applies a 180-degree image flip and an optional DEC output reversal to a solved calibration.
@@ -347,6 +394,8 @@ export interface GuidingCalibrationDiagnostics {
 	readonly clearingSamples: readonly GuidingCalibrationSample[]
 	// Recorded DEC return samples, against the calibration origin.
 	readonly decReturnSamples: readonly GuidingCalibrationSample[]
+	// Recorded forward steps left out of the fits.
+	readonly excludedSamples: readonly GuidingCalibrationSample[]
 }
 
 // Outcome of one processFrame call: phase, optional pulse to execute, terminal result, and diagnostics.
@@ -400,10 +449,11 @@ interface GuidingCalibratorState {
 	decSamples: GuidingCalibrationSample[]
 	clearingSamples: GuidingCalibrationSample[]
 	decReturnSamples: GuidingCalibrationSample[]
+	excludedSamples: GuidingCalibrationSample[]
 	raSolution?: GuidingCalibrationAxisSolution
 	decSolution?: GuidingCalibrationAxisSolution
 	// Validated solution waiting for the DEC return to end before it becomes the result.
-	solved?: GuidingCalibrationResult
+	solved?: SolvedGuidingCalibration
 	result?: GuidingCalibrationResult
 	failure?: GuidingCalibrationFailure
 	badFrames: number
@@ -413,6 +463,9 @@ interface GuidingCalibratorState {
 	phaseHistory: GuidingCalibrationPhase[]
 	lastDiagnostics: GuidingCalibrationDiagnostics
 }
+
+// A validated solution before its review is attached, once the DEC return ends.
+type SolvedGuidingCalibration = Omit<GuidingCalibrationResult, 'review'>
 
 // A configuration-validation problem: which key failed and why.
 interface GuidingCalibrationConfigIssue {
@@ -456,6 +509,7 @@ export const DEFAULT_GUIDING_CALIBRATOR_CONFIG: Readonly<GuidingCalibrationConfi
 	minFrameQuality: 0.2,
 	minRatePxPerMs: 1e-4,
 	maxRatePxPerMs: 2,
+	assumeDecOrthogonalToRa: false,
 }
 
 // Pristine diagnostics snapshot for the idle state.
@@ -484,6 +538,7 @@ const EMPTY_DIAGNOSTICS: Readonly<GuidingCalibrationDiagnostics> = {
 	decSamples: [],
 	clearingSamples: [],
 	decReturnSamples: [],
+	excludedSamples: [],
 }
 
 // Pristine internal state cloned on construction and reset.
@@ -518,6 +573,7 @@ const EMPTY_GUIDING_CALIBRATOR_STATE: Readonly<GuidingCalibratorState> = {
 	decSamples: [],
 	clearingSamples: [],
 	decReturnSamples: [],
+	excludedSamples: [],
 	// Explicit undefined so reset()'s Object.assign clears these optional fields. Without the keys present,
 	// a stale solution or a stale completed/failure result would survive reset and be surfaced by
 	// #makeStepResult on every step of the next calibration run.
@@ -696,12 +752,13 @@ export class GuidingCalibrator {
 	// Records one RA-forward sample and either continues pulsing or advances to clearing.
 	#handleRaForwardMeasurement(frame: GuideFrame, point: Point, filtered: GuideTrackerResult) {
 		this.#transitionTo('raForwardMeasure')
-		const sample = this.#recordSample(this.state.raSteps + 1, this.config.raPulse, this.config.raDirection, point, this.state.startX, this.state.startY)
+		const sample = this.#recordSample('raForward', this.state.raSteps + 1, this.config.raPulse, this.config.raDirection, point, this.state.startX, this.state.startY, frame)
 		this.state.raSteps++
 		this.#finishMeasurement(point)
 
 		if (sample.stepDistance < this.config.minMovePerStepPx) {
 			this.state.raNoMotionSteps++
+			this.state.excludedSamples.push({ ...sample, excluded: 'noMotion' })
 
 			if (this.state.raNoMotionSteps > this.config.maxRaNoMotionSteps) {
 				return this.#fail('too_many_ra_no_motion_steps', 'RA calibration pulses did not produce measurable motion', frame, ['ra_no_motion'], filtered)
@@ -763,7 +820,7 @@ export class GuidingCalibrator {
 
 		const previousNetX = this.state.lastX - this.state.startX
 		const previousNetY = this.state.lastY - this.state.startY
-		const sample = this.#recordSample(this.state.clearingSteps + 1, this.state.pendingPulseMs, oppositeRA(this.config.raDirection), point, this.state.startX, this.state.startY)
+		const sample = this.#recordSample('raClearing', this.state.clearingSteps + 1, this.state.pendingPulseMs, oppositeRA(this.config.raDirection), point, this.state.startX, this.state.startY, frame)
 
 		this.state.clearingSteps++
 		this.state.clearingSamples.push(sample)
@@ -796,12 +853,13 @@ export class GuidingCalibrator {
 
 	// Records one DEC sample, applies backlash tolerance, and either continues or solves calibration.
 	#handleDecMeasurement(frame: GuideFrame, point: Point, filtered: GuideTrackerResult) {
-		const sample = this.#recordDecSample(this.state.decSteps + 1, point)
+		const sample = this.#recordDecSample(this.state.decSteps + 1, point, frame)
 		this.state.decSteps++
 		this.#finishMeasurement(point)
 
 		if (sample.projectedDistance < this.config.minMovePerStepPx) {
 			this.state.decNoMotionSteps++
+			this.state.excludedSamples.push({ ...sample, excluded: this.state.decMotionDetected ? 'noMotion' : 'backlash' })
 
 			if (!this.state.decMotionDetected) {
 				this.state.decBacklashMs = this.state.decSteps * this.config.decPulse
@@ -864,16 +922,22 @@ export class GuidingCalibrator {
 	#solveAndValidate(frame: GuideFrame, filtered: GuideTrackerResult) {
 		this.#transitionTo('solving')
 
-		const { raSolution, decSolution } = this.state
+		const { raSolution, decSolution: measuredDec } = this.state
 
-		if (raSolution === undefined || decSolution === undefined) {
+		if (raSolution === undefined || measuredDec === undefined) {
 			return this.#fail('matrix_singular', 'calibration solve requires both RA and DEC axis solutions', frame, ['solve_missing_axis'], filtered)
 		}
 
-		const dot = clamp(raSolution.unitX * decSolution.unitX + raSolution.unitY * decSolution.unitY, -1, 1)
-		const separation = Math.acos(Math.abs(dot))
+		const separation = axisSeparation(raSolution, measuredDec)
 		if (separation < this.config.minAxisSeparation) {
 			return this.#fail('axes_too_parallel', 'RA and DEC calibration vectors are too close to parallel', frame, ['axes_parallel'], filtered)
+		}
+
+		// The DEC motion is at least minAxisSeparation away from the RA axis here, so its side of it is unambiguous.
+		const decSolution = this.config.assumeDecOrthogonalToRa ? orthogonalDecSolution(raSolution, measuredDec, this.state.decSamples) : measuredDec
+
+		if (decSolution !== measuredDec && !isAxisRateValid(decSolution, this.config.minRatePxPerMs, this.config.maxRatePxPerMs)) {
+			return this.#fail('axis_rate_invalid', 'DEC calibration rate projected perpendicular to RA is outside the accepted range', frame, ['dec_rate_invalid'], filtered)
 		}
 
 		const m00 = raSolution.unitX * raSolution.ratePxPerMs
@@ -900,7 +964,7 @@ export class GuidingCalibrator {
 			warnings.push('ra_clearing_finished_near_threshold')
 		}
 
-		const result: GuidingCalibrationResult = {
+		const result: SolvedGuidingCalibration = {
 			ra: { ...raSolution, direction: this.config.raDirection },
 			dec: { ...decSolution, direction: this.config.decDirection },
 			imageMotion: [m00, m01, m10, m11],
@@ -914,6 +978,7 @@ export class GuidingCalibrator {
 			clearingSteps: this.state.clearingSteps,
 			decReturnSteps: 0,
 			warnings,
+			orthogonalAssumed: this.config.assumeDecOrthogonalToRa,
 		}
 
 		this.state.warnings = warnings.slice()
@@ -933,7 +998,7 @@ export class GuidingCalibrator {
 		const solved = this.state.solved
 		if (solved === undefined) return this.#fail('bad_frame', 'DEC return without a solved calibration', frame, ['invalid_phase'], filtered)
 
-		const sample = this.#recordSample(this.state.decReturnSteps + 1, this.state.pendingPulseMs, oppositeDEC(this.config.decDirection), point, this.state.startX, this.state.startY)
+		const sample = this.#recordSample('decReturn', this.state.decReturnSteps + 1, this.state.pendingPulseMs, oppositeDEC(this.config.decDirection), point, this.state.startX, this.state.startY, frame)
 		this.state.decReturnSteps++
 		this.state.decReturnSamples.push(sample)
 		this.#finishMeasurement(point)
@@ -979,8 +1044,21 @@ export class GuidingCalibrator {
 	}
 
 	// Publishes a validated result and ends the calibration.
-	#complete(result: GuidingCalibrationResult, frame: GuideFrame, filtered: GuideTrackerResult) {
-		this.state.result = result
+	#complete(solved: SolvedGuidingCalibration, frame: GuideFrame, filtered: GuideTrackerResult) {
+		const ra = this.state.raSolution!
+		const measuredDec = this.state.decSolution!
+		const review: GuidingCalibrationReview = {
+			raSamples: this.state.raSamples.slice(),
+			clearingSamples: this.state.clearingSamples.slice(),
+			decSamples: this.state.decSamples.slice(),
+			decReturnSamples: this.state.decReturnSamples.slice(),
+			excludedSamples: this.state.excludedSamples.slice(),
+			phaseHistory: [...this.state.phaseHistory, 'completed'],
+			measuredDec: { ...measuredDec },
+			orthogonalityError: Math.abs(PIOVERTWO - axisSeparation(ra, measuredDec)),
+		}
+
+		this.state.result = { ...solved, review }
 		this.#transitionTo('completed')
 		this.#updateDiagnostics(frame, filtered, ['completed'])
 
@@ -1009,16 +1087,16 @@ export class GuidingCalibrator {
 	}
 
 	// Records one generic calibration sample against the provided origin.
-	#recordSample(step: number, pulse: number, pulseDirection: GuideDirectionRA | GuideDirectionDEC, point: Point, originX: number, originY: number): GuidingCalibrationSample {
+	#recordSample(leg: GuidingCalibrationLeg, step: number, pulse: number, pulseDirection: GuideDirectionRA | GuideDirectionDEC, point: Point, originX: number, originY: number, frame: GuideFrame): GuidingCalibrationSample {
 		const deltaX = point.x - this.state.lastX
 		const deltaY = point.y - this.state.lastY
 		const netX = point.x - originX
 		const netY = point.y - originY
-		return { step, pulse, pulseDirection, x: point.x, y: point.y, deltaX, deltaY, netX, netY, stepDistance: Math.hypot(deltaX, deltaY), netDistance: Math.hypot(netX, netY), projectedDistance: Math.hypot(deltaX, deltaY), orthogonalDistance: 0 }
+		return { leg, step, pulse, pulseDirection, x: point.x, y: point.y, deltaX, deltaY, netX, netY, stepDistance: Math.hypot(deltaX, deltaY), netDistance: Math.hypot(netX, netY), projectedDistance: Math.hypot(deltaX, deltaY), orthogonalDistance: 0, frameId: frame.frameId, timestamp: frame.timestamp }
 	}
 
 	// Records one DEC sample projected onto the RA-orthogonal seed direction.
-	#recordDecSample(step: number, point: Point): GuidingCalibrationSample {
+	#recordDecSample(step: number, point: Point, frame: GuideFrame): GuidingCalibrationSample {
 		const deltaX = point.x - this.state.lastX
 		const deltaY = point.y - this.state.lastY
 		const netX = point.x - this.state.decStartX
@@ -1029,6 +1107,7 @@ export class GuidingCalibrator {
 		const { decPulse, decDirection } = this.config
 
 		return {
+			leg: 'decForward',
 			step,
 			pulse: decPulse,
 			pulseDirection: decDirection,
@@ -1042,6 +1121,8 @@ export class GuidingCalibrator {
 			netDistance: Math.hypot(netX, netY),
 			projectedDistance: Math.abs(dot2(deltaX, deltaY, seedX, seedY)),
 			orthogonalDistance: dot2(netX, netY, seedX, seedY),
+			frameId: frame.frameId,
+			timestamp: frame.timestamp,
 		}
 	}
 
@@ -1117,6 +1198,7 @@ export class GuidingCalibrator {
 			decSamples: this.state.decSamples.slice(),
 			clearingSamples: this.state.clearingSamples.slice(),
 			decReturnSamples: this.state.decReturnSamples.slice(),
+			excludedSamples: this.state.excludedSamples.slice(),
 			tracking: filtered,
 		}
 	}
@@ -1219,6 +1301,34 @@ function solveAxisFromSamples(samples: readonly GuidingCalibrationSample[]): Gui
 	}
 
 	return { unitX, unitY, ratePxPerMs: projectedTravel / totalPulse, totalTravelPx: projectedTravel, totalPulse, angle: Math.atan2(unitY, unitX), rmsOrthogonalResidualPx: Math.sqrt(orthogonalSq / samples.length), negativeProjectionCount }
+}
+
+// Returns the separation of two solved axes, ignoring their sense, in radians within [0, π/2]: atan2 of the cross and
+// dot products, which stays accurate near both ends where acos does not.
+function axisSeparation(a: GuidingCalibrationAxisSolution, b: GuidingCalibrationAxisSolution) {
+	return Math.atan2(Math.abs(a.unitX * b.unitY - a.unitY * b.unitX), Math.abs(dot2(a.unitX, a.unitY, b.unitX, b.unitY)))
+}
+
+// Returns the DEC axis assumed perpendicular to the measured RA axis: the RA unit vector turned by 90° toward the side
+// the measured DEC motion went, with the rate, travel, residual and reverse-step count of the DEC steps projected on it.
+// The caller ensures the measured DEC axis is not parallel to RA, so the side is defined.
+function orthogonalDecSolution(ra: GuidingCalibrationAxisSolution, measured: GuidingCalibrationAxisSolution, samples: readonly GuidingCalibrationSample[]): GuidingCalibrationAxisSolution {
+	const sense = dot2(measured.unitX, measured.unitY, -ra.unitY, ra.unitX) >= 0 ? 1 : -1
+	const unitX = -ra.unitY * sense
+	const unitY = ra.unitX * sense
+	let projectedTravel = 0
+	let orthogonalSq = 0
+	let negativeProjectionCount = 0
+
+	for (const sample of samples) {
+		const projection = dot2(sample.deltaX, sample.deltaY, unitX, unitY)
+		if (projection < 0) negativeProjectionCount++
+		projectedTravel += projection
+		const orthogonal = dot2(sample.deltaX, sample.deltaY, -unitY, unitX)
+		orthogonalSq += orthogonal * orthogonal
+	}
+
+	return { unitX, unitY, ratePxPerMs: projectedTravel / measured.totalPulse, totalTravelPx: projectedTravel, totalPulse: measured.totalPulse, angle: Math.atan2(unitY, unitX), rmsOrthogonalResidualPx: Math.sqrt(orthogonalSq / samples.length), negativeProjectionCount }
 }
 
 // Flips one solved axis basis vector while preserving the measured scalar rate and residual diagnostics.

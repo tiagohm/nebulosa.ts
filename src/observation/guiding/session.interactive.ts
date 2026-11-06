@@ -7,7 +7,8 @@ import { guideOutputKey, type ResourceRequest, resourceKey } from '../../devices
 import { toArcsec } from '../../math/units/angle'
 import { type CameraExposureConfiguration, configureCameraExposure } from '../capture/capture'
 import type { CameraCaptureClock } from '../capture/types'
-import type { GuidePulseAdmission, GuiderClient, GuiderClientConnectOptions, GuiderClientHandler } from './client'
+import type { GuidingCalibrationContext, GuidingCalibrationRecord } from './calibration.transform'
+import type { GuidePulseAdmission, GuiderClient, GuiderClientConnectOptions, GuiderClientHandler, GuidingCalibrationRestore } from './client'
 import { type DitherPhase, type DitherRequest, type DitherResult, settleOnAbort } from './ditherer'
 import type { GuiderState, GuidingEvent } from './events'
 // oxfmt-ignore
@@ -67,6 +68,10 @@ export type InteractiveGuidingClient = Pick<
 	| 'deselectStar'
 	| 'clearCalibration'
 	| 'flipCalibration'
+	| 'setCalibrationContext'
+	| 'exportCalibration'
+	| 'restoreCalibration'
+	| 'reassessCalibration'
 	| 'dither'
 >
 
@@ -318,6 +323,30 @@ export class InteractiveGuidingSession {
 	// Flips the calibration of the client for a meridian flip.
 	flipCalibration(): OperationResult<void> {
 		return this.client.flipCalibration() ? successfulOperationResult(undefined) : failedOperationResult('unexpectedState', 'the guider has no calibration to flip')
+	}
+
+	// Declares the mount context the next solved calibration is recorded with (GuiderClient.setCalibrationContext).
+	setCalibrationContext(context: GuidingCalibrationContext) {
+		this.client.setCalibrationContext(context)
+	}
+
+	// Returns the source of the calibration in use, or undefined without one (GuiderClient.exportCalibration).
+	exportCalibration(): GuidingCalibrationRecord | undefined {
+		return this.client.exportCalibration()
+	}
+
+	// Restores a validated source calibration for the mount context (GuiderClient.restoreCalibration); refused as busy
+	// while a run lives, since only a closed pulse gate may have its calibration replaced.
+	restoreCalibration(record: GuidingCalibrationRecord, context: GuidingCalibrationContext): GuidingCalibrationRestore {
+		if (this.#run !== undefined) return { status: 'busy' }
+		return this.client.restoreCalibration(record, context)
+	}
+
+	// Derives the calibration in use again for the mount context (GuiderClient.reassessCalibration), dropping it when it
+	// no longer applies; refused as busy while a run lives, as after a motion the run is stopped first.
+	reassessCalibration(context: GuidingCalibrationContext): GuidingCalibrationRestore {
+		if (this.#run !== undefined) return { status: 'busy' }
+		return this.client.reassessCalibration(context)
 	}
 
 	// Starts calibrating or guiding the selected target (the client selects one when none is): begins the session when

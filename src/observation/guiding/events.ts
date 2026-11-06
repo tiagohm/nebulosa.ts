@@ -1,4 +1,5 @@
 import type { GuidingAssistantResult } from './assistant'
+import type { GuidingCalibrationTransformation } from './calibration.transform'
 import type { GuidingCalibrationDiagnostics, GuidingCalibrationFailure, GuidingCalibrationResult } from './calibrator'
 import type { DitherMode } from './dither'
 import type { AxisPulse, DeclinationGuideMode, GuideDiagnostics } from './guider'
@@ -161,6 +162,24 @@ export interface GuiderCalibrationFlippedEvent extends GuidingEventBase<'calibra
 	readonly guideOutput: string
 }
 
+// A calibration solved earlier was restored for the current mount context, without calibrating.
+export interface GuiderCalibrationRestoredEvent extends GuidingEventBase<'calibrationRestored'> {
+	readonly guideOutput: string
+	// Transformations applied to the restored source, in order; empty when it applied as it was.
+	readonly transformations: readonly GuidingCalibrationTransformation[]
+	// Factor applied to the RA response for the declination; 1 without declination compensation.
+	readonly declinationScale: number
+}
+
+// The calibration in use was derived again from its source for a new mount context.
+export interface GuiderCalibrationTransformedEvent extends GuidingEventBase<'calibrationTransformed'> {
+	readonly guideOutput: string
+	// Transformations applied to the source, in order; empty when it applies as it is.
+	readonly transformations: readonly GuidingCalibrationTransformation[]
+	// Factor applied to the RA response for the declination; 1 without declination compensation.
+	readonly declinationScale: number
+}
+
 // Guiding started with a valid calibration.
 export type GuiderGuidingStartedEvent = GuidingEventBase<'guidingStarted'>
 
@@ -173,6 +192,8 @@ export type GuiderLoopingStoppedEvent = GuidingEventBase<'loopingStopped'>
 // One guiding frame was measured and corrected.
 export interface GuiderGuideStepEvent extends GuidingEventBase<'guideStep'>, GuidingStarMetrics {
 	readonly frameId: number
+	// Generation of the calibration that converted the errors (GuiderClient.getCalibrationGeneration).
+	readonly calibrationGeneration: number
 	// Seconds since guiding started.
 	readonly guidingTime: number
 	readonly guideOutput: string
@@ -270,6 +291,8 @@ export type GuidingEvent =
 	| GuiderCalibrationFailedEvent
 	| GuiderCalibrationClearedEvent
 	| GuiderCalibrationFlippedEvent
+	| GuiderCalibrationRestoredEvent
+	| GuiderCalibrationTransformedEvent
 	| GuiderGuidingStartedEvent
 	| GuiderGuidingStoppedEvent
 	| GuiderLoopingStoppedEvent

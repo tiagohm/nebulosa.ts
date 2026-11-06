@@ -28,6 +28,8 @@ function makeCalibration(raRate = RA_RATE_PX_PER_MS, decRate = DEC_RATE_PX_PER_M
 		clearingSteps: 0,
 		decReturnSteps: 0,
 		warnings: [],
+		orthogonalAssumed: false,
+		review: { raSamples: [], clearingSamples: [], decSamples: [], decReturnSamples: [], excludedSamples: [], phaseHistory: [], measuredDec: dec, orthogonalityError: 0 },
 	}
 }
 

@@ -19,6 +19,8 @@ export function phd2EventsOf(event: GuidingEvent): PHD2Events[] {
 			return [phd2Event('Version', at, { PHDVersion: PHD2_VERSION, PHDSubver: PHD2_SUBVER, MsgVersion: PHD2_MSG_VERSION, OverlapSupport: PHD2_OVERLAP_SUPPORT }), phd2Event('AppState', at, { State: phd2AppStateOf(event.state) }), phd2Event('ConfigurationChange', at, {})]
 		case 'disconnected':
 		case 'calibrationCleared':
+		case 'calibrationRestored':
+		case 'calibrationTransformed':
 			return [phd2Event('ConfigurationChange', at, {})]
 		case 'stateChanged':
 			// PHD2 sends AppState only when a client connects; later transitions are tracked through the

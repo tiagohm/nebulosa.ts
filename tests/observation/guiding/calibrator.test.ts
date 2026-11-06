@@ -569,3 +569,79 @@ test('fails at startup when the selected guide star is too close to the edge', (
 	expect(step.failure).toBeDefined()
 	expect(step.failure!.code).toBe('star_near_edge')
 })
+
+test('records every forward step with its leg, the excluded ones apart, and a detached review on completion', () => {
+	const simulation = runCalibration({}, { raVector: [0.8, 0.2], decVector: [-0.15, 0.75], decBacklashSteps: 2 })
+	const completed = simulation.step.completed!
+	const { review } = completed
+
+	expect(review.raSamples.every((sample) => sample.leg === 'raForward' && sample.excluded === undefined)).toBeTrue()
+	expect(review.clearingSamples.every((sample) => sample.leg === 'raClearing')).toBeTrue()
+	expect(review.decSamples.every((sample) => sample.leg === 'decForward' && sample.excluded === undefined)).toBeTrue()
+	expect(review.excludedSamples.map((sample) => [sample.leg, sample.excluded, sample.step])).toEqual([
+		['decForward', 'backlash', 1],
+		['decForward', 'backlash', 2],
+	])
+	expect(review.raSamples[0].frameId).toBe(1)
+	expect(review.raSamples[0].timestamp).toBe(1000)
+	expect(review.phaseHistory.at(-1)).toBe('completed')
+	expect(review.measuredDec.unitX).toBeCloseTo(completed.dec.unitX, 12)
+	expect(completed.orthogonalAssumed).toBeFalse()
+
+	const separation = Math.acos(Math.abs(completed.ra.unitX * completed.dec.unitX + completed.ra.unitY * completed.dec.unitY))
+	expect(review.orthogonalityError).toBeCloseTo(Math.abs(Math.PI / 2 - separation), 9)
+
+	// The review is a copy: the calibrator resetting for another run leaves it as it was.
+	const steps = review.raSamples.length
+	simulation.calibrator.reset()
+	expect(review.raSamples).toHaveLength(steps)
+})
+
+test('assumes DEC perpendicular to RA toward the measured DEC motion and keeps the measured axis', () => {
+	// DEC axes away from perpendicular to RA, either way round and in both image parities.
+	for (const [raVector, decVector] of [
+		[
+			[0.8, 0],
+			[0.25, 0.7],
+		],
+		[
+			[0.8, 0],
+			[-0.25, -0.7],
+		],
+		[
+			[0, 0.8],
+			[0.7, -0.25],
+		],
+		[
+			[-0.6, 0.5],
+			[-0.5, -0.65],
+		],
+	] as const) {
+		const measured = runCalibration({}, { raVector, decVector }).step.completed!
+		const assumed = runCalibration({ assumeDecOrthogonalToRa: true }, { raVector, decVector }).step.completed!
+
+		expect(assumed.orthogonalAssumed).toBeTrue()
+		expect(assumed.ra.unitX * assumed.dec.unitX + assumed.ra.unitY * assumed.dec.unitY).toBeCloseTo(0, 12)
+		// Same side of the RA axis as the measured DEC motion.
+		expect(assumed.dec.unitX * measured.dec.unitX + assumed.dec.unitY * measured.dec.unitY).toBeGreaterThan(0)
+		// The rate is the DEC motion projected on the assumed axis.
+		const decLength = Math.hypot(decVector[0], decVector[1])
+		const cosine = assumed.dec.unitX * (decVector[0] / decLength) + assumed.dec.unitY * (decVector[1] / decLength)
+		expect(assumed.dec.ratePxPerMs).toBeCloseTo((decLength * cosine) / 100, 6)
+		expect(assumed.review.measuredDec.unitX).toBeCloseTo(measured.dec.unitX, 9)
+		expect(assumed.review.measuredDec.unitY).toBeCloseTo(measured.dec.unitY, 9)
+		const separation = Math.acos(Math.abs(raVector[0] * decVector[0] + raVector[1] * decVector[1]) / (Math.hypot(raVector[0], raVector[1]) * decLength))
+		expect(assumed.review.orthogonalityError).toBeCloseTo(Math.PI / 2 - separation, 9)
+
+		const product = multiply2x2(assumed.imageMotion, assumed.imageToAxis)
+		expect(product[0]).toBeCloseTo(1, 9)
+		expect(product[1]).toBeCloseTo(0, 9)
+		expect(product[2]).toBeCloseTo(0, 9)
+		expect(product[3]).toBeCloseTo(1, 9)
+	}
+})
+
+test('still refuses nearly parallel axes when assuming DEC orthogonal', () => {
+	const simulation = runCalibration({ assumeDecOrthogonalToRa: true }, { raVector: [0.8, 0.2], decVector: [0.78, 0.25] })
+	expect(simulation.step.failure?.code).toBe('axes_too_parallel')
+})
