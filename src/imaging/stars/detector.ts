@@ -64,9 +64,10 @@ export interface DetectStarOptions {
 	// ASTAP's 30-sigma detection level, and above 7 it raises the last level to that many sky deviations.
 	readonly minSNR?: number
 	// Largest signal-aperture radius, in pixels. The default, STAR_SIGNAL_RADIUS, keeps the fixed
-	// aperture. A larger value widens ASTAP's search box to this radius when above its 14 pixels and
-	// grows the aperture of each star whose light reaches its edge or covers its sky annulus, until the
-	// star fits; a star that does not fit at this radius, or whose grown aperture leaves the image, is dropped.
+	// aperture. A larger value grows the aperture of each star whose light reaches its edge or covers its
+	// sky annulus, until the star fits; a star that does not fit at this radius, or whose grown aperture
+	// leaves the image, is dropped. Above 14 pixels it also measures again, in a search box of this half
+	// side, a star that ASTAP's 14-pixel box rejects as larger than itself, such as a defocused one.
 	readonly maximumRadius?: number
 }
 
@@ -368,16 +369,16 @@ export function detectStars(image: Image, { maxStars = 500, searchRegion = 0, mi
 	return res
 }
 
-// Returns the half side, in pixels, of ASTAP's search box for a largest aperture radius of `maximumRadius` pixels:
-// ASTAP's 14 pixels, or the radius when larger.
+// Returns the half side, in pixels, of the widest search box for a largest aperture radius of `maximumRadius` pixels:
+// ASTAP's 14 pixels, or the radius when larger, for a star too large for ASTAP's box.
 function astapBoxRadius(maximumRadius: number) {
 	return Math.max(ASTAP_BOX_RADIUS, Math.ceil(maximumRadius))
 }
 
-// Returns how many pixels along each border of a frame start no star in detectStars with a largest aperture radius of
-// `maximumRadius` pixels: ASTAP's search box, its one-pixel sky annulus, and the pixel next to them. A star whose
-// pixels above the detection level all lie there is not found, so a region cropped for detection must reach this far
-// beyond a star, plus the star's own radius.
+// Returns how many pixels along each border of a frame may start no star in detectStars with a largest aperture radius
+// of `maximumRadius` pixels: the widest search box, its one-pixel sky annulus, and the pixel next to them (16 for ASTAP's
+// box). A star whose pixels above the detection level all lie there is not found, or not measured whole when it is
+// larger than ASTAP's box, so a region cropped for detection must reach this far beyond a star, plus the star's radius.
 export function starDetectionBorder(maximumRadius: number = STAR_SIGNAL_RADIUS) {
 	return astapBoxRadius(maximumRadius) + 2
 }
@@ -518,16 +519,17 @@ function astapPasses({ noise, starLevel, starLevel2 }: AstapBackground, minSNR: 
 	return passes
 }
 
-// Finds the stars of a frame of packed ADU samples as ASTAP's analyse_image does, with `box` pixels as the half
-// side of its search box. Each pass scans the frame for a pixel above its detection level, not masked by a star
-// of this pass, with at least 2 of its 4 direct neighbors 4 deviations above the background; ASTAP's HFD routine
-// measures it, and the star is kept when its HFD is above 0.8 pixels and at most 30 (scaled with the box), its SNR
-// exceeds `minSNR`, and its rounded center is not masked yet; a disk of 3 HFDs around that center is then masked.
+// Finds the stars of a frame of packed ADU samples as ASTAP's analyse_image does. Each pass scans the frame for a
+// pixel above its detection level, not masked by a star of this pass, with at least 2 of its 4 direct neighbors 4
+// deviations above the background; ASTAP's HFD routine measures it in its box of 14 pixels of half side, or again in
+// a box of `wideBox` pixels when that is wider and the star is as large as ASTAP's box, and the star is kept when its
+// HFD is above 0.8 pixels and at most 30 (scaled with the box), its SNR exceeds `minSNR`, and its rounded center is
+// not masked yet; a disk of 3 HFDs around that center is then masked.
 // The passes (see astapPasses) stop once one finds `maxStars`. Returns the stars of the last pass, in scan order.
 // The pixels that pass the neighbor test above the lowest level are collected once, in scan order, and each one is
 // measured at most once, since the HFD routine and the acceptance do not depend on the pass; the passes then only
 // walk that list, so they find what ASTAP's full scans find.
-function astapFindStars(adu: Float32Array, width: number, height: number, sky: AstapBackground, box: number, minSNR: number, maxStars: number): AstapStar[] {
+function astapFindStars(adu: Float32Array, width: number, height: number, sky: AstapBackground, wideBox: number, minSNR: number, maxStars: number): AstapStar[] {
 	const { background, noise } = sky
 	const passes = astapPasses(sky, minSNR)
 	const neighborLevel = ASTAP_NEIGHBOR_SIGMA * noise
@@ -560,8 +562,8 @@ function astapFindStars(adu: Float32Array, width: number, height: number, sky: A
 	}
 
 	const mask = new Uint8Array(width * height)
-	const workspace = astapWorkspace(width, box)
-	const maxHfd = (ASTAP_MAX_HFD * box) / ASTAP_BOX_RADIUS
+	const workspace = astapWorkspace(width, ASTAP_BOX_RADIUS)
+	const wideWorkspace = wideBox > ASTAP_BOX_RADIUS ? astapWorkspace(width, wideBox) : undefined
 	// Measurement state of each candidate: 0 not measured, 1 rejected, 2 accepted, with the accepted stars by candidate.
 	const measured = new Uint8Array(count)
 	const accepted = new Map<number, AstapStar>()
@@ -575,9 +577,17 @@ function astapFindStars(adu: Float32Array, width: number, height: number, sky: A
 			if (mask[index] === marker || !(adu[index] - background > level)) continue
 
 			if (measured[k] === 0) {
-				const star = astapHfd(adu, width, height, index % width, Math.trunc(index / width), workspace)
+				const x = index % width
+				const y = Math.trunc(index / width)
+				let box = ASTAP_BOX_RADIUS
+				let star = astapHfd(adu, width, height, x, y, workspace)
 
-				if (star !== undefined && star.hfd <= maxHfd && star.snr > minSNR && star.hfd > ASTAP_MIN_HFD) {
+				if (star === 'large' && wideWorkspace !== undefined) {
+					box = wideBox
+					star = astapHfd(adu, width, height, x, y, wideWorkspace)
+				}
+
+				if (star !== undefined && star !== 'large' && star.hfd <= (ASTAP_MAX_HFD * box) / ASTAP_BOX_RADIUS && star.snr > minSNR && star.hfd > ASTAP_MIN_HFD) {
 					measured[k] = 2
 					accepted.set(k, star)
 				} else {
@@ -697,13 +707,14 @@ function maskStar(mask: Uint8Array, width: number, height: number, x: number, y:
 // search box of the workspace. The local sky is the median of the one-pixel annulus beyond the box and its
 // deviation the scaled MAD, at least 1 ADU. The center of gravity of the samples 3 deviations above the sky in the
 // box is found, shrinking the box while those cover less than 2/9 of it, so a neighbor is left out; the star then
-// ends where its signal samples per integer distance drop to a tenth of their most. Undefined, as ASTAP's HFD of
-// 999, near the border, without enough signal, for a hot pixel, a star as large as the box, or a group of stars.
+// ends where its signal samples per integer distance drop to a tenth of their most. 'large' for a star as large as the
+// box, and undefined, both as ASTAP's HFD of 999, near the border, without enough signal, for a hot pixel, or a group
+// of stars.
 // The box is summed once, per square ring, so a smaller box is a prefix of the rings; that adds the samples in
 // another order than ASTAP, which changes the center of gravity only by rounding. The samples around the center
 // of gravity are interpolated as value_subpixel does (0 near the border), with the column and row weights of the
 // offsets computed once, and kept for the HFD sum.
-function astapHfd(adu: Float32Array, width: number, height: number, x1: number, y1: number, workspace: AstapWorkspace): AstapStar | undefined {
+function astapHfd(adu: Float32Array, width: number, height: number, x1: number, y1: number, workspace: AstapWorkspace): AstapStar | 'large' | undefined {
 	let radius = workspace.box
 	const outer = radius + 1
 	if (x1 - outer <= 0 || x1 + outer >= width - 1 || y1 - outer <= 0 || y1 + outer >= height - 1) return undefined
@@ -830,7 +841,7 @@ function astapHfd(adu: Float32Array, width: number, height: number, x1: number, 
 		if (top < signalSamples) top = signalSamples
 	} while (!(starRadius >= radius || (started && histogram[starRadius] <= ASTAP_DROP_OFF * top)))
 
-	if (starRadius >= radius) return undefined
+	if (starRadius >= radius) return 'large'
 	if (starRadius > 2 && illuminated < ASTAP_DISK_FILL * (2 * starRadius - 2) * (2 * starRadius - 2)) return undefined
 
 	// HFD of Kazuhisa Miyashita, Σ(signal r) / Σ signal = HFR, over the square of the star radius.
