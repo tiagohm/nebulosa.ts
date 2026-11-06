@@ -52,9 +52,9 @@ export interface DetectedStar extends Readonly<Point> {
 
 // Options controlling star detection.
 export interface DetectStarOptions {
-	// Number of stars that ends ASTAP's descent of the detection level, and the most stars returned (the
-	// brightest by flux are kept). It also sets ASTAP's star levels: the sample levels exceeded by 6 and
-	// 24 pixels per wanted star.
+	// Number of stars that ends ASTAP's descent of the detection level, and the most stars returned, up to
+	// STAR_DETECTION_LIMIT (the brightest by flux are kept). It also sets ASTAP's star levels: the sample levels
+	// exceeded by 6 and 24 pixels per wanted star.
 	readonly maxStars: number
 	// Tracking-box size, in pixels. When positive, pairs of comparable-brightness stars that would
 	// both fit inside one search box (plus a 5-pixel margin) are removed, matching the PHD2
@@ -298,6 +298,10 @@ const ASTAP_MAX_HFD = 30
 // Radius, in HFDs, of the area of an accepted star masked against a second detection.
 const ASTAP_MASK_HFD_SCALE = 3
 
+// Most stars detectStars returns, whatever maxStars asks for: the capacity of its brightness-sorted list, whose
+// insertion is linear in its size.
+export const STAR_DETECTION_LIMIT = 2000
+
 // Default star-detection options.
 const DEFAULT_DETECT_STARS_OPTIONS: Readonly<DetectStarOptions> = {
 	maxStars: 500,
@@ -331,9 +335,9 @@ export function detectStars(image: Image, { maxStars = 500, searchRegion = 0, mi
 	const scale = eightBit ? ASTAP_8BIT_SCALE : ASTAP_16BIT_SCALE
 	const adu = aduImage(raw, width, height, stride, scale)
 	const sky = astapBackground(adu, width, height, eightBit, maxStars)
-	const found = astapFindStars(adu, width, height, sky, Math.max(ASTAP_BOX_RADIUS, Math.ceil(maximumRadius)), minSNR, maxStars)
+	const found = astapFindStars(adu, width, height, sky, astapBoxRadius(maximumRadius), minSNR, maxStars)
 	const adaptive = maximumRadius > STAR_SIGNAL_RADIUS
-	const stars = new StarList(maxStars)
+	const stars = new StarList(Math.min(maxStars, STAR_DETECTION_LIMIT))
 	const workspace: PhotometryWorkspace = { samples: new Float64Array(0), bins: new Float64Array(0) }
 
 	for (const star of found) {
@@ -362,6 +366,20 @@ export function detectStars(image: Image, { maxStars = 500, searchRegion = 0, mi
 
 	res.sort((left, right) => right.flux - left.flux)
 	return res
+}
+
+// Returns the half side, in pixels, of ASTAP's search box for a largest aperture radius of `maximumRadius` pixels:
+// ASTAP's 14 pixels, or the radius when larger.
+function astapBoxRadius(maximumRadius: number) {
+	return Math.max(ASTAP_BOX_RADIUS, Math.ceil(maximumRadius))
+}
+
+// Returns how many pixels along each border of a frame start no star in detectStars with a largest aperture radius of
+// `maximumRadius` pixels: ASTAP's search box, its one-pixel sky annulus, and the pixel next to them. A star whose
+// pixels above the detection level all lie there is not found, so a region cropped for detection must reach this far
+// beyond a star, plus the star's own radius.
+export function starDetectionBorder(maximumRadius: number = STAR_SIGNAL_RADIUS) {
+	return astapBoxRadius(maximumRadius) + 2
 }
 
 // Copies the samples of a mono image, `stride` samples per row, into a packed single-precision buffer in ADU,

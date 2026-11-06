@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { NumberComparator } from '../../../src/core/util'
 import type { Image } from '../../../src/imaging/model/types'
-import { type DetectedStar, detectStars, excludeStarsFitWithinRegion, measureStarPhotometry, mergeVeryCloseStars, StarList } from '../../../src/imaging/stars/detector'
+import { type DetectedStar, detectStars, excludeStarsFitWithinRegion, measureStarPhotometry, mergeVeryCloseStars, starDetectionBorder, StarList } from '../../../src/imaging/stars/detector'
 import { type PlotStarOptions, plotStar } from '../../../src/imaging/stars/generator'
 import { type AstronomicalImageNoiseConfig, type AstronomicalImageStar, DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG, generateNoiseImage, generateStarImage } from '../../../src/imaging/synthetic/generator'
 import { Bitpix } from '../../../src/io/formats/fits/fits'
@@ -441,6 +441,35 @@ test('detect stars rejects a trail longer than the search box', () => {
 
 	expect(stars).toHaveLength(1)
 	expect(starNear(stars, 64.3, 90.6, 0.3)).toBeDefined()
+})
+
+test('detect stars starts no star inside the detection border', () => {
+	expect(starDetectionBorder()).toBe(16)
+	expect(starDetectionBorder(20.5)).toBe(23)
+
+	function frameWithStarAt(x: number) {
+		const width = 96
+		const height = 64
+		const raw = new Float32Array(width * height)
+		const random = mulberry32(23)
+		for (let i = 0; i < raw.length; i++) raw[i] = 0.1 + (random() - 0.5) * 0.0002
+		// A cross of 5 bright pixels: only its center has two bright direct neighbors, so only the center starts it.
+		for (const [dx, dy] of [
+			[0, 0],
+			[-1, 0],
+			[1, 0],
+			[0, -1],
+			[0, 1],
+		])
+			raw[(32 + dy) * width + x + dx] += 0.5
+		const image: Image = { raw, header: {}, metadata: { width, height, channels: 1, pixelCount: width * height, pixelSizeInBytes: 4, bitpix: -32, stride: width, strideInBytes: width * 4, bayer: undefined } }
+		return detectStars(image)
+	}
+
+	expect(frameWithStarAt(starDetectionBorder())).toHaveLength(1)
+	expect(frameWithStarAt(starDetectionBorder() - 1)).toHaveLength(0)
+	expect(frameWithStarAt(95 - starDetectionBorder())).toHaveLength(1)
+	expect(frameWithStarAt(96 - starDetectionBorder())).toHaveLength(0)
 })
 
 test('detect stars finds nothing in a flat image', () => {
