@@ -1,25 +1,29 @@
-import type { Point, Rect } from '../../math/numerical/geometry'
-import { clamp } from '../../math/numerical/math'
+import type { Point } from '../../math/numerical/geometry'
 import { medianBySelectionOf, STANDARD_DEVIATION_SCALE } from '../../math/numerical/statistics'
 import type { Angle } from '../../math/units/angle'
 import type { Image } from '../model/types'
-import { clone } from '../processing/arithmetic'
 import { debayer } from '../processing/debayer'
 import { grayscale } from '../processing/geometry'
-import { psf } from '../processing/psf'
 import { starMomentShape } from './shape'
 
-// Star detection and photometry for an image. Median-filters out hot pixels, runs a PSF-matched
-// response to find candidate peaks, then measures each star's flux, SNR, half-flux diameter (HFD),
-// and FWHM via aperture/annulus photometry. The HFD comes from a curve of growth on which every
-// sample spreads its flux over the radii within half a pixel of its center, so it is stable against
-// sub-pixel motion. The aperture is fixed at STAR_SIGNAL_RADIUS unless a larger maximum radius is
-// requested, in which case it grows until it holds the whole star (defocused stars for focusing).
-// The published (x, y) is the flux-weighted centroid around that peak, not the integer local-max
-// pixel, so sub-pixel motion is visible to guiders. Centroids are zero-based image coordinates:
-// origin at the upper-left sample, +X right, +Y down. Intensities use the normalized processing
-// scale, which is not a permanent [0, 1] clamp. Measurement buffers are reused within one call.
-// Also provides utilities to merge close detections and to drop pairs that would share a guiding search box.
+// Star detection and photometry for an image. Which stars exist is decided by a port of the star
+// extraction of ASTAP (`analyse_image`, `HFD` and `get_background` of its command-line version, the
+// `-extract` option): the sky and its noise come from the histogram of the whole frame, every pixel
+// above a detection level with two bright neighbors is measured with ASTAP's HFD routine, a star is
+// kept when its HFD and SNR pass ASTAP's limits, and its area is masked so it is not found twice; the
+// detection level steps down from the star-dominated levels to 7 sky deviations until enough stars
+// are found. ASTAP works in ADU, so the normalized samples are multiplied by 255 for 8-bit images and
+// by 65535 otherwise, as ASTAP loads them. Each accepted star is then measured again by aperture/annulus
+// photometry around ASTAP's center of gravity, for its flux, half-flux diameter (HFD), FWHM and shape.
+// That HFD comes from a curve of growth on which every sample spreads its flux over the radii within
+// half a pixel of its center, so it is stable against sub-pixel motion. The aperture is fixed at
+// STAR_SIGNAL_RADIUS unless a larger maximum radius is requested, in which case it grows until it
+// holds the whole star (defocused stars for focusing). The published (x, y) is the flux-weighted
+// centroid of that aperture, so sub-pixel motion is visible to guiders. Centroids are zero-based image
+// coordinates: origin at the upper-left sample, +X right, +Y down. Intensities use the normalized
+// processing scale, which is not a permanent [0, 1] clamp. One call allocates an ADU copy and a mask
+// of the frame; the measurement buffers are reused within the call. Also provides utilities to merge
+// close detections and to drop pairs that would share a guiding search box.
 
 // A detected star: flux-weighted centroid plus measured photometry.
 // x and y are zero-based, +X right, +Y down.
@@ -37,34 +41,70 @@ export interface DetectedStar extends Readonly<Point> {
 	readonly minorVariance?: number
 	// Major-axis orientation in [0, PI), clockwise from +X because image Y grows downward.
 	readonly theta?: Angle
-	// Signal-to-noise ratio.
+	// ASTAP's signal-to-noise ratio, flux / sqrt(flux + PI r² σ²) in ADU with a gain of 1 e-/ADU, where the flux
+	// is the sum above the local sky inside ASTAP's star radius r and σ the sky deviation of its annulus.
 	readonly snr: number
-	// Integrated flux above background.
+	// ASTAP's flux: the sum of the samples above the local sky over the square of half side r around the center of
+	// gravity, in the normalized sample scale. It holds the whole star, so it ranks large and bright stars correctly.
 	readonly flux: number
 }
 
 // Options controlling star detection.
 export interface DetectStarOptions {
-	// Maximum number of stars to return (brightest kept).
+	// Number of stars that ends ASTAP's descent of the detection level, and the most stars returned (the
+	// brightest by flux are kept). It also sets ASTAP's star levels: the sample levels exceeded by 6 and
+	// 24 pixels per wanted star.
 	readonly maxStars: number
 	// Tracking-box size, in pixels. When positive, pairs of comparable-brightness stars that would
 	// both fit inside one search box (plus a 5-pixel margin) are removed, matching the PHD2
 	// uniqueness filter. This is not a central crop of the frame.
 	readonly searchRegion?: number
-	// Minimum SNR a star must reach to be kept.
+	// SNR a star must exceed to be kept, as ASTAP's `-extract` minimum. A value of 30 or more also skips
+	// ASTAP's 30-sigma detection level, and above 7 it raises the last level to that many sky deviations.
 	readonly minSNR?: number
 	// Largest signal-aperture radius, in pixels. The default, STAR_SIGNAL_RADIUS, keeps the fixed
-	// aperture. A larger value grows the aperture of each star whose light reaches its edge or covers
-	// its sky annulus, until the star fits; a star that does not fit at this radius, or whose grown
-	// aperture leaves the image, is dropped, and candidates inside a grown aperture are not measured again.
+	// aperture. A larger value widens ASTAP's search box to this radius when above its 14 pixels and
+	// grows the aperture of each star whose light reaches its edge or covers its sky annulus, until the
+	// star fits; a star that does not fit at this radius, or whose grown aperture leaves the image, is dropped.
 	readonly maximumRadius?: number
-	// Whether the dim tail after a large score gap is dropped as the noise floor of a frame; true by default. The gap
-	// says nothing in a small region of a frame, where a few bright stars would drop a real faint one, so turn it off there.
-	readonly scoreGapTrim?: boolean
 }
 
-// Integral images for fast box statistics: [running sum, running sum of squares, padded width].
-type IntegralImages = readonly [Float64Array, Float64Array, number] // sum, sumSq, width
+// Sky of a frame as ASTAP's get_background finds it, all in ADU.
+interface AstapBackground {
+	// Most common sample value, or the mean when that is more than 1.5 times larger.
+	readonly background: number
+	// Standard deviation of the sky samples, 3-sigma clipped.
+	readonly noise: number
+	// Levels above the background exceeded by 6 and 24 pixels per wanted star, at least 3.5 noise and 1 ADU.
+	readonly starLevel: number
+	readonly starLevel2: number
+}
+
+// One star as ASTAP's HFD routine measures it, in ADU and zero-based pixels.
+interface AstapStar {
+	// Approximate half-flux diameter, 2 Σ(signal r) / Σ signal over the square of the star radius, in pixels.
+	readonly hfd: number
+	// Diameter of the area at or above half of the peak, in pixels.
+	readonly fwhm: number
+	// Signal-to-noise ratio with a gain of 1 e-/ADU.
+	readonly snr: number
+	// Sum of the signal above the local sky, in ADU.
+	readonly flux: number
+	// Center of gravity of the samples 3 deviations above the local sky, zero-based pixels.
+	readonly x: number
+	readonly y: number
+	// Distance from the center of gravity, in whole pixels, at which the signal of the star drops off.
+	readonly radius: number
+}
+
+// Scratch buffers of ASTAP's HFD routine, grown on demand.
+interface AstapWorkspace {
+	// Samples of the sky annulus, sorted in place by the median.
+	annulus: Float64Array
+	// Number of signal samples per integer distance from the center of gravity.
+	distances: Int32Array
+}
+
 // Measured photometry of one star as [flux, snr, hfd, fwhm].
 export type StarPhotometry = readonly [number, number, number, number] // flux, snr, hfd, fwhm
 // Robust sky of an annulus as [median, scaled-MAD deviation, sample count], in sample units.
@@ -136,28 +176,84 @@ export const STAR_GROWTH_SIGNIFICANCE = 4
 const MEDIAN_STANDARD_ERROR_SCALE = Math.sqrt(Math.PI / 2)
 // Number of samples of the distant sky circle of an adaptive aperture. 32 gives a median standard error
 // of about 0.22 sky deviations, enough to see the face of a defocused star about 1 deviation above the
-// sky, while keeping the scattered reads cheap for the tens of thousands of candidates of a frame.
+// sky, while keeping the scattered reads cheap for the thousands of stars of a frame.
 const STAR_DISTANT_SKY_SAMPLES = 32
 // Minimum number of samples for the distant sky to be a usable reference of an adaptive aperture.
 const STAR_MIN_DISTANT_SKY_SAMPLES = 8
 // Unit-circle cosines and sines of the evenly spaced distant sky samples.
 const DISTANT_SKY_COS = Float64Array.from({ length: STAR_DISTANT_SKY_SAMPLES }, (_, i) => Math.cos((2 * Math.PI * i) / STAR_DISTANT_SKY_SAMPLES))
 const DISTANT_SKY_SIN = Float64Array.from({ length: STAR_DISTANT_SKY_SAMPLES }, (_, i) => Math.sin((2 * Math.PI * i) / STAR_DISTANT_SKY_SAMPLES))
-// Border margin (pixels) excluded after PSF convolution to avoid edge artifacts.
-const STAR_CONVOLVED_MARGIN = 4
-// Minimum acceptable HFD (pixels); smaller measurements are treated as noise/hot pixels.
-const STAR_MIN_HFD = 1
-// Extra photometry passes after the integer peak, recentering on the flux-weighted centroid.
+// Border margin, in pixels, that the photometry apertures and their sky annuli stay inside.
+const STAR_BORDER_MARGIN = 4
+// Extra photometry passes after the first one, recentering on the flux-weighted centroid.
 const STAR_CENTROID_REFINEMENTS = 2
 // Stop recentering when the centroid moves by this many pixels or less.
 const STAR_CENTROID_TOLERANCE = 0.05
-// Adjacent-rank ratio that marks a candidate star-to-noise break.
-const STAR_SCORE_GAP_RATIO = 4
-// How many candidates immediately below a gap are inspected for a tight field-star clump.
-const STAR_SCORE_GAP_CLUMP_WINDOW = 8
-// Rank ratio that still splits a tight clump. 4³ ≈ 3 mag of flux when SNR scales as √flux, which
-// is larger than a handful of bright-star outliers and smaller than the noise floor on a star field.
-const STAR_SCORE_GAP_OUTLIER_RATIO = STAR_SCORE_GAP_RATIO * STAR_SCORE_GAP_RATIO * STAR_SCORE_GAP_RATIO
+
+// ADU per normalized unit of an 8-bit image, as ASTAP loads it.
+const ASTAP_8BIT_SCALE = 255
+// ADU per normalized unit of every other image: ASTAP keeps 16-bit samples and scales floats up to 1.5 by 65535.
+const ASTAP_16BIT_SCALE = 65535
+// Size of ASTAP's sample histogram, one bin per ADU.
+const ASTAP_HISTOGRAM_SIZE = 65536
+// Samples at or above this level, in ADU, are left out of the histogram as saturated stars.
+const ASTAP_HISTOGRAM_LIMIT = 65000
+// Fractions of the width and the height left out of the histogram on each side (unused areas of raw sensors).
+const ASTAP_HISTOGRAM_BORDER_X = 0.042
+const ASTAP_HISTOGRAM_BORDER_Y = 0.015
+// Highest histogram level, in ADU, from which the star levels are searched downwards, for 8-bit and other images.
+const ASTAP_8BIT_STAR_LEVEL_TOP = 255
+const ASTAP_16BIT_STAR_LEVEL_TOP = 65001
+// The noise is sampled on a grid of about this many steps along the height.
+const ASTAP_NOISE_GRID_STEPS = 71
+// Border, in pixels, left out of the noise grid.
+const ASTAP_NOISE_BORDER = 15
+// Most sigma-clipping passes of the noise; it also stops once a pass lowers it by less than 5%.
+const ASTAP_NOISE_ITERATIONS = 7
+// Clipping of the noise passes after the first, in standard deviations.
+const ASTAP_NOISE_CLIP = 3
+// Pixels above the star levels per wanted star, empirical values of ASTAP for stars of 2.25 and 4.5 pixels of HFD.
+const ASTAP_STAR_LEVEL_PIXELS = 6
+const ASTAP_STAR_LEVEL2_PIXELS = 24
+// Lowest star level, in sky deviations.
+const ASTAP_STAR_LEVEL_SIGMA = 3.5
+// A star level is used for detection only above this many sky deviations (stars dominate the frame); it is
+// also the level of the third pass.
+const ASTAP_DOMINANT_SIGMA = 30
+// Level of the last pass, in sky deviations, unless the minimum SNR is higher.
+const ASTAP_FAINT_SIGMA = 7
+// Number of detection passes, each at a lower level.
+const ASTAP_PASSES = 4
+// A pixel above the detection level starts a star only when at least 2 of its 4 direct neighbors are this
+// many sky deviations above the background, so a hot pixel does not.
+const ASTAP_NEIGHBOR_SIGMA = 4
+const ASTAP_MIN_BRIGHT_NEIGHBORS = 2
+// Half side, in pixels, of ASTAP's search box around a pixel that starts a star.
+const ASTAP_BOX_RADIUS = 14
+// A sample is signal when it is this many deviations of the local sky above it.
+const ASTAP_SIGNAL_SIGMA = 3
+// A box whose signal sums to this many local sky deviations or less holds no star.
+const ASTAP_MIN_SIGNAL_SIGMA = 12
+// Fraction of the box that the signal samples must cover, or the box shrinks to leave out its neighbors.
+const ASTAP_BOXED_FRACTION = 2 / 9
+// The star ends at the first distance whose signal samples drop to this fraction of the most at one distance.
+const ASTAP_DROP_OFF = 0.1
+// Fraction of the square of the star diameter less 2 pixels that its signal must cover, or it is a group of stars.
+const ASTAP_DISK_FILL = 0.35
+// Floor, in ADU, of the local sky deviation and of the star levels, so a noise-free sky is not read as a star.
+const ASTAP_MIN_NOISE = 1
+// MAD to standard deviation of a normal distribution, as ASTAP rounds it.
+const ASTAP_MAD_SCALE = 1.4826
+// Floor of the flux, in ADU, against a division by zero.
+const ASTAP_MIN_FLUX = 0.00001
+// Floor of the HFD, in pixels.
+const ASTAP_HFD_FLOOR = 0.7
+// HFD range, in pixels, of an accepted star: above 0.8 (two pixels) and at most 30, the upper limit growing in
+// proportion when the search box is wider than ASTAP_BOX_RADIUS.
+const ASTAP_MIN_HFD = 0.8
+const ASTAP_MAX_HFD = 30
+// Radius, in HFDs, of the area of an accepted star masked against a second detection.
+const ASTAP_MASK_HFD_SCALE = 3
 
 // Default star-detection options.
 const DEFAULT_DETECT_STARS_OPTIONS: Readonly<DetectStarOptions> = {
@@ -167,7 +263,7 @@ const DEFAULT_DETECT_STARS_OPTIONS: Readonly<DetectStarOptions> = {
 	maximumRadius: STAR_SIGNAL_RADIUS,
 }
 
-// Converts RGB or raw CFA input into a coherent mono intensity image for filtering and photometry.
+// Converts RGB or raw CFA input into a coherent mono intensity image for detection and photometry.
 function starAnalysisImage(image: Image): Image | undefined {
 	image = grayscale(image)
 	if (!image.metadata.bayer) return image
@@ -175,185 +271,43 @@ function starAnalysisImage(image: Image): Image | undefined {
 	return color && grayscale(color)
 }
 
-// Replaces each interior pixel with the median of its 3x3 neighborhood in place. Isolated hot
-// pixels and 2x2 defect clumps disappear; the 1-pixel border is left unchanged because later
-// detection already excludes a wider PSF margin. Returns the same image object.
-function median3x3(image: Image) {
-	const { raw, metadata } = image
-	const { width, height, stride } = metadata
-	if (width < 3 || height < 3) return image
-
-	const RowArray = raw instanceof Float64Array ? Float64Array : Float32Array
-	const previous = new RowArray(stride)
-	const current = new RowArray(stride)
-	previous.set(raw.subarray(0, stride))
-	current.set(raw.subarray(stride, stride * 2))
-	const window = new Float64Array(9)
-
-	for (let y = 1; y < height - 1; y++) {
-		const next = raw.subarray((y + 1) * stride, (y + 2) * stride)
-		const row = y * stride
-
-		for (let x = 1; x < width - 1; x++) {
-			window[0] = previous[x - 1]
-			window[1] = previous[x]
-			window[2] = previous[x + 1]
-			window[3] = current[x - 1]
-			window[4] = current[x]
-			window[5] = current[x + 1]
-			window[6] = next[x - 1]
-			window[7] = next[x]
-			window[8] = next[x + 1]
-			raw[row + x] = medianBySelectionOf(window, 9)
-		}
-
-		previous.set(current)
-		current.set(next)
-	}
-
-	return image
-}
-
-// Detects stars in an image and returns them sorted by descending flux (up to maxStars), filtered by
-// minSNR and optionally pruned with the PHD2 search-box uniqueness filter.
-export function detectStars(image: Image, { maxStars = 500, searchRegion = 0, minSNR = 0, maximumRadius = STAR_SIGNAL_RADIUS, scoreGapTrim = true }: Partial<DetectStarOptions> = DEFAULT_DETECT_STARS_OPTIONS): DetectedStar[] {
+// Detects stars in an image with ASTAP's star extraction and returns them sorted by descending flux (up to
+// maxStars), optionally pruned with the PHD2 search-box uniqueness filter. ASTAP decides which stars exist and
+// gives their flux, which ranks them, and SNR; each one is then measured on the normalized samples around
+// ASTAP's center of gravity for its centroid, HFD, FWHM and shape. When that aperture has no positive flux,
+// ASTAP's own center, HFD and FWHM are published instead; with a growing aperture such a star, or one that does
+// not fit, is dropped.
+export function detectStars(image: Image, { maxStars = 500, searchRegion = 0, minSNR = 0, maximumRadius = STAR_SIGNAL_RADIUS }: Partial<DetectStarOptions> = DEFAULT_DETECT_STARS_OPTIONS): DetectedStar[] {
 	const intensity = starAnalysisImage(image)
 	if (intensity === undefined) return []
-	image = intensity
 
-	const original = image.raw
-
-	// Run a 3x3 median first to eliminate hot pixels
-	image = median3x3(clone(image))
-
-	// Run the PSF convolution
-	image = psf(image)
-
-	const { raw, metadata } = image
-	const { width, height, stride } = metadata
-	const convRect: Rect = { left: STAR_CONVOLVED_MARGIN, top: STAR_CONVOLVED_MARGIN, right: width - STAR_CONVOLVED_MARGIN - 1, bottom: height - STAR_CONVOLVED_MARGIN - 1 }
-	const maxX = convRect.right - STAR_CONVOLVED_MARGIN
-	const maxY = convRect.bottom - STAR_CONVOLVED_MARGIN
-	const stars = new StarList(Math.min(maxStars, 2000))
-	const integrals = buildIntegralImages(raw, width, height, stride)
-	const leftBounds = new Uint16Array(width)
-	const rightBounds = new Uint16Array(width)
-	const topBounds = new Uint16Array(height)
-	const bottomBounds = new Uint16Array(height)
-	const stride2 = stride * 2
-	const stride3 = stride * 3
-	const stride4 = stride * 4
+	const { raw, metadata } = intensity
+	const { width, height, stride, bitpix } = metadata
+	const eightBit = bitpix === 8
+	const scale = eightBit ? ASTAP_8BIT_SCALE : ASTAP_16BIT_SCALE
+	const adu = aduImage(raw, width, height, stride, scale)
+	const sky = astapBackground(adu, width, height, eightBit, maxStars)
+	const found = astapFindStars(adu, width, height, sky, Math.max(ASTAP_BOX_RADIUS, Math.ceil(maximumRadius)), minSNR, maxStars)
+	const adaptive = maximumRadius > STAR_SIGNAL_RADIUS
+	const stars = new StarList(maxStars)
 	const workspace: PhotometryWorkspace = { samples: new Float64Array(0), bins: new Float64Array(0) }
-	// Center x, center y and radius, in pixels, of the grown apertures that may still hold candidates, flattened.
-	const grown: number[] = []
 
-	for (let x = convRect.left + 4; x <= maxX; x++) {
-		leftBounds[x] = Math.max(convRect.left, x - 7)
-		rightBounds[x] = Math.min(convRect.right, x + 7)
-	}
+	for (const star of found) {
+		const photometry = measureStarAt(raw, width, height, stride, star.x, star.y, star.radius, maximumRadius, workspace)
+		const flux = star.flux / scale
 
-	for (let y = convRect.top + 4; y <= maxY; y++) {
-		topBounds[y] = Math.max(convRect.top, y - 7)
-		bottomBounds[y] = Math.min(convRect.bottom, y + 7)
-	}
-
-	// Find each local maximum
-	for (let y = convRect.top + 4; y <= maxY; y++) {
-		const sy = stride * y
-		const rowM1 = sy - stride
-		const rowP1 = sy + stride
-		const rowM2 = sy - stride2
-		const rowP2 = sy + stride2
-		const rowM3 = sy - stride3
-		const rowP3 = sy + stride3
-		const rowM4 = sy - stride4
-		const rowP4 = sy + stride4
-
-		for (let x = convRect.left + 4; x <= maxX; x++) {
-			const center = sy + x
-			const value = raw[center]
-
-			// PSF of a flattened background is ~1e-17, not 0; those plateaus are local maxima
-			// under a strict-`>` test and would photometer residual hot pixels on the original.
-			if (value <= Number.EPSILON) continue
-			if (raw[center - 1] > value || raw[center + 1] > value || raw[rowM1 + x] > value || raw[rowP1 + x] > value || raw[rowM1 + x - 1] > value || raw[rowM1 + x + 1] > value || raw[rowP1 + x - 1] > value || raw[rowP1 + x + 1] > value) continue
-
-			const baseM4 = rowM4 + x
-			const baseM3 = rowM3 + x
-			const baseM2 = rowM2 + x
-			const baseM1 = rowM1 + x
-			const base0 = center
-			const baseP1 = rowP1 + x
-			const baseP2 = rowP2 + x
-			const baseP3 = rowP3 + x
-			const baseP4 = rowP4 + x
-			let isMax = true
-
-			for (let i = -4; i <= 4; i++) {
-				if (raw[baseM4 + i] > value || raw[baseM3 + i] > value || raw[baseM2 + i] > value || raw[baseP2 + i] > value || raw[baseP3 + i] > value || raw[baseP4 + i] > value) {
-					isMax = false
-					break
-				}
-			}
-
-			if (!isMax) continue
-
-			for (let i = -4; i <= -2; i++) {
-				if (raw[baseM1 + i] > value || raw[base0 + i] > value || raw[baseP1 + i] > value) {
-					isMax = false
-					break
-				}
-			}
-
-			if (!isMax) continue
-
-			for (let i = 2; i <= 4; i++) {
-				if (raw[baseM1 + i] > value || raw[base0 + i] > value || raw[baseP1 + i] > value) {
-					isMax = false
-					break
-				}
-			}
-
-			if (!isMax) continue
-
-			// Compare local maximum to mean value of surrounding pixels
-			const left = leftBounds[x]
-			const top = topBounds[y]
-			const right = rightBounds[x]
-			const bottom = bottomBounds[y]
-			const [mean, standardDeviation] = localStatistics(integrals, left, top, right, bottom)
-
-			// This is our measure of star intensity
-			const h = (value - mean) / standardDeviation
-
-			if (h < 0.1) continue
-
-			// A defocused star has many peaks; once one of them has grown an aperture over it, the rest are the same star.
-			if (insideGrownAperture(grown, x, y)) continue
-
-			// Validate each candidate against the original image so ranking uses measured photometry instead of only convolution response.
-			const photometry = measureStarAroundPeak(original, width, height, stride, x, y, minSNR, maximumRadius, workspace, grown)
-			if (photometry === undefined) continue
-			const { flux, snr, hfd, fwhm, eccentricity, elongation, centroidX, centroidY, majorVariance, minorVariance, theta, noise, aperturePixels } = photometry
-
-			// Ranks detections by measured signal so real stars survive capacity limits better than noise artifacts. The
-			// rank grows as flux^1.5 on a bright star, the scale the score-gap trimming is tuned for, and is not the SNR.
-			const rank = (flux * flux) / Math.sqrt(Math.max(flux + aperturePixels * noise * noise, Number.EPSILON))
-
-			stars.add(centroidX, centroidY, rank, flux, snr, hfd, fwhm, eccentricity, elongation, majorVariance, minorVariance, theta)
+		if (photometry !== undefined) {
+			const { hfd, fwhm, eccentricity, elongation, centroidX, centroidY, majorVariance, minorVariance, theta } = photometry
+			stars.add(centroidX, centroidY, flux, flux, star.snr, hfd, fwhm, eccentricity, elongation, majorVariance, minorVariance, theta)
+		} else if (!adaptive) {
+			stars.add(star.x, star.y, flux, flux, star.snr, star.hfd, star.fwhm)
 		}
 	}
-
-	// Merge stars that are very close into a single star
-	mergeVeryCloseStars(stars)
 
 	if (searchRegion > 0) {
 		// Exclude stars that would fit within a single search region box
 		excludeStarsFitWithinRegion(stars, searchRegion)
 	}
-
-	// Keep only the strongest coherent score cluster when the frame has a clear star-to-noise break.
-	if (scoreGapTrim) trimStarsByScoreGap(stars)
 
 	let i = 0
 	const res = new Array<DetectedStar>(stars.size)
@@ -366,73 +320,353 @@ export function detectStars(image: Image, { maxStars = 500, searchRegion = 0, mi
 	return res
 }
 
-// Drops a dim noise tail after a large score gap, walking from the bright end. A modest jump
-// above a tight clump is a magnitude gap among real stars and is left intact; a jump above a
-// spread-out tail, or an enormous jump even above a clump, is treated as the noise floor.
-function trimStarsByScoreGap(stars: StarList) {
-	if (stars.size <= 3) return
+// Copies the samples of a mono image, `stride` samples per row, into a packed single-precision buffer in ADU,
+// `scale` ADU per normalized unit, as ASTAP holds an image.
+function aduImage(raw: Image['raw'], width: number, height: number, stride: number, scale: number) {
+	const adu = new Float32Array(width * height)
 
-	const ranked = stars.array()
-	const n = ranked.length
-	let keepFrom = 0
-
-	for (let i = n - 2; i >= 0; i--) {
-		const weaker = ranked[i].h
-		const stronger = ranked[i + 1].h
-		if (weaker <= 0 || stronger <= 0) continue
-		const ratio = stronger / weaker
-		if (ratio <= STAR_SCORE_GAP_RATIO) continue
-		if (n - i - 1 < 3) continue
-
-		const clumpStart = Math.max(0, i - STAR_SCORE_GAP_CLUMP_WINDOW + 1)
-		const clumpMin = ranked[clumpStart].h
-		if (clumpMin > 0 && weaker / clumpMin < STAR_SCORE_GAP_RATIO && ratio < STAR_SCORE_GAP_OUTLIER_RATIO) continue
-
-		keepFrom = i + 1
-		break
+	for (let y = 0; y < height; y++) {
+		const row = y * stride
+		const packed = y * width
+		for (let x = 0; x < width; x++) adu[packed + x] = raw[row + x] * scale
 	}
 
-	for (let removeCount = keepFrom; removeCount > 0; removeCount--) {
-		stars.deleteFirst()
+	return adu
+}
+
+// Median as ASTAP's SMedian computes it: of the sorted values, the middle one for up to 3 values, the mean of the
+// middle three for more odd ones and of the middle two for even ones; NaN when empty. Sorts the prefix of `count`
+// values in place.
+function astapMedian(values: Float64Array, count: number) {
+	if (count === 0) return Number.NaN
+	if (count === 1) return values[0]
+
+	const sorted = values.subarray(0, count).sort()
+	const middle = (count - 1) >> 1
+	if ((count & 1) === 0) return (sorted[middle] + sorted[middle + 1]) / 2
+	return count <= 3 ? sorted[middle] : (sorted[middle - 1] + sorted[middle] + sorted[middle + 1]) / 3
+}
+
+// Finds the sky of a frame of `width` x `height` packed ADU samples as ASTAP's get_background does. The background
+// is the peak of the histogram of the samples from 1 to 64999 ADU, without a border of 4.2% of the width and 1.5%
+// of the height, searched up to their mean, or that mean when it is more than 1.5 times the peak. The noise is the
+// standard deviation about the background of about 71 x 71 grid samples 15 pixels away from the border, nonzero
+// and below twice the background, clipped at 3 deviations until it settles. The star levels are where the
+// histogram, summed down from its top (255 ADU for 8-bit images), first holds 6 and 24 pixels per wanted star.
+function astapBackground(adu: Float32Array, width: number, height: number, eightBit: boolean, maxStars: number): AstapBackground {
+	const histogram = new Uint32Array(ASTAP_HISTOGRAM_SIZE)
+	const offsetX = Math.trunc(width * ASTAP_HISTOGRAM_BORDER_X)
+	const offsetY = Math.trunc(height * ASTAP_HISTOGRAM_BORDER_Y)
+	let total = 0
+	// Starts at 1 as in ASTAP, against a division by zero.
+	let count = 1
+
+	for (let y = offsetY; y < height - offsetY; y++) {
+		const row = y * width
+
+		for (let x = offsetX; x < width - offsetX; x++) {
+			const value = Math.round(adu[row + x])
+
+			if (value >= 1 && value < ASTAP_HISTOGRAM_LIMIT) {
+				histogram[value]++
+				total += value
+				count++
+			}
+		}
+	}
+
+	const mean = Math.round(total / count)
+	let background = mean === 0 ? 0 : adu[0]
+
+	for (let i = 1, pixels = 0; i <= mean; i++) {
+		if (histogram[i] > pixels) {
+			pixels = histogram[i]
+			background = i
+		}
+	}
+
+	if (mean > 1.5 * background) background = mean
+
+	let step = Math.round(height / ASTAP_NOISE_GRID_STEPS)
+	// An odd step does not land on one color of a raw CFA mosaic only.
+	if (step % 2 === 0) step++
+
+	let noise = Number.POSITIVE_INFINITY
+	let previous: number
+	let iterations = 0
+
+	do {
+		previous = noise
+		let sum = 0
+		let counter = 0
+
+		for (let x = ASTAP_NOISE_BORDER; x <= width - 1 - ASTAP_NOISE_BORDER; x += step) {
+			for (let y = ASTAP_NOISE_BORDER; y <= height - 1 - ASTAP_NOISE_BORDER; y += step) {
+				const value = adu[y * width + x]
+				if (!(value < 2 * background) || value === 0) continue
+				if (iterations > 0 && !(Math.abs(value - background) <= ASTAP_NOISE_CLIP * previous)) continue
+				sum += (value - background) * (value - background)
+				counter++
+			}
+		}
+
+		noise = counter > 0 ? Math.sqrt(sum / counter) : 0
+		iterations++
+	} while (!(previous - noise < 0.05 * noise || iterations >= ASTAP_NOISE_ITERATIONS))
+
+	let starLevel = 0
+	let starLevel2 = 0
+	let above = 0
+	let i = eightBit ? ASTAP_8BIT_STAR_LEVEL_TOP : ASTAP_16BIT_STAR_LEVEL_TOP
+
+	while (starLevel === 0 && i > background + 1 && i > 0) {
+		above += histogram[--i]
+		if (above >= ASTAP_STAR_LEVEL_PIXELS * maxStars) starLevel = i
+	}
+
+	while (starLevel2 === 0 && i > background + 1 && i > 0) {
+		above += histogram[--i]
+		if (above >= ASTAP_STAR_LEVEL2_PIXELS * maxStars) starLevel2 = i
+	}
+
+	// Relative to the background, below a saturated level, and at least 3.5 deviations and 1 ADU.
+	const floor = Math.max(ASTAP_STAR_LEVEL_SIGMA * noise, ASTAP_MIN_NOISE)
+	return { background, noise, starLevel: Math.max(floor, starLevel - background - 1), starLevel2: Math.max(floor, starLevel2 - background - 1) }
+}
+
+// Finds the stars of a frame of packed ADU samples as ASTAP's analyse_image does, with `box` pixels as the half
+// side of its search box. Each pass scans the frame for a pixel above the detection level, not masked by a star
+// of this pass, with at least 2 of its 4 direct neighbors 4 deviations above the background; ASTAP's HFD routine
+// measures it, and the star is kept when its HFD is above 0.8 pixels and at most 30 (scaled with the box), its SNR
+// exceeds `minSNR`, and its rounded center is not masked yet; a disk of 3 HFDs around that center is then masked.
+// The passes use the first star level, the second, 30 deviations (skipped when `minSNR` is 30 or more) and
+// finally `minSNR` but at least 7 deviations, a star level only when it is above 30 deviations, and stop once a
+// pass finds `maxStars`. Returns the stars of the last pass, in scan order.
+function astapFindStars(adu: Float32Array, width: number, height: number, sky: AstapBackground, box: number, minSNR: number, maxStars: number): AstapStar[] {
+	const { background, noise } = sky
+	const mask = new Uint8Array(width * height)
+	const workspace: AstapWorkspace = { annulus: new Float64Array(0), distances: new Int32Array(0) }
+	const neighborLevel = ASTAP_NEIGHBOR_SIGMA * noise
+	const maxHfd = (ASTAP_MAX_HFD * box) / ASTAP_BOX_RADIUS
+	let stars: AstapStar[] = []
+	// Also the marker of the mask, so it never needs clearing between passes.
+	let pass = ASTAP_PASSES
+
+	do {
+		let level = 0
+
+		if (pass === 4) {
+			if (sky.starLevel > ASTAP_DOMINANT_SIGMA * noise) level = sky.starLevel
+			else pass = 3
+		}
+
+		if (pass === 3) {
+			if (sky.starLevel2 > ASTAP_DOMINANT_SIGMA * noise) level = sky.starLevel2
+			else pass = 2
+		}
+
+		if (pass === 2) {
+			level = ASTAP_DOMINANT_SIGMA * noise
+			if (minSNR >= ASTAP_DOMINANT_SIGMA) pass = 1
+		}
+
+		if (pass === 1) level = Math.max(minSNR, ASTAP_FAINT_SIGMA) * noise
+
+		stars = []
+
+		for (let y = 1; y < height - 1; y++) {
+			for (let x = 1; x < width - 1; x++) {
+				const index = y * width + x
+				if (mask[index] === pass || !(adu[index] - background > level)) continue
+
+				let bright = 0
+				if (adu[index - 1] - background > neighborLevel) bright++
+				if (adu[index + 1] - background > neighborLevel) bright++
+				if (adu[index - width] - background > neighborLevel) bright++
+				if (adu[index + width] - background > neighborLevel) bright++
+				if (bright < ASTAP_MIN_BRIGHT_NEIGHBORS) continue
+
+				const star = astapHfd(adu, width, height, x, y, box, workspace)
+				if (star === undefined || !(star.hfd <= maxHfd && star.snr > minSNR && star.hfd > ASTAP_MIN_HFD)) continue
+
+				const cx = Math.round(star.x)
+				const cy = Math.round(star.y)
+				if (mask[cy * width + cx] === pass) continue
+
+				stars.push(star)
+				maskStar(mask, width, height, cx, cy, Math.round(ASTAP_MASK_HFD_SCALE * star.hfd), pass)
+			}
+		}
+
+		pass--
+	} while (stars.length < maxStars && pass > 0)
+
+	return stars
+}
+
+// Sets to `marker` the mask samples, of a `width` x `height` frame, within `radius` pixels of (x, y).
+function maskStar(mask: Uint8Array, width: number, height: number, x: number, y: number, radius: number, marker: number) {
+	const radiusSq = radius * radius
+	const y0 = Math.max(0, y - radius)
+	const y1 = Math.min(height - 1, y + radius)
+	const x0 = Math.max(0, x - radius)
+	const x1 = Math.min(width - 1, x + radius)
+
+	for (let py = y0; py <= y1; py++) {
+		const dy = py - y
+		const row = py * width
+
+		for (let px = x0; px <= x1; px++) {
+			const dx = px - x
+			if (dx * dx + dy * dy <= radiusSq) mask[row + px] = marker
+		}
 	}
 }
 
-// Whether the candidate pixel lies inside an aperture already grown over a star, given the flattened
-// [x, y, radius] triples of `grown` in pixels. Candidates arrive in increasing `y`, so apertures that end
-// above it are removed from `grown` in place, which keeps it to the few apertures around the current rows.
-function insideGrownAperture(grown: number[], x: number, y: number) {
-	let kept = 0
-	let inside = false
-
-	for (let i = 0; i < grown.length; i += 3) {
-		const gx = grown[i]
-		const gy = grown[i + 1]
-		const radius = grown[i + 2]
-		if (gy + radius < y) continue
-		grown[kept++] = gx
-		grown[kept++] = gy
-		grown[kept++] = radius
-		const dx = x - gx
-		const dy = y - gy
-		if (dx * dx + dy * dy <= radius * radius) inside = true
-	}
-
-	grown.length = kept
-	return inside
+// Bilinear interpolation of the packed ADU samples at the fractional position (x, y), in pixels; 0 within one
+// pixel of the left and top borders and two of the right and bottom ones, as ASTAP's value_subpixel.
+function astapSubpixel(adu: Float32Array, width: number, height: number, x: number, y: number) {
+	const xt = Math.trunc(x)
+	const yt = Math.trunc(y)
+	if (xt <= 0 || xt >= width - 2 || yt <= 0 || yt >= height - 2) return 0
+	const fx = x - xt
+	const fy = y - yt
+	const i = yt * width + xt
+	return adu[i] * (1 - fx) * (1 - fy) + adu[i + 1] * fx * (1 - fy) + adu[i + width] * (1 - fx) * fy + adu[i + width + 1] * fx * fy
 }
 
-// Measures a candidate at its integer PSF peak and recenters it on the flux-weighted centroid, so the
-// published (x, y) is the center of the aperture that produced flux, HFD, and FWHM. When
-// `maximumRadius` exceeds STAR_SIGNAL_RADIUS the aperture then grows while the star extends beyond it;
-// every grown aperture, accepted or not, is appended to `grown` as [x, y, radius]. Undefined when the
-// candidate has no flux, is below `minSNR` or STAR_MIN_HFD, still extends beyond `maximumRadius`, or
-// its grown aperture leaves the image less the PSF margin.
-function measureStarAroundPeak(raw: Image['raw'], width: number, height: number, stride: number, peakX: number, peakY: number, minSNR: number, maximumRadius: number, workspace: PhotometryWorkspace, grown: number[]): ApertureMeasurement | undefined {
-	if (!(maximumRadius > STAR_SIGNAL_RADIUS)) return measureCenteredAperture(raw, width, height, stride, peakX, peakY, STAR_SIGNAL_RADIUS, minSNR, workspace)
+// Measures the star around the pixel (x1, y1) of the packed ADU samples as ASTAP's HFD routine does. The local
+// sky is the median of the one-pixel annulus beyond `radius` pixels and its deviation the scaled MAD, at least
+// 1 ADU. The center of gravity of the samples 3 deviations above the sky in the box of half side `radius` is
+// found, shrinking the box while those cover less than 2/9 of it, so a neighbor is left out; the star then ends
+// where its signal samples per integer distance drop to a tenth of their most. Undefined, as ASTAP's HFD of 999,
+// near the border, without enough signal, for a hot pixel, a star as large as the box, or a group of stars.
+function astapHfd(adu: Float32Array, width: number, height: number, x1: number, y1: number, radius: number, workspace: AstapWorkspace): AstapStar | undefined {
+	const outer = radius + 1
+	if (x1 - outer <= 0 || x1 + outer >= width - 1 || y1 - outer <= 0 || y1 + outer >= height - 1) return undefined
 
-	// The sky annulus of a star larger than the aperture lies on its own light, so the SNR is only meaningful once it fits.
-	const first = measureCenteredAperture(raw, width, height, stride, peakX, peakY, STAR_SIGNAL_RADIUS, 0, workspace)
+	const innerSq = radius * radius
+	const outerSq = outer * outer
+	const annulus = (workspace.annulus = ensureCapacity(workspace.annulus, (2 * outer + 1) * (2 * outer + 1)))
+	let count = 0
+
+	for (let i = -outer; i <= outer; i++) {
+		for (let j = -outer; j <= outer; j++) {
+			const distanceSq = i * i + j * j
+			if (distanceSq > innerSq && distanceSq <= outerSq) annulus[count++] = adu[(y1 + j) * width + x1 + i]
+		}
+	}
+
+	const sky = astapMedian(annulus, count)
+	for (let i = 0; i < count; i++) annulus[i] = Math.abs(annulus[i] - sky)
+	const noise = Math.max(astapMedian(annulus, count) * ASTAP_MAD_SCALE, ASTAP_MIN_NOISE)
+	const signalLevel = ASTAP_SIGNAL_SIGMA * noise
+	let xc = 0
+	let yc = 0
+
+	// Shrinks the box until the star fills it, to leave out nearby stars.
+	while (true) {
+		let sum = 0
+		let sumX = 0
+		let sumY = 0
+		let signalCount = 0
+
+		for (let i = -radius; i <= radius; i++) {
+			for (let j = -radius; j <= radius; j++) {
+				const value = adu[(y1 + j) * width + x1 + i] - sky
+
+				if (value > signalLevel) {
+					sum += value
+					sumX += value * i
+					sumY += value * j
+					signalCount++
+				}
+			}
+		}
+
+		if (sum <= ASTAP_MIN_SIGNAL_SIGMA * noise) return undefined
+
+		xc = x1 + sumX / sum
+		yc = y1 + sumY / sum
+		if (xc - radius < 0 || xc + radius > width - 1 || yc - radius < 0 || yc + radius > height - 1) return undefined
+
+		const side = 2 * radius + 1
+		const boxed = signalCount >= ASTAP_BOXED_FRACTION * side * side
+		if (!boxed) radius -= radius > 4 ? 2 : 1
+		if (signalCount <= 1) return undefined
+		if (boxed || radius <= 1) break
+	}
+
+	radius += 2
+
+	const distances = (workspace.distances = workspace.distances.length > radius ? workspace.distances : new Int32Array(radius + 1))
+	distances.fill(0, 0, radius + 1)
+	let peak = 0
+
+	for (let i = -radius; i <= radius; i++) {
+		for (let j = -radius; j <= radius; j++) {
+			const distance = Math.round(Math.sqrt(i * i + j * j))
+			if (distance > radius) continue
+			const value = astapSubpixel(adu, width, height, xc + i, yc + j) - sky
+
+			if (value > signalLevel) {
+				distances[distance]++
+				if (value > peak) peak = value
+			}
+		}
+	}
+
+	// The center of a defocused star can be dark, so the edge is searched only after the first signal.
+	let starRadius = -1
+	let top = 0
+	let started = false
+	let illuminated = 0
+
+	do {
+		starRadius++
+		const samples = distances[starRadius]
+		illuminated += samples
+		if (samples > 0) started = true
+		if (top < samples) top = samples
+	} while (!(starRadius >= radius || (started && distances[starRadius] <= ASTAP_DROP_OFF * top)))
+
+	if (starRadius >= radius) return undefined
+	if (starRadius > 2 && illuminated < ASTAP_DISK_FILL * (2 * starRadius - 2) * (2 * starRadius - 2)) return undefined
+
+	// HFD of Kazuhisa Miyashita, Σ(signal r) / Σ signal = HFR, over the square of the star radius.
+	let sum = 0
+	let sumR = 0
+	let halfCount = 0
+	const halfPeak = 0.5 * peak
+
+	for (let i = -starRadius; i <= starRadius; i++) {
+		for (let j = -starRadius; j <= starRadius; j++) {
+			const value = astapSubpixel(adu, width, height, xc + i, yc + j) - sky
+			sum += value
+			sumR += value * Math.sqrt(i * i + j * j)
+			if (value >= halfPeak) halfCount++
+		}
+	}
+
+	const flux = Math.max(sum, ASTAP_MIN_FLUX)
+	const hfd = Math.max(ASTAP_HFD_FLOOR, (2 * sumR) / flux)
+	const fwhm = 2 * Math.sqrt(halfCount / Math.PI)
+	const snr = flux / Math.sqrt(flux + starRadius * starRadius * Math.PI * noise * noise)
+	return { hfd, fwhm, snr, flux, x: xc, y: yc, radius: starRadius }
+}
+
+// Measures the star centered near (x, y), in pixels, and recenters the aperture on the flux-weighted centroid,
+// so the published (x, y) is the center of the aperture that produced flux, HFD, and FWHM. The aperture is
+// STAR_SIGNAL_RADIUS unless `maximumRadius` exceeds it: it then starts at `starRadius` pixels, clamped between
+// them, so it holds the dark center of a defocused star instead of sliding onto one side of its ring, and grows
+// while the star extends beyond it. Undefined when the aperture has no positive flux, or when the star still
+// extends beyond `maximumRadius` or its grown aperture leaves the image less the border margin.
+function measureStarAt(raw: Image['raw'], width: number, height: number, stride: number, x: number, y: number, starRadius: number, maximumRadius: number, workspace: PhotometryWorkspace): ApertureMeasurement | undefined {
+	if (!(maximumRadius > STAR_SIGNAL_RADIUS)) return measureCenteredAperture(raw, width, height, stride, x, y, STAR_SIGNAL_RADIUS, workspace)
+
+	const first = measureCenteredAperture(raw, width, height, stride, x, y, Math.min(maximumRadius, Math.max(STAR_SIGNAL_RADIUS, starRadius)), workspace)
 	if (first === undefined) return undefined
+
 	let photometry: ApertureMeasurement = first
 	let distantSky: AnnulusStatistics | undefined
 	let distantSkyMeasured = false
@@ -445,43 +679,30 @@ function measureStarAroundPeak(raw: Image['raw'], width: number, height: number,
 				distantSkyMeasured = true
 			}
 
-			if (!extendsBeyondAperture(photometry, distantSky)) break
+			if (!extendsBeyondAperture(photometry, distantSky)) return photometry
 		}
 
 		const { radius } = photometry
-		const next = radius < maximumRadius ? measureCenteredAperture(raw, width, height, stride, photometry.centroidX, photometry.centroidY, Math.min(maximumRadius, radius + Math.max(2, Math.ceil(radius / 4))), 0, workspace) : undefined
-
-		if (next === undefined || !apertureInsideImage(next, width, height)) {
-			addGrownAperture(grown, next ?? photometry)
-			return undefined
-		}
-
+		const next = radius < maximumRadius ? measureCenteredAperture(raw, width, height, stride, photometry.centroidX, photometry.centroidY, Math.min(maximumRadius, radius + Math.max(2, Math.ceil(radius / 4))), workspace) : undefined
+		if (next === undefined || !apertureInsideImage(next, width, height)) return undefined
 		photometry = next
 	}
-
-	if (photometry.radius > STAR_SIGNAL_RADIUS) addGrownAperture(grown, photometry)
-	return photometry.snr >= minSNR ? photometry : undefined
-}
-
-// Appends the centroid and radius, in pixels, of a grown aperture to `grown`.
-function addGrownAperture(grown: number[], { centroidX, centroidY, radius }: ApertureMeasurement) {
-	grown.push(centroidX, centroidY, radius)
 }
 
 // Measures an aperture of `radius` pixels at (x, y) and recenters it at most STAR_CENTROID_REFINEMENTS
-// times on the flux-weighted centroid, keeping the last measurement with positive flux, `minSNR` and
-// STAR_MIN_HFD. Undefined when the first measurement already fails them.
-function measureCenteredAperture(raw: Image['raw'], width: number, height: number, stride: number, x: number, y: number, radius: number, minSNR: number, workspace: PhotometryWorkspace): ApertureMeasurement | undefined {
+// times on the flux-weighted centroid, keeping the last measurement with positive flux. Undefined when
+// the first measurement already has none.
+function measureCenteredAperture(raw: Image['raw'], width: number, height: number, stride: number, x: number, y: number, radius: number, workspace: PhotometryWorkspace): ApertureMeasurement | undefined {
 	const backgroundInnerRadius = radius + STAR_BACKGROUND_GAP
 	const backgroundOuterRadius = backgroundInnerRadius + STAR_BACKGROUND_WIDTH
-	let photometry = measureAperture(raw, width, height, stride, x, y, radius, backgroundInnerRadius, backgroundOuterRadius, STAR_CONVOLVED_MARGIN, workspace)
-	if (photometry === undefined || photometry.snr < minSNR || photometry.hfd < STAR_MIN_HFD) return undefined
+	let photometry = measureAperture(raw, width, height, stride, x, y, radius, backgroundInnerRadius, backgroundOuterRadius, STAR_BORDER_MARGIN, workspace)
+	if (photometry === undefined) return undefined
 
 	for (let iteration = 0; iteration < STAR_CENTROID_REFINEMENTS; iteration++) {
 		const { centroidX, centroidY } = photometry
 		if (Math.hypot(centroidX - x, centroidY - y) <= STAR_CENTROID_TOLERANCE) break
-		const refined = measureAperture(raw, width, height, stride, centroidX, centroidY, radius, backgroundInnerRadius, backgroundOuterRadius, STAR_CONVOLVED_MARGIN, workspace)
-		if (refined === undefined || refined.snr < minSNR || refined.hfd < STAR_MIN_HFD) break
+		const refined = measureAperture(raw, width, height, stride, centroidX, centroidY, radius, backgroundInnerRadius, backgroundOuterRadius, STAR_BORDER_MARGIN, workspace)
+		if (refined === undefined) break
 		x = centroidX
 		y = centroidY
 		photometry = refined
@@ -512,10 +733,10 @@ function edgeHasLight({ edgeSignal, edgeCount }: ApertureMeasurement, noise: num
 	return edgeCount > 0 && edgeSignal > STAR_GROWTH_SIGNIFICANCE * noise * Math.sqrt(edgeCount)
 }
 
-// Whether the signal aperture around the centroid lies inside the image less the PSF margin, so no
+// Whether the signal aperture around the centroid lies inside the image less the border margin, so no
 // part of the star is cut.
 function apertureInsideImage({ centroidX, centroidY, radius }: ApertureMeasurement, width: number, height: number) {
-	return centroidX - radius >= STAR_CONVOLVED_MARGIN && centroidY - radius >= STAR_CONVOLVED_MARGIN && centroidX + radius <= width - STAR_CONVOLVED_MARGIN - 1 && centroidY + radius <= height - STAR_CONVOLVED_MARGIN - 1
+	return centroidX - radius >= STAR_BORDER_MARGIN && centroidY - radius >= STAR_BORDER_MARGIN && centroidX + radius <= width - STAR_BORDER_MARGIN - 1 && centroidY + radius <= height - STAR_BORDER_MARGIN - 1
 }
 
 // Computes aperture flux, SNR, HFD and FWHM for a star centered on an image coordinate.
@@ -584,19 +805,19 @@ function annulusStatistics(raw: Image['raw'], stride: number, x: number, y: numb
 }
 
 // Computes the median and scaled-MAD deviation of STAR_DISTANT_SKY_SAMPLES samples evenly spaced on a
-// circle of `radius` pixels around (x, y), skipping those outside the image less the PSF margin. A sparse
+// circle of `radius` pixels around (x, y), skipping those outside the image less the border margin. A sparse
 // ring keeps this reference cheap for the thousands of candidates of a frame. Reorders the workspace
 // samples; undefined when no sample falls inside.
 function distantSkyStatistics(raw: Image['raw'], stride: number, x: number, y: number, radius: number, width: number, height: number, workspace: PhotometryWorkspace): AnnulusStatistics | undefined {
 	const samples = (workspace.samples = ensureCapacity(workspace.samples, STAR_DISTANT_SKY_SAMPLES))
-	const xMax = width - STAR_CONVOLVED_MARGIN - 1
-	const yMax = height - STAR_CONVOLVED_MARGIN - 1
+	const xMax = width - STAR_BORDER_MARGIN - 1
+	const yMax = height - STAR_BORDER_MARGIN - 1
 	let count = 0
 
 	for (let i = 0; i < STAR_DISTANT_SKY_SAMPLES; i++) {
 		const px = Math.round(x + radius * DISTANT_SKY_COS[i])
 		const py = Math.round(y + radius * DISTANT_SKY_SIN[i])
-		if (px < STAR_CONVOLVED_MARGIN || py < STAR_CONVOLVED_MARGIN || px > xMax || py > yMax) continue
+		if (px < STAR_BORDER_MARGIN || py < STAR_BORDER_MARGIN || px > xMax || py > yMax) continue
 		samples[count++] = raw[py * stride + px]
 	}
 
@@ -753,55 +974,6 @@ function measureAperture(raw: Image['raw'], width: number, height: number, strid
 
 	const { eccentricity, elongation, majorVariance, minorVariance, theta } = starMomentShape(momentXX / flux, momentXY / flux, momentYY / flux)
 	return { radius: signalRadius, flux, snr, hfd, fwhm, eccentricity, elongation, majorVariance, minorVariance, theta, centroidX, centroidY, sky: background, noise, skyCount, netFlux, aperturePixels, edgeSignal, edgeCount }
-}
-
-// Builds summed-area tables for fast local mean and variance queries.
-function buildIntegralImages(raw: Image['raw'], width: number, height: number, stride: number) {
-	const integralWidth = width + 1
-	const size = integralWidth * (height + 1)
-	const sum = new Float64Array(size)
-	const sumSq = new Float64Array(size)
-
-	for (let y = 0; y < height; y++) {
-		const rowOffset = y * stride
-		const integralRow = (y + 1) * integralWidth
-		const prevIntegralRow = y * integralWidth
-		let rowSum = 0
-		let rowSumSq = 0
-
-		for (let x = 0; x < width; x++) {
-			const value = clamp(raw[rowOffset + x], 0, 1)
-			rowSum += value
-			rowSumSq += value * value
-			const index = integralRow + x + 1
-			const prevIndex = prevIntegralRow + x + 1
-			sum[index] = sum[prevIndex] + rowSum
-			sumSq[index] = sumSq[prevIndex] + rowSumSq
-		}
-	}
-
-	return [sum, sumSq, integralWidth] as const
-}
-
-// Computes local mean and standard deviation from the summed-area tables.
-function localStatistics(image: IntegralImages, left: number, top: number, right: number, bottom: number) {
-	const x0 = left
-	const y0 = top
-	const x1 = right + 1
-	const y1 = bottom + 1
-	const s = image[0]
-	const sq = image[1]
-	const width = image[2]
-	const a = y0 * width + x0
-	const b = y0 * width + x1
-	const c = y1 * width + x0
-	const d = y1 * width + x1
-	const count = (right - left + 1) * (bottom - top + 1)
-	const sum = s[d] - s[b] - s[c] + s[a]
-	const sumSq = sq[d] - sq[b] - sq[c] + sq[a]
-	const mean = sum / count
-	const variance = Math.max(0, sumSq / count - mean * mean)
-	return [mean, Math.sqrt(variance)] as const
 }
 
 // Removes duplicate detections that lie within sqrt(minLimitSq) pixels of an earlier star (in place).

@@ -77,7 +77,8 @@ test('the default filter accepts a 5 sigma star of any flux scale and only the r
 	const noise = accepted.filter((each) => each !== plotted)
 	expect(noise.length).toBeLessThanOrEqual(3)
 	for (const each of noise) expect(each.snr).toBeLessThan(6)
-	expect(filterGuideStars(frame, { ...DEFAULT_STAR_FILTER_CONFIG, minStarSnr: 2 }).accepted.length).toBeGreaterThan(10 * accepted.length)
+	// ASTAP's 7-sigma detection level starts no star on the sky noise, so a lower SNR filter accepts no more.
+	expect(filterGuideStars(frame, { ...DEFAULT_STAR_FILTER_CONFIG, minStarSnr: 2 }).accepted).toHaveLength(accepted.length)
 })
 
 test('star filtering rejects detector eccentricity as elongation', () => {

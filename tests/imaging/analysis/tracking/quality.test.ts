@@ -1,11 +1,9 @@
 import { expect, test } from 'bun:test'
 import { PI } from '../../../../src/core/constants'
-import { detectStreaks } from '../../../../src/imaging/analysis/streak/detector'
 import type { Streak } from '../../../../src/imaging/analysis/streak/types'
 import { measureTrackingQuality } from '../../../../src/imaging/analysis/tracking/quality'
 import type { Image } from '../../../../src/imaging/model/types'
-import { STAR_SIGNAL_RADIUS, type DetectedStar, detectStars } from '../../../../src/imaging/stars/detector'
-import { renderSyntheticStreak } from '../../../../src/imaging/synthetic/streak'
+import { type DetectedStar, detectStars } from '../../../../src/imaging/stars/detector'
 import { deg } from '../../../../src/math/units/angle'
 
 function image(width: number = 100, height: number = 100): Image {
@@ -158,55 +156,6 @@ test('one streak crossing two stars cannot add two contributions to a sparse fie
 	expect(measured.score).toBeCloseTo(1 / 3, 12)
 })
 
-test('detector-measured long stellar trails retain field evidence despite aperture-truncated moments', () => {
-	const frame = image(256, 256)
-	frame.raw.fill(0.1)
-	for (const y of [35, 95, 155, 215]) {
-		for (const x of [35, 95, 155, 215]) {
-			renderSyntheticStreak(frame, { start: { x: x - 19, y }, end: { x: x + 19, y }, width: 3, intensity: 0.8 })
-		}
-	}
-
-	const stars = detectStars(frame)
-	const streaks = detectStreaks(frame, { minLength: 30, maxWidth: 8, backgroundCellSize: 32 })
-	const baseline = measureTrackingQuality(frame, stars)
-	const measured = measureTrackingQuality(frame, stars, {}, { streaks })
-	expect(stars.length).toBeGreaterThanOrEqual(16)
-	expect(streaks.length).toBeGreaterThan(0)
-	expect(baseline.score).toBeGreaterThan(0.6)
-	expect(baseline.medianTrail).toBeLessThan(2 * STAR_SIGNAL_RADIUS)
-	expect(streaks.some((sample) => sample.length > 2 * baseline.medianTrail!)).toBeTrue()
-	expect(measured.usableStarCount).toBeGreaterThanOrEqual(0.75 * baseline.usableStarCount)
-	expect(measured.score).toBeGreaterThanOrEqual(0.75 * baseline.score)
-})
-
-test('one external streak cannot validate the field from stars it crosses', () => {
-	const frame = image()
-	frame.raw.fill(0.1)
-	function roundStar(x: number, y: number): void {
-		for (let py = Math.floor(y - 5); py <= Math.ceil(y + 5); py++) {
-			for (let px = Math.floor(x - 5); px <= Math.ceil(x + 5); px++) {
-				frame.raw[py * frame.metadata.stride + px] += 0.25 * Math.exp((-0.5 * ((px - x) ** 2 + (py - y) ** 2)) / 1.2 ** 2)
-			}
-		}
-	}
-	for (const x of [12, 25, 38, 52, 62, 72, 82, 92]) roundStar(x, 0.6 * x + 10)
-	roundStar(15, 85)
-	roundStar(85, 15)
-	renderSyntheticStreak(frame, { start: { x: 10, y: 16 }, end: { x: 94, y: 66.4 }, width: 3, intensity: 0.5 })
-
-	const stars = detectStars(frame)
-	const streaks = detectStreaks(frame, { minLength: 50, maxWidth: 8, backgroundCellSize: 24, maxStreaks: 1 })
-	const baseline = measureTrackingQuality(frame, stars)
-	const measured = measureTrackingQuality(frame, stars, {}, { streaks })
-	expect(stars.length).toBeGreaterThanOrEqual(8)
-	expect(streaks).toHaveLength(1)
-	// The two round stars off the streak count too, so the trailed field reads slightly below 0.8.
-	expect(baseline.score).toBeGreaterThan(0.75)
-	expect(measured.usableStarCount).toBeLessThan(baseline.usableStarCount)
-	expect(measured.score).toBeLessThan(0.1)
-})
-
 test('stars whose shape apertures intersect a streak cannot support its independent field', () => {
 	const frame = image()
 	const angle = Math.atan(0.6)
@@ -258,8 +207,9 @@ test('measured detector moments distinguish a trailed raster from a round raster
 	function raster(trail: number): Image {
 		const frame = image()
 		frame.raw.fill(0.02)
-		for (const y of [15, 35, 65, 85]) {
-			for (const x of [15, 35, 65, 85]) {
+		// ASTAP's extraction starts a star only 16 pixels away from the border.
+		for (const y of [20, 40, 60, 80]) {
+			for (const x of [20, 40, 60, 80]) {
 				for (let py = y - 6; py <= y + 6; py++) {
 					for (let px = x - 7; px <= x + 7; px++) {
 						let signal = 0

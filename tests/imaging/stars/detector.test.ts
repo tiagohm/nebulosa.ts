@@ -12,6 +12,12 @@ import { readImage } from '../util'
 
 await downloadPerTag('stardetector')
 
+// Adds a circular Gaussian of the peak and sigma (pixels) centered on (x, y) to a mono buffer.
+function addGaussian(raw: Float32Array, width: number, x: number, y: number, peak: number, sigma: number) {
+	const height = raw.length / width
+	for (let py = 0; py < height; py++) for (let px = 0; px < width; px++) raw[py * width + px] += peak * Math.exp(-((px - x) ** 2 + (py - y) ** 2) / (2 * sigma * sigma))
+}
+
 // Detection publishes a flux-weighted centroid, so integer peak equality is not a valid match.
 function starNear(stars: readonly DetectedStar[], x: number, y: number, maxDistancePx = 0.75) {
 	return stars.find((star) => Math.hypot(star.x - x, star.y - y) <= maxDistancePx)
@@ -347,6 +353,10 @@ test('detect stars keeps a faint field when a few stars are much brighter', () =
 		plotStar(raw, width, height, 1, x, y, i < 3 ? 2 : 0.4, 3, i < 3 ? 100 : 40, 0)
 	}
 
+	// ASTAP takes the sky from the histogram of the samples from 1 ADU, so the frame needs a sky.
+	const random = mulberry32(3)
+	for (let i = 0; i < raw.length; i++) raw[i] += 0.01 + (random() - 0.5) * 0.0002
+
 	const image: Image = { raw, header: {}, metadata: { width, height, channels: 1, pixelCount: width * height, pixelSizeInBytes: 4, bitpix: -32, stride: width, strideInBytes: width * 4, bayer: undefined } }
 	const stars = detectStars(image, { maxStars: 500 })
 
@@ -360,48 +370,77 @@ test('detect stars keeps a faint field when a few stars are much brighter', () =
 	}
 })
 
-test('detect stars drops a faint star after a score gap unless the trim is off', () => {
-	const size = 120
-	const raw = new Float32Array(size * size).fill(0.1)
-	const positions = [
-		[25, 25, 0.8],
-		[90, 25, 0.8],
-		[25, 90, 0.8],
-		[90, 90, 0.8],
-		[58, 58, 0.012],
-	] as const
+test('detect stars finds no star in sky noise even with a minimum SNR of 1', () => {
+	const size = 256
+	const raw = new Float32Array(size * size)
+	const random = mulberry32(11)
 
-	for (const [x, y, peak] of positions) {
-		for (let py = 0; py < size; py++) for (let px = 0; px < size; px++) raw[py * size + px] += peak * Math.exp(-((px - x) ** 2 + (py - y) ** 2) / (2 * 1.5 ** 2))
-	}
+	// Gaussian sky of 0.0056 (368 ADU) and 2.4 ADU of deviation, as a simulated 16-bit frame.
+	for (let i = 0; i < raw.length; i++) raw[i] = (368 + 2.4 * Math.sqrt(-2 * Math.log(1 - random())) * Math.cos(2 * Math.PI * random())) / 65535
 
-	const random = mulberry32(5)
-	for (let i = 0; i < raw.length; i++) raw[i] += (random() - 0.5) * 0.002
+	const image: Image = { raw, header: {}, metadata: { width: size, height: size, channels: 1, pixelCount: size * size, pixelSizeInBytes: 4, bitpix: 16, stride: size, strideInBytes: size * 2, bayer: undefined } }
+	expect(detectStars(image, { minSNR: 1 })).toHaveLength(0)
 
-	const image: Image = { raw, header: {}, metadata: { width: size, height: size, channels: 1, pixelCount: size * size, pixelSizeInBytes: 4, bitpix: -32, stride: size, strideInBytes: size * 4, bayer: undefined } }
-
-	expect(starNear(detectStars(image), 58, 58, 1.5)).toBeUndefined()
-	expect(starNear(detectStars(image, { scoreGapTrim: false }), 58, 58, 1.5)).toBeDefined()
+	// 20 sky deviations at the peak.
+	addGaussian(raw, size, 128.3, 127.6, 48 / 65535, 1.3)
+	const stars = detectStars(image, { minSNR: 1 })
+	expect(stars).toHaveLength(1)
+	expect(starNear(stars, 128.3, 127.6, 0.3)).toBeDefined()
+	expect(stars[0].snr).toBeGreaterThan(1)
 })
 
-test('detect stars rejects hot-pixel clumps that a 3x3 mean would turn into stars', () => {
+test('detect stars stops at the star-dominated level once a pass finds enough stars', () => {
+	const width = 400
+	const height = 300
+	const raw = new Float32Array(width * height)
+	const random = mulberry32(13)
+	for (let i = 0; i < raw.length; i++) raw[i] = 0.01 + (random() - 0.5) * 0.0002
+
+	// The sky deviates by about 4.7 ADU: 12 bright stars well above 30 deviations and one about 12 deviations above the sky.
+	for (let i = 0; i < 12; i++) addGaussian(raw, width, 50 + (i % 4) * 100, 50 + Math.floor(i / 4) * 100, 0.3, 1.3)
+	addGaussian(raw, width, 200.4, 100.6, 0.00087, 1.3)
+
+	const image: Image = { raw, header: {}, metadata: { width, height, channels: 1, pixelCount: width * height, pixelSizeInBytes: 4, bitpix: -32, stride: width, strideInBytes: width * 4, bayer: undefined } }
+
+	expect(detectStars(image)).toHaveLength(13)
+	expect(starNear(detectStars(image, { maxStars: 12 }), 200.4, 100.6, 1)).toBeUndefined()
+	expect(detectStars(image, { maxStars: 12 })).toHaveLength(12)
+})
+
+test('detect stars rejects hot pixels without two bright direct neighbors', () => {
 	const width = 128
 	const height = 128
-	const raw = new Float32Array(width * height).fill(0.1)
-	const x = 64
-	const y = 64
-	raw[y * width + x] = 1
-	raw[y * width + x + 1] = 1
-	raw[(y + 1) * width + x] = 1
-	raw[(y + 1) * width + x + 1] = 1
+	const raw = new Float32Array(width * height)
+	const random = mulberry32(17)
+	for (let i = 0; i < raw.length; i++) raw[i] = 0.1 + (random() - 0.5) * 0.0002
+	raw[64 * width + 64] = 1
+	raw[96 * width + 40] = 1
+	raw[96 * width + 41] = 1
 	plotStar(raw, width, height, 1, 32, 32, 0.8, 3, 80, 0)
 
 	const image: Image = { raw, header: {}, metadata: { width, height, channels: 1, pixelCount: width * height, pixelSizeInBytes: 4, bitpix: -32, stride: width, strideInBytes: width * 4, bayer: undefined } }
 	const stars = detectStars(image, { maxStars: 50 })
 
 	expect(starNear(stars, 32, 32, 1.5)).toBeDefined()
-	expect(starNear(stars, x, y, 3)).toBeUndefined()
 	expect(stars).toHaveLength(1)
+})
+
+test('detect stars rejects a trail longer than the search box', () => {
+	const width = 128
+	const height = 128
+	const raw = new Float32Array(width * height)
+	const random = mulberry32(19)
+	for (let i = 0; i < raw.length; i++) raw[i] = 0.1 + (random() - 0.5) * 0.0002
+	// A 3-pixel wide trail of 40 pixels and a round star: the trail fills too little of the box to be boxed, and once
+	// the box shrinks around it the trail runs past its edge, so ASTAP finds no edge of a star.
+	for (let x = 44; x <= 84; x++) for (let dy = -1; dy <= 1; dy++) raw[(40 + dy) * width + x] += 0.5
+	addGaussian(raw, width, 64.3, 90.6, 0.5, 1.3)
+
+	const image: Image = { raw, header: {}, metadata: { width, height, channels: 1, pixelCount: width * height, pixelSizeInBytes: 4, bitpix: -32, stride: width, strideInBytes: width * 4, bayer: undefined } }
+	const stars = detectStars(image)
+
+	expect(stars).toHaveLength(1)
+	expect(starNear(stars, 64.3, 90.6, 0.3)).toBeDefined()
 })
 
 test('detect stars finds nothing in a flat image', () => {
