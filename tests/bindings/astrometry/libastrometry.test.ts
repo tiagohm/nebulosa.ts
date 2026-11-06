@@ -36,30 +36,32 @@ test.skipIf(SKIP)(
 	'solve apod4.jpg',
 	async () => {
 		const image = readImageFromJpeg(Buffer.from(await Bun.file('data/apod4.jpg').arrayBuffer()), undefined, 'GRAY')!
-		const stars = detectStars(image, { maxStars: 500 })
+		// The SIP tweak of 500 stars of this wide field reaches the faint ones and sometimes settles 1% off in scale, so the
+		// solve uses the 200 brightest, as ASTAP's own star list does.
+		const stars = detectStars(image, { maxStars: 200 })
 
 		const solution = await libAstrometryNetPlateSolve(stars, image.metadata.width, image.metadata.height, {
 			indexes: 'data/index-4116.fits',
 			fov: deg(34),
 			scaleError: 0.2,
 			tweakOrder: 2,
-			maxStars: 500,
+			maxStars: 200,
 		})
 
 		// https://nova.astrometry.net/status/14909666
 		// FOV compares to 0.005 deg because flux-weighted centroids differ from integer peaks.
 		// Center and orientation: Astropy 8.0.1 evaluated the previous SIP WCS at FITS (360, 254),
 		// origin=1, then recentered its gnomonic plane there (0.01-pixel central-difference Jacobian).
-		// Recentring preserves the celestial frame; tolerances allow the native SIP refit on ASTAP's star selection,
-		// which moves the orientation by 0.015 deg (ASTAP's own star list by 0.05 deg) and the declination by 3 arcsec.
+		// Recentring preserves the celestial frame; tolerances allow the native SIP refit, which on ASTAP's star selection
+		// shortens the field height by 0.002 deg.
 		expect(solution).toBeDefined()
 		expect(solution!.CRPIX1).toBe((image.metadata.width + 1) / 2)
 		expect(solution!.CRPIX2).toBe((image.metadata.height + 1) / 2)
-		expect(toDeg(solution!.orientation)).toBeCloseTo(58.5039782352, 1)
+		expect(toDeg(solution!.orientation)).toBeCloseTo(58.5039782352, 2)
 		expect(toArcsec(solution!.scale)).toBeCloseTo(170.85, 1)
 		expect(toHour(solution!.rightAscension)).toBeCloseTo(12.478627009, 3)
-		expect(toDeg(solution!.declination)).toBeCloseTo(56.7124022211, 2)
-		expect(toDeg(solution!.width)).toBeCloseTo(34.092, 1)
+		expect(toDeg(solution!.declination)).toBeCloseTo(56.7124022211, 3)
+		expect(toDeg(solution!.width)).toBeCloseTo(34.092, 2)
 		expect(toDeg(solution!.height)).toBeCloseTo(24.0842, 2)
 		expect(toDeg(solution!.radius)).toBeCloseTo(20.8705, 2)
 		expect(solution!.parity).toBe('NORMAL')

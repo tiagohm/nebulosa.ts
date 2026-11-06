@@ -1,3 +1,4 @@
+import { quickSelect } from '../../math/numerical/array'
 import type { Point } from '../../math/numerical/geometry'
 import { medianBySelectionOf, STANDARD_DEVIATION_SCALE } from '../../math/numerical/statistics'
 import type { Angle } from '../../math/units/angle'
@@ -12,7 +13,7 @@ import { starMomentShape } from './shape'
 // above a detection level with two bright neighbors is measured with ASTAP's HFD routine, a star is
 // kept when its HFD and SNR pass ASTAP's limits, and its area is masked so it is not found twice; the
 // detection level steps down from the star-dominated levels to 7 sky deviations until enough stars
-// are found. ASTAP works in ADU, so the normalized samples are multiplied by 255 for 8-bit images and
+// are found. ASTAP works in ADU, so the normalized samples are multiplied by 255 for 8-bit FITS images and
 // by 65535 otherwise, as ASTAP loads them. Each accepted star is then measured again by aperture/annulus
 // photometry around ASTAP's center of gravity, for its flux, half-flux diameter (HFD), FWHM and shape.
 // That HFD comes from a curve of growth on which every sample spreads its flux over the radii within
@@ -97,12 +98,53 @@ interface AstapStar {
 	readonly radius: number
 }
 
-// Scratch buffers of ASTAP's HFD routine, grown on demand.
+// One detection pass of ASTAP's analyse_image.
+interface AstapPass {
+	// ASTAP's retry counter of the pass, from 4 down to 1, also its mark on the mask of found stars.
+	readonly marker: number
+	// Detection level above the background, in ADU.
+	readonly level: number
+}
+
+// Geometry and scratch buffers of ASTAP's HFD routine for one frame width and one search box, built once per
+// detection so each measurement only reads tables. Offsets are linear sample offsets in the packed frame; the
+// distance tables cover the square of half side `tableRadius` pixels, indexed by (i + tableRadius) * tableSide
+// + (j + tableRadius) for the column offset i and the row offset j.
 interface AstapWorkspace {
-	// Samples of the sky annulus, sorted in place by the median.
-	annulus: Float64Array
-	// Number of signal samples per integer distance from the center of gravity.
-	distances: Int32Array
+	// Half side, in pixels, of the search box.
+	readonly box: number
+	// Offsets of the samples of the one-pixel sky annulus beyond the box.
+	readonly annulusOffsets: Int32Array
+	// Values of the annulus samples, then their absolute deviations, reordered in place by the median.
+	readonly annulus: Float64Array
+	// Offsets of the samples of the box, with their column and row offsets, in pixels, and their square ring
+	// max(|i|, |j|), so the sums of every smaller box are prefix sums over the rings.
+	readonly cellOffsets: Int32Array
+	readonly cellX: Int32Array
+	readonly cellY: Int32Array
+	readonly cellRings: Int32Array
+	// Signal sum, its x and y moments, in ADU pixels, and signal sample count per square ring.
+	readonly ringSum: Float64Array
+	readonly ringSumX: Float64Array
+	readonly ringSumY: Float64Array
+	readonly ringCount: Int32Array
+	// Half side, in pixels, of the distance tables: the box plus the 2 pixels ASTAP adds around a star.
+	readonly tableRadius: number
+	readonly tableSide: number
+	// Distance from the center, in pixels, rounded and exact.
+	readonly roundedDistances: Int32Array
+	readonly distances: Float64Array
+	// Number of signal samples per rounded distance from the center of gravity.
+	readonly histogram: Int32Array
+	// Interpolated samples less the local sky, in ADU, on the square around the center of gravity.
+	readonly samples: Float64Array
+	// Integer part, fraction and validity of the interpolated columns and rows around the center of gravity.
+	readonly columnStart: Int32Array
+	readonly columnFraction: Float64Array
+	readonly columnValid: Uint8Array
+	readonly rowStart: Int32Array
+	readonly rowFraction: Float64Array
+	readonly rowValid: Uint8Array
 }
 
 // Measured photometry of one star as [flux, snr, hfd, fwhm].
@@ -190,9 +232,10 @@ const STAR_CENTROID_REFINEMENTS = 2
 // Stop recentering when the centroid moves by this many pixels or less.
 const STAR_CENTROID_TOLERANCE = 0.05
 
-// ADU per normalized unit of an 8-bit image, as ASTAP loads it.
+// ADU per normalized unit of an 8-bit FITS image, which ASTAP keeps in 0 to 255.
 const ASTAP_8BIT_SCALE = 255
-// ADU per normalized unit of every other image: ASTAP keeps 16-bit samples and scales floats up to 1.5 by 65535.
+// ADU per normalized unit of every other image: ASTAP keeps 16-bit samples, scales floats up to 1.5 by 65535, and
+// reads 8-bit PNG, JPEG, TIFF and BMP images at 16 bits, each 8-bit value times 257.
 const ASTAP_16BIT_SCALE = 65535
 // Size of ASTAP's sample histogram, one bin per ADU.
 const ASTAP_HISTOGRAM_SIZE = 65536
@@ -201,7 +244,7 @@ const ASTAP_HISTOGRAM_LIMIT = 65000
 // Fractions of the width and the height left out of the histogram on each side (unused areas of raw sensors).
 const ASTAP_HISTOGRAM_BORDER_X = 0.042
 const ASTAP_HISTOGRAM_BORDER_Y = 0.015
-// Highest histogram level, in ADU, from which the star levels are searched downwards, for 8-bit and other images.
+// Highest histogram level, in ADU, from which the star levels are searched downwards, for 8-bit FITS and other images.
 const ASTAP_8BIT_STAR_LEVEL_TOP = 255
 const ASTAP_16BIT_STAR_LEVEL_TOP = 65001
 // The noise is sampled on a grid of about this many steps along the height.
@@ -283,7 +326,8 @@ export function detectStars(image: Image, { maxStars = 500, searchRegion = 0, mi
 
 	const { raw, metadata } = intensity
 	const { width, height, stride, bitpix } = metadata
-	const eightBit = bitpix === 8
+	// Only a FITS header has SIMPLE: an 8-bit image from another format is 16-bit to ASTAP.
+	const eightBit = bitpix === 8 && image.header.SIMPLE !== undefined
 	const scale = eightBit ? ASTAP_8BIT_SCALE : ASTAP_16BIT_SCALE
 	const adu = aduImage(raw, width, height, stride, scale)
 	const sky = astapBackground(adu, width, height, eightBit, maxStars)
@@ -335,16 +379,25 @@ function aduImage(raw: Image['raw'], width: number, height: number, stride: numb
 }
 
 // Median as ASTAP's SMedian computes it: of the sorted values, the middle one for up to 3 values, the mean of the
-// middle three for more odd ones and of the middle two for even ones; NaN when empty. Sorts the prefix of `count`
-// values in place.
+// middle three for more odd ones and of the middle two for even ones; NaN when empty. The order statistics are
+// selected instead of sorting, which adds them in the same order, so the result is the same; the prefix of
+// `count` values is reordered in place.
 function astapMedian(values: Float64Array, count: number) {
 	if (count === 0) return Number.NaN
 	if (count === 1) return values[0]
 
-	const sorted = values.subarray(0, count).sort()
 	const middle = (count - 1) >> 1
-	if ((count & 1) === 0) return (sorted[middle] + sorted[middle + 1]) / 2
-	return count <= 3 ? sorted[middle] : (sorted[middle - 1] + sorted[middle] + sorted[middle + 1]) / 3
+	const center = quickSelect(values, count, middle)
+	if ((count & 1) === 1 && count <= 3) return center
+
+	// After the selection, the values before the middle are not greater and the ones after it not smaller.
+	let next = values[middle + 1]
+	for (let i = middle + 2; i < count; i++) if (values[i] < next) next = values[i]
+	if ((count & 1) === 0) return (center + next) / 2
+
+	let previous = values[0]
+	for (let i = 1; i < middle; i++) if (values[i] > previous) previous = values[i]
+	return (previous + center + next) / 3
 }
 
 // Finds the sky of a frame of `width` x `height` packed ADU samples as ASTAP's get_background does. The background
@@ -352,7 +405,7 @@ function astapMedian(values: Float64Array, count: number) {
 // of the height, searched up to their mean, or that mean when it is more than 1.5 times the peak. The noise is the
 // standard deviation about the background of about 71 x 71 grid samples 15 pixels away from the border, nonzero
 // and below twice the background, clipped at 3 deviations until it settles. The star levels are where the
-// histogram, summed down from its top (255 ADU for 8-bit images), first holds 6 and 24 pixels per wanted star.
+// histogram, summed down from its top (255 ADU for 8-bit FITS images), first holds 6 and 24 pixels per wanted star.
 function astapBackground(adu: Float32Array, width: number, height: number, eightBit: boolean, maxStars: number): AstapBackground {
 	const histogram = new Uint32Array(ASTAP_HISTOGRAM_SIZE)
 	const offsetX = Math.trunc(width * ASTAP_HISTOGRAM_BORDER_X)
@@ -434,74 +487,173 @@ function astapBackground(adu: Float32Array, width: number, height: number, eight
 	return { background, noise, starLevel: Math.max(floor, starLevel - background - 1), starLevel2: Math.max(floor, starLevel2 - background - 1) }
 }
 
+// Returns the detection passes of ASTAP's analyse_image in order: the first star level and the second, each only
+// when it is above 30 deviations (stars dominate the frame), 30 deviations unless `minSNR` is 30 or more, and
+// finally `minSNR` but at least 7 deviations. Levels are in ADU above the background.
+function astapPasses({ noise, starLevel, starLevel2 }: AstapBackground, minSNR: number): AstapPass[] {
+	const dominant = ASTAP_DOMINANT_SIGMA * noise
+	const passes: AstapPass[] = []
+	if (starLevel > dominant) passes.push({ marker: 4, level: starLevel })
+	if (starLevel2 > dominant) passes.push({ marker: 3, level: starLevel2 })
+	if (minSNR < ASTAP_DOMINANT_SIGMA) passes.push({ marker: 2, level: dominant })
+	passes.push({ marker: 1, level: Math.max(minSNR, ASTAP_FAINT_SIGMA) * noise })
+	return passes
+}
+
 // Finds the stars of a frame of packed ADU samples as ASTAP's analyse_image does, with `box` pixels as the half
-// side of its search box. Each pass scans the frame for a pixel above the detection level, not masked by a star
+// side of its search box. Each pass scans the frame for a pixel above its detection level, not masked by a star
 // of this pass, with at least 2 of its 4 direct neighbors 4 deviations above the background; ASTAP's HFD routine
 // measures it, and the star is kept when its HFD is above 0.8 pixels and at most 30 (scaled with the box), its SNR
 // exceeds `minSNR`, and its rounded center is not masked yet; a disk of 3 HFDs around that center is then masked.
-// The passes use the first star level, the second, 30 deviations (skipped when `minSNR` is 30 or more) and
-// finally `minSNR` but at least 7 deviations, a star level only when it is above 30 deviations, and stop once a
-// pass finds `maxStars`. Returns the stars of the last pass, in scan order.
+// The passes (see astapPasses) stop once one finds `maxStars`. Returns the stars of the last pass, in scan order.
+// The pixels that pass the neighbor test above the lowest level are collected once, in scan order, and each one is
+// measured at most once, since the HFD routine and the acceptance do not depend on the pass; the passes then only
+// walk that list, so they find what ASTAP's full scans find.
 function astapFindStars(adu: Float32Array, width: number, height: number, sky: AstapBackground, box: number, minSNR: number, maxStars: number): AstapStar[] {
 	const { background, noise } = sky
-	const mask = new Uint8Array(width * height)
-	const workspace: AstapWorkspace = { annulus: new Float64Array(0), distances: new Int32Array(0) }
+	const passes = astapPasses(sky, minSNR)
 	const neighborLevel = ASTAP_NEIGHBOR_SIGMA * noise
+	let lowest = passes[0].level
+	for (let i = 1; i < passes.length; i++) lowest = Math.min(lowest, passes[i].level)
+
+	let candidates = new Int32Array(4096)
+	let count = 0
+
+	for (let y = 1; y < height - 1; y++) {
+		for (let x = 1; x < width - 1; x++) {
+			const index = y * width + x
+			if (!(adu[index] - background > lowest)) continue
+
+			let bright = 0
+			if (adu[index - 1] - background > neighborLevel) bright++
+			if (adu[index + 1] - background > neighborLevel) bright++
+			if (adu[index - width] - background > neighborLevel) bright++
+			if (adu[index + width] - background > neighborLevel) bright++
+			if (bright < ASTAP_MIN_BRIGHT_NEIGHBORS) continue
+
+			if (count === candidates.length) {
+				const grown = new Int32Array(2 * count)
+				grown.set(candidates)
+				candidates = grown
+			}
+
+			candidates[count++] = index
+		}
+	}
+
+	const mask = new Uint8Array(width * height)
+	const workspace = astapWorkspace(width, box)
 	const maxHfd = (ASTAP_MAX_HFD * box) / ASTAP_BOX_RADIUS
+	// Measurement state of each candidate: 0 not measured, 1 rejected, 2 accepted, with the accepted stars by candidate.
+	const measured = new Uint8Array(count)
+	const accepted = new Map<number, AstapStar>()
 	let stars: AstapStar[] = []
-	// Also the marker of the mask, so it never needs clearing between passes.
-	let pass = ASTAP_PASSES
 
-	do {
-		let level = 0
-
-		if (pass === 4) {
-			if (sky.starLevel > ASTAP_DOMINANT_SIGMA * noise) level = sky.starLevel
-			else pass = 3
-		}
-
-		if (pass === 3) {
-			if (sky.starLevel2 > ASTAP_DOMINANT_SIGMA * noise) level = sky.starLevel2
-			else pass = 2
-		}
-
-		if (pass === 2) {
-			level = ASTAP_DOMINANT_SIGMA * noise
-			if (minSNR >= ASTAP_DOMINANT_SIGMA) pass = 1
-		}
-
-		if (pass === 1) level = Math.max(minSNR, ASTAP_FAINT_SIGMA) * noise
-
+	for (const { marker, level } of passes) {
 		stars = []
 
-		for (let y = 1; y < height - 1; y++) {
-			for (let x = 1; x < width - 1; x++) {
-				const index = y * width + x
-				if (mask[index] === pass || !(adu[index] - background > level)) continue
+		for (let k = 0; k < count; k++) {
+			const index = candidates[k]
+			if (mask[index] === marker || !(adu[index] - background > level)) continue
 
-				let bright = 0
-				if (adu[index - 1] - background > neighborLevel) bright++
-				if (adu[index + 1] - background > neighborLevel) bright++
-				if (adu[index - width] - background > neighborLevel) bright++
-				if (adu[index + width] - background > neighborLevel) bright++
-				if (bright < ASTAP_MIN_BRIGHT_NEIGHBORS) continue
+			if (measured[k] === 0) {
+				const star = astapHfd(adu, width, height, index % width, Math.trunc(index / width), workspace)
 
-				const star = astapHfd(adu, width, height, x, y, box, workspace)
-				if (star === undefined || !(star.hfd <= maxHfd && star.snr > minSNR && star.hfd > ASTAP_MIN_HFD)) continue
-
-				const cx = Math.round(star.x)
-				const cy = Math.round(star.y)
-				if (mask[cy * width + cx] === pass) continue
-
-				stars.push(star)
-				maskStar(mask, width, height, cx, cy, Math.round(ASTAP_MASK_HFD_SCALE * star.hfd), pass)
+				if (star !== undefined && star.hfd <= maxHfd && star.snr > minSNR && star.hfd > ASTAP_MIN_HFD) {
+					measured[k] = 2
+					accepted.set(k, star)
+				} else {
+					measured[k] = 1
+				}
 			}
+
+			if (measured[k] === 1) continue
+
+			const star = accepted.get(k)!
+			const cx = Math.round(star.x)
+			const cy = Math.round(star.y)
+			if (mask[cy * width + cx] === marker) continue
+
+			stars.push(star)
+			maskStar(mask, width, height, cx, cy, Math.round(ASTAP_MASK_HFD_SCALE * star.hfd), marker)
 		}
 
-		pass--
-	} while (stars.length < maxStars && pass > 0)
+		if (stars.length >= maxStars) break
+	}
 
 	return stars
+}
+
+// Builds the geometry and scratch buffers of ASTAP's HFD routine for a packed frame `width` pixels wide and a
+// search box of half side `box` pixels. The annulus holds the samples farther than `box` and at most `box` + 1
+// pixels from the center, in ASTAP's order; the distance tables reach `box` + 2 pixels, the most ASTAP measures.
+function astapWorkspace(width: number, box: number): AstapWorkspace {
+	const outer = box + 1
+	const innerSq = box * box
+	const outerSq = outer * outer
+	const annulus: number[] = []
+
+	for (let i = -outer; i <= outer; i++) {
+		for (let j = -outer; j <= outer; j++) {
+			const distanceSq = i * i + j * j
+			if (distanceSq > innerSq && distanceSq <= outerSq) annulus.push(j * width + i)
+		}
+	}
+
+	const boxSide = 2 * box + 1
+	const cellOffsets = new Int32Array(boxSide * boxSide)
+	const cellX = new Int32Array(cellOffsets.length)
+	const cellY = new Int32Array(cellOffsets.length)
+	const cellRings = new Int32Array(cellOffsets.length)
+
+	for (let i = -box, c = 0; i <= box; i++) {
+		for (let j = -box; j <= box; j++, c++) {
+			cellOffsets[c] = j * width + i
+			cellX[c] = i
+			cellY[c] = j
+			cellRings[c] = Math.max(Math.abs(i), Math.abs(j))
+		}
+	}
+
+	const tableRadius = box + 2
+	const tableSide = 2 * tableRadius + 1
+	const roundedDistances = new Int32Array(tableSide * tableSide)
+	const distances = new Float64Array(tableSide * tableSide)
+
+	for (let i = -tableRadius; i <= tableRadius; i++) {
+		for (let j = -tableRadius; j <= tableRadius; j++) {
+			const distance = Math.sqrt(i * i + j * j)
+			const index = (i + tableRadius) * tableSide + j + tableRadius
+			distances[index] = distance
+			roundedDistances[index] = Math.round(distance)
+		}
+	}
+
+	return {
+		box,
+		annulusOffsets: Int32Array.from(annulus),
+		annulus: new Float64Array(annulus.length),
+		cellOffsets,
+		cellX,
+		cellY,
+		cellRings,
+		ringSum: new Float64Array(box + 1),
+		ringSumX: new Float64Array(box + 1),
+		ringSumY: new Float64Array(box + 1),
+		ringCount: new Int32Array(box + 1),
+		tableRadius,
+		tableSide,
+		roundedDistances,
+		distances,
+		histogram: new Int32Array(tableRadius + 1),
+		samples: new Float64Array(tableSide * tableSide),
+		columnStart: new Int32Array(tableSide),
+		columnFraction: new Float64Array(tableSide),
+		columnValid: new Uint8Array(tableSide),
+		rowStart: new Int32Array(tableSide),
+		rowFraction: new Float64Array(tableSide),
+		rowValid: new Uint8Array(tableSide),
+	}
 }
 
 // Sets to `marker` the mask samples, of a `width` x `height` frame, within `radius` pixels of (x, y).
@@ -523,44 +675,49 @@ function maskStar(mask: Uint8Array, width: number, height: number, x: number, y:
 	}
 }
 
-// Bilinear interpolation of the packed ADU samples at the fractional position (x, y), in pixels; 0 within one
-// pixel of the left and top borders and two of the right and bottom ones, as ASTAP's value_subpixel.
-function astapSubpixel(adu: Float32Array, width: number, height: number, x: number, y: number) {
-	const xt = Math.trunc(x)
-	const yt = Math.trunc(y)
-	if (xt <= 0 || xt >= width - 2 || yt <= 0 || yt >= height - 2) return 0
-	const fx = x - xt
-	const fy = y - yt
-	const i = yt * width + xt
-	return adu[i] * (1 - fx) * (1 - fy) + adu[i + 1] * fx * (1 - fy) + adu[i + width] * (1 - fx) * fy + adu[i + width + 1] * fx * fy
-}
-
-// Measures the star around the pixel (x1, y1) of the packed ADU samples as ASTAP's HFD routine does. The local
-// sky is the median of the one-pixel annulus beyond `radius` pixels and its deviation the scaled MAD, at least
-// 1 ADU. The center of gravity of the samples 3 deviations above the sky in the box of half side `radius` is
-// found, shrinking the box while those cover less than 2/9 of it, so a neighbor is left out; the star then ends
-// where its signal samples per integer distance drop to a tenth of their most. Undefined, as ASTAP's HFD of 999,
-// near the border, without enough signal, for a hot pixel, a star as large as the box, or a group of stars.
-function astapHfd(adu: Float32Array, width: number, height: number, x1: number, y1: number, radius: number, workspace: AstapWorkspace): AstapStar | undefined {
+// Measures the star around the pixel (x1, y1) of the packed ADU samples as ASTAP's HFD routine does, in the
+// search box of the workspace. The local sky is the median of the one-pixel annulus beyond the box and its
+// deviation the scaled MAD, at least 1 ADU. The center of gravity of the samples 3 deviations above the sky in the
+// box is found, shrinking the box while those cover less than 2/9 of it, so a neighbor is left out; the star then
+// ends where its signal samples per integer distance drop to a tenth of their most. Undefined, as ASTAP's HFD of
+// 999, near the border, without enough signal, for a hot pixel, a star as large as the box, or a group of stars.
+// The box is summed once, per square ring, so a smaller box is a prefix of the rings; that adds the samples in
+// another order than ASTAP, which changes the center of gravity only by rounding. The samples around the center
+// of gravity are interpolated as value_subpixel does (0 near the border), with the column and row weights of the
+// offsets computed once, and kept for the HFD sum.
+function astapHfd(adu: Float32Array, width: number, height: number, x1: number, y1: number, workspace: AstapWorkspace): AstapStar | undefined {
+	let radius = workspace.box
 	const outer = radius + 1
 	if (x1 - outer <= 0 || x1 + outer >= width - 1 || y1 - outer <= 0 || y1 + outer >= height - 1) return undefined
 
-	const innerSq = radius * radius
-	const outerSq = outer * outer
-	const annulus = (workspace.annulus = ensureCapacity(workspace.annulus, (2 * outer + 1) * (2 * outer + 1)))
-	let count = 0
+	const center = y1 * width + x1
+	const { annulusOffsets, annulus } = workspace
+	const count = annulusOffsets.length
+	for (let k = 0; k < count; k++) annulus[k] = adu[center + annulusOffsets[k]]
 
-	for (let i = -outer; i <= outer; i++) {
-		for (let j = -outer; j <= outer; j++) {
-			const distanceSq = i * i + j * j
-			if (distanceSq > innerSq && distanceSq <= outerSq) annulus[count++] = adu[(y1 + j) * width + x1 + i]
+	const sky = astapMedian(annulus, count)
+	for (let k = 0; k < count; k++) annulus[k] = Math.abs(annulus[k] - sky)
+	const noise = Math.max(astapMedian(annulus, count) * ASTAP_MAD_SCALE, ASTAP_MIN_NOISE)
+	const signalLevel = ASTAP_SIGNAL_SIGMA * noise
+
+	const { cellOffsets, cellX, cellY, cellRings, ringSum, ringSumX, ringSumY, ringCount } = workspace
+	ringSum.fill(0)
+	ringSumX.fill(0)
+	ringSumY.fill(0)
+	ringCount.fill(0)
+
+	for (let c = 0; c < cellOffsets.length; c++) {
+		const value = adu[center + cellOffsets[c]] - sky
+
+		if (value > signalLevel) {
+			const ring = cellRings[c]
+			ringSum[ring] += value
+			ringSumX[ring] += value * cellX[c]
+			ringSumY[ring] += value * cellY[c]
+			ringCount[ring]++
 		}
 	}
 
-	const sky = astapMedian(annulus, count)
-	for (let i = 0; i < count; i++) annulus[i] = Math.abs(annulus[i] - sky)
-	const noise = Math.max(astapMedian(annulus, count) * ASTAP_MAD_SCALE, ASTAP_MIN_NOISE)
-	const signalLevel = ASTAP_SIGNAL_SIGMA * noise
 	let xc = 0
 	let yc = 0
 
@@ -571,17 +728,11 @@ function astapHfd(adu: Float32Array, width: number, height: number, x1: number, 
 		let sumY = 0
 		let signalCount = 0
 
-		for (let i = -radius; i <= radius; i++) {
-			for (let j = -radius; j <= radius; j++) {
-				const value = adu[(y1 + j) * width + x1 + i] - sky
-
-				if (value > signalLevel) {
-					sum += value
-					sumX += value * i
-					sumY += value * j
-					signalCount++
-				}
-			}
+		for (let ring = 0; ring <= radius; ring++) {
+			sum += ringSum[ring]
+			sumX += ringSumX[ring]
+			sumY += ringSumY[ring]
+			signalCount += ringCount[ring]
 		}
 
 		if (sum <= ASTAP_MIN_SIGNAL_SIGMA * noise) return undefined
@@ -599,18 +750,49 @@ function astapHfd(adu: Float32Array, width: number, height: number, x1: number, 
 
 	radius += 2
 
-	const distances = (workspace.distances = workspace.distances.length > radius ? workspace.distances : new Int32Array(radius + 1))
-	distances.fill(0, 0, radius + 1)
+	const { tableRadius, tableSide, roundedDistances, distances, histogram, samples, columnStart, columnFraction, columnValid, rowStart, rowFraction, rowValid } = workspace
+
+	// The column of xc + i and the row of yc + j, with the same rounding as computing them for every sample.
+	for (let i = -radius; i <= radius; i++) {
+		const t = i + tableRadius
+		const x = xc + i
+		const xt = Math.trunc(x)
+		columnStart[t] = xt
+		columnFraction[t] = x - xt
+		columnValid[t] = xt <= 0 || xt >= width - 2 ? 0 : 1
+		const y = yc + i
+		const yt = Math.trunc(y)
+		rowStart[t] = yt
+		rowFraction[t] = y - yt
+		rowValid[t] = yt <= 0 || yt >= height - 2 ? 0 : 1
+	}
+
+	histogram.fill(0, 0, radius + 1)
 	let peak = 0
 
 	for (let i = -radius; i <= radius; i++) {
-		for (let j = -radius; j <= radius; j++) {
-			const distance = Math.round(Math.sqrt(i * i + j * j))
-			if (distance > radius) continue
-			const value = astapSubpixel(adu, width, height, xc + i, yc + j) - sky
+		const column = i + tableRadius
+		const xt = columnStart[column]
+		const fx = columnFraction[column]
+		const columnInside = columnValid[column] === 1
+		const tableRow = column * tableSide + tableRadius
 
-			if (value > signalLevel) {
-				distances[distance]++
+		for (let j = -radius; j <= radius; j++) {
+			const row = j + tableRadius
+			let interpolated = 0
+
+			if (columnInside && rowValid[row] === 1) {
+				const fy = rowFraction[row]
+				const s = rowStart[row] * width + xt
+				interpolated = adu[s] * (1 - fx) * (1 - fy) + adu[s + 1] * fx * (1 - fy) + adu[s + width] * (1 - fx) * fy + adu[s + width + 1] * fx * fy
+			}
+
+			const value = interpolated - sky
+			samples[tableRow + j] = value
+			const distance = roundedDistances[tableRow + j]
+
+			if (distance <= radius && value > signalLevel) {
+				histogram[distance]++
 				if (value > peak) peak = value
 			}
 		}
@@ -624,11 +806,11 @@ function astapHfd(adu: Float32Array, width: number, height: number, x1: number, 
 
 	do {
 		starRadius++
-		const samples = distances[starRadius]
-		illuminated += samples
-		if (samples > 0) started = true
-		if (top < samples) top = samples
-	} while (!(starRadius >= radius || (started && distances[starRadius] <= ASTAP_DROP_OFF * top)))
+		const signalSamples = histogram[starRadius]
+		illuminated += signalSamples
+		if (signalSamples > 0) started = true
+		if (top < signalSamples) top = signalSamples
+	} while (!(starRadius >= radius || (started && histogram[starRadius] <= ASTAP_DROP_OFF * top)))
 
 	if (starRadius >= radius) return undefined
 	if (starRadius > 2 && illuminated < ASTAP_DISK_FILL * (2 * starRadius - 2) * (2 * starRadius - 2)) return undefined
@@ -640,10 +822,12 @@ function astapHfd(adu: Float32Array, width: number, height: number, x1: number, 
 	const halfPeak = 0.5 * peak
 
 	for (let i = -starRadius; i <= starRadius; i++) {
+		const tableRow = (i + tableRadius) * tableSide + tableRadius
+
 		for (let j = -starRadius; j <= starRadius; j++) {
-			const value = astapSubpixel(adu, width, height, xc + i, yc + j) - sky
+			const value = samples[tableRow + j]
 			sum += value
-			sumR += value * Math.sqrt(i * i + j * j)
+			sumR += value * distances[tableRow + j]
 			if (value >= halfPeak) halfCount++
 		}
 	}
