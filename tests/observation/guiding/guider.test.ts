@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { GuidingCalibrator } from '../../../src/observation/guiding/calibrator'
-import { aggregateGuideErrors, applyCalibration, applyDeadband, type GuiderConfig, Guider, invertCalibration, validateCalibration } from '../../../src/observation/guiding/guider'
+import { aggregateGuideErrors, applyCalibration, applyDeadband, type DeclinationBacklashCompensation, type GuiderConfig, Guider, invertCalibration, validateCalibration } from '../../../src/observation/guiding/guider'
 import { trackingResultFromStars, type GuideFrame, type GuideTrackerResult } from '../../../src/observation/guiding/tracker'
 import type { GuideStar } from '../../../src/observation/guiding/tracker.star'
 import { fixtureGuideImage, fixtureStarTracker } from '../../util/guiding'
@@ -1008,5 +1008,125 @@ describe('correction cadence and aggregation', () => {
 		const [x, y] = aggregateGuideErrors(samples, 'robust')
 		expect(x).toBeCloseTo((1 + 1.5 + 1) / 2.5, 12)
 		expect(y).toBeCloseTo(2 / 2.5, 12)
+	})
+})
+
+describe('adaptive DEC backlash compensation', () => {
+	const ADAPTIVE = { mode: 'adaptive', initialMs: 200, maxCompensationMs: 500, adaptationRate: 0.5 } as const
+
+	// A guider moving the star 1 px per 100 ms of DEC pulse, accepting every reversal at once.
+	function decGuider(config: Partial<GuiderConfig> = {}) {
+		return guider({ msPerDECUnit: 100, minPulseMsDEC: 1, minMoveDEC: 0.005, maxFrameJumpPx: 50, decReversalThreshold: 0, decBacklashAccumThreshold: 0, ...config })
+	}
+
+	// Feeds a frame whose star is dy pixels below the lock, at second t of the nominal 1 s cadence; returns the command.
+	function step(target: Guider, dy: number, t: number) {
+		return target.processFrame(guideFrame(shiftStars(BASE_STARS, 0, dy), t * 1000, t))
+	}
+
+	test('adds the estimate to the first pulse of an accepted reversal only, off by default', () => {
+		for (const [compensation, added] of [
+			[undefined, 0],
+			[ADAPTIVE, 200],
+		] as const) {
+			const target = decGuider(compensation ? { decBacklashCompensation: compensation } : {})
+			step(target, 0, 1)
+			expect(step(target, 1, 2).dec).toEqual({ direction: 'NORTH', duration: 100 })
+			const reversed = step(target, -1, 3)
+			expect(reversed.dec.direction).toBe('SOUTH')
+			expect(reversed.dec.duration).toBeCloseTo(100 + added, 9)
+			expect(reversed.diagnostics.decBacklashCompensationMs).toBe(added || undefined)
+			expect(reversed.diagnostics.decBacklashEstimateMs).toBe(compensation ? 200 : undefined)
+		}
+	})
+
+	test('learns from the error after a compensated reversal, within its bounds', () => {
+		const target = decGuider({ decBacklashCompensation: ADAPTIVE })
+		step(target, 0, 1)
+		step(target, 1, 2)
+		expect(step(target, -1, 3).dec.duration).toBeCloseTo(300, 9)
+		// Still 40 ms short of the lock on the side it corrected: too little compensation.
+		expect(step(target, -0.4, 4).dec.duration).toBeCloseTo(40, 9)
+		expect(target.currentState.decBacklashEstimateMs).toBeCloseTo(220, 9)
+		// Reversing north, then 60 ms past the lock: too much.
+		expect(step(target, 1, 5).dec.duration).toBeCloseTo(320, 9)
+		const past = step(target, -0.6, 6)
+		expect(target.currentState.decBacklashEstimateMs).toBeCloseTo(190, 9)
+		expect(past.dec.direction).toBe('SOUTH')
+		expect(past.dec.duration).toBeCloseTo(250, 9)
+		// An error within the dead band teaches nothing.
+		step(target, 0.002, 7)
+		expect(target.currentState.decBacklashEstimateMs).toBeCloseTo(190, 9)
+	})
+
+	test('never passes the DEC maximum, nor compensates while dithering, nor survives a reset of the controllers', () => {
+		const target = decGuider({ decBacklashCompensation: ADAPTIVE })
+		step(target, 0, 1)
+		step(target, 1, 2)
+		expect(step(target, -11.5, 3).dec.duration).toBe(1200)
+
+		const dithering = decGuider({ decBacklashCompensation: ADAPTIVE })
+		step(dithering, 0, 1)
+		step(dithering, 1, 2)
+		dithering.startDither(0, 0)
+		expect(step(dithering, -1, 3).dec.duration).toBeCloseTo(100, 9)
+
+		const reset = decGuider({ decBacklashCompensation: ADAPTIVE })
+		step(reset, 0, 1)
+		step(reset, 1, 2)
+		step(reset, -1, 3)
+		reset.resetControllers()
+		step(reset, -0.4, 4)
+		expect(reset.currentState.decBacklashEstimateMs).toBe(200)
+	})
+
+	test('refuses a compensation that is negative, beyond its maximum, or adapts faster than the error', () => {
+		expect(() => decGuider({ decBacklashCompensation: { ...ADAPTIVE, initialMs: 600 } })).toThrow()
+		expect(() => decGuider({ decBacklashCompensation: { ...ADAPTIVE, maxCompensationMs: -1, initialMs: 0 } })).toThrow()
+		expect(() => decGuider({ decBacklashCompensation: { ...ADAPTIVE, adaptationRate: 1.5 } })).toThrow()
+	})
+
+	test('on a mount with DEC backlash, learns part of it and guides better; without backlash, changes little', () => {
+		// The mount absorbs the first backlash ms of pulse after each reversal; a periodic DEC drift forces reversals.
+		function run(backlash: number, compensation?: DeclinationBacklashCompensation) {
+			const target = decGuider({ aggressivenessDEC: 0.8, ...(compensation && { decBacklashCompensation: compensation }) })
+			let position = 0
+			let slack = 0
+			let last: string | undefined
+			let squares = 0
+
+			step(target, 0, 1)
+
+			for (let t = 2; t < 600; t++) {
+				position += 0.4 * Math.cos(t / 8)
+				const { dec } = step(target, position, t)
+
+				if (dec.direction !== undefined && dec.duration > 0) {
+					if (dec.direction !== last) slack = backlash
+					last = dec.direction
+					const absorbed = Math.min(slack, dec.duration)
+					slack -= absorbed
+					position += ((dec.direction === 'NORTH' ? -1 : 1) * (dec.duration - absorbed)) / 100
+				}
+
+				if (t > 300) squares += position * position
+			}
+
+			return { rms: Math.sqrt(squares / 299), estimate: target.currentState.decBacklashEstimateMs }
+		}
+
+		const learning = { mode: 'adaptive', initialMs: 0, maxCompensationMs: 600, adaptationRate: 0.3 } as const
+		const off = run(300)
+		const adaptive = run(300, learning)
+		// The residual after a reversal also holds the drift and the gain below 1, so the estimate stays under the real
+		// backlash, never past it, and the error still drops clearly.
+		expect(adaptive.estimate).toBeGreaterThan(50)
+		expect(adaptive.estimate).toBeLessThan(300)
+		expect(adaptive.rms).toBeLessThan(off.rms * 0.9)
+
+		const tight = run(0)
+		const tightAdaptive = run(0, learning)
+		expect(tightAdaptive.estimate).toBeLessThan(50)
+		expect(tightAdaptive.rms).toBeLessThan(tight.rms * 1.1)
 	})
 })

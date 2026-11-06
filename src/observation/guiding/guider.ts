@@ -23,6 +23,25 @@ export type GuideDirectionDEC = 'NORTH' | 'SOUTH'
 // DEC guiding policy; restricts or disables corrections to manage backlash.
 export type DeclinationGuideMode = 'auto' | 'north-only' | 'south-only' | 'off'
 
+// Compensation of the DEC backlash added to the first DEC pulse after an accepted reversal, as PHD2's backlash
+// compensation: off, or adaptive from an initial estimate. After each accepted reversal, the DEC error of the next
+// correction tick shows whether the estimate fell short (the error is still on the side the pulse corrected) or went past
+// (the error changed side): beyond the DEC dead band the estimate moves by adaptationRate of that error, at most
+// maxCompensationMs either way, and stays within [0, maxCompensationMs]. Durations are milliseconds of pulse, the unit of
+// the DEC axis error once calibrated (msPerDECUnit 1). It is distinct from the reversal suppression of
+// decReversalThreshold and decBacklashAccumThreshold, which still decides whether a reversal is accepted at all.
+export type DeclinationBacklashCompensation =
+	| { readonly mode: 'off' }
+	| {
+			readonly mode: 'adaptive'
+			// Estimate the compensation starts from, in milliseconds; within [0, maxCompensationMs].
+			readonly initialMs: number
+			// Largest compensation added to one pulse, in milliseconds; >= 0.
+			readonly maxCompensationMs: number
+			// Fraction of the residual error of a compensated reversal the estimate moves by, within [0, 1]; 0 never adapts.
+			readonly adaptationRate: number
+	  }
+
 // A commanded pulse on one mount axis.
 export interface AxisPulse {
 	// Pulse direction, or undefined for no motion.
@@ -87,6 +106,10 @@ export interface GuideDiagnostics {
 	readonly filteredRA?: number
 	// Latest DEC correction of the hysteresis controller, in axis units (PHD2's last move).
 	readonly filteredDEC?: number
+	// Backlash compensation added to the DEC pulse of this frame, in milliseconds; absent when none was.
+	readonly decBacklashCompensationMs?: number
+	// Current estimate of the DEC backlash, in milliseconds; absent without adaptive compensation.
+	readonly decBacklashEstimateMs?: number
 	// Count of rejected candidates by reason.
 	readonly rejectedReasons: Readonly<Record<string, number>>
 	// Whether this frame was rejected.
@@ -180,6 +203,8 @@ export interface GuiderConfig {
 	readonly decReversalThreshold: number
 	// Accumulated opposite-direction error needed before resuming DEC pulses after a reversal.
 	readonly decBacklashAccumThreshold: number
+	// Compensation of the DEC backlash on accepted reversals; off by default.
+	readonly decBacklashCompensation: DeclinationBacklashCompensation
 	// Minimum capture-clock interval between normal correction ticks, in milliseconds. Zero issues a
 	// correction for every valid frame (the classic per-exposure behavior).
 	readonly correctionIntervalMs: number
@@ -233,6 +258,13 @@ interface GuiderInternalState {
 	filteredDEC: number
 	lastDecDirection?: GuideDirectionDEC
 	oppositeDecErrorAccum: number
+	// Estimate of the DEC backlash, in milliseconds, kept across reversals and calibrations (it is mechanical).
+	decBacklashEstimateMs: number
+	// Compensated reversal waiting for the error of the next correction tick: the direction pulsed and the compensation
+	// added, in milliseconds.
+	decBacklashCheck?: { readonly direction: GuideDirectionDEC; readonly compensationMs: number }
+	// Compensation added to the DEC pulse of the latest frame, in milliseconds.
+	decBacklashCompensationMs: number
 	// Valid errors since the last correction tick, oldest first and bounded by correctionSampleCapacity.
 	correctionSamples: GuideErrorSample[]
 	// Capture clock that opened the current correction interval, in milliseconds.
@@ -287,6 +319,7 @@ export const DEFAULT_GUIDER_CONFIG: Readonly<GuiderConfig> = {
 	decMode: 'auto',
 	decReversalThreshold: 0.08,
 	decBacklashAccumThreshold: 0.32,
+	decBacklashCompensation: { mode: 'off' },
 	correctionIntervalMs: 0,
 	correctionSampleCapacity: 1,
 	correctionAggregation: 'latest',
@@ -313,6 +346,11 @@ function validateGuiderConfig(config: GuiderConfig) {
 	if (config.hysteresisRA < 0 || config.hysteresisRA > 1) issues.push({ key: 'hysteresisRA', reason: 'must be within [0, 1]' })
 	if (config.hysteresisDEC < 0 || config.hysteresisDEC > 1) issues.push({ key: 'hysteresisDEC', reason: 'must be within [0, 1]' })
 	if (config.lostStarFrameCount <= 0) issues.push({ key: 'lostStarFrameCount', reason: 'must be > 0' })
+	const compensation = config.decBacklashCompensation
+	// A negative or unbounded compensation would lengthen or shorten every reversal pulse without limit.
+	if (compensation.mode === 'adaptive' && !(Number.isFinite(compensation.maxCompensationMs) && compensation.maxCompensationMs >= 0 && compensation.initialMs >= 0 && compensation.initialMs <= compensation.maxCompensationMs && compensation.adaptationRate >= 0 && compensation.adaptationRate <= 1)) {
+		issues.push({ key: 'decBacklashCompensation', reason: 'needs 0 <= initialMs <= maxCompensationMs and an adaptationRate within [0, 1]' })
+	}
 	// A non-finite interval would never tick and silently stop guiding.
 	if (!(config.correctionIntervalMs >= 0 && Number.isFinite(config.correctionIntervalMs))) issues.push({ key: 'correctionIntervalMs', reason: 'must be a finite value >= 0' })
 	// The capacity sizes the sample buffer and the aggregation scratch array.
@@ -413,6 +451,9 @@ const EMPTY_STATE: Readonly<GuiderInternalState> = {
 	filteredDEC: 0,
 	lastDecDirection: undefined,
 	oppositeDecErrorAccum: 0,
+	decBacklashEstimateMs: 0,
+	decBacklashCheck: undefined,
+	decBacklashCompensationMs: 0,
 	correctionSamples: [],
 	lastCorrectionMonotonic: undefined,
 	lastCadence: 0,
@@ -455,14 +496,16 @@ export class Guider {
 
 		this.state = structuredClone(EMPTY_STATE)
 		this.state.lastCadence = this.config.nominalCadence
+		this.state.decBacklashEstimateMs = initialBacklashEstimate(this.config.decBacklashCompensation)
 		this.#correctionScratch = new Float64Array(this.config.correctionSampleCapacity)
 	}
 
-	// Clears runtime state while preserving immutable config.
+	// Clears runtime state while preserving immutable config; the DEC backlash estimate starts over from its initial value.
 	reset() {
 		const empty = structuredClone(EMPTY_STATE)
 		Object.assign(this.state, empty)
 		this.state.lastCadence = this.config.nominalCadence
+		this.state.decBacklashEstimateMs = initialBacklashEstimate(this.config.decBacklashCompensation)
 	}
 
 	// Shifts the lock target in image pixels without marking a dither settle in progress. Lock-shift
@@ -478,6 +521,7 @@ export class Guider {
 	startDither(dx: number, dy: number) {
 		this.setTargetOffset(dx, dy)
 		this.state.ditherActive = true
+		this.state.decBacklashCheck = undefined
 		this.#clearCorrectionState()
 	}
 
@@ -514,11 +558,13 @@ export class Guider {
 		if (previous === 'off' || decMode === 'off') this.#clearDecControlState()
 	}
 
-	// Drops DEC hysteresis, last direction, and backlash accumulation without touching lock or dither.
+	// Drops DEC hysteresis, last direction, backlash accumulation and a compensated reversal waiting for its outcome
+	// without touching lock, dither, or the backlash estimate.
 	#clearDecControlState() {
 		this.state.filteredDEC = 0
 		this.state.lastDecDirection = undefined
 		this.state.oppositeDecErrorAccum = 0
+		this.state.decBacklashCheck = undefined
 	}
 
 	// Forgets the memory of both axis controllers (the previous corrections, the DEC reversal state) and the buffered
@@ -751,6 +797,7 @@ export class Guider {
 			filteredDEC: this.state.filteredDEC,
 			lastDecDirection: this.state.lastDecDirection,
 			oppositeDecErrorAccum: this.state.oppositeDecErrorAccum,
+			decBacklashEstimateMs: this.state.decBacklashEstimateMs,
 		}
 	}
 
@@ -882,9 +929,12 @@ export class Guider {
 		return { direction, duration }
 	}
 
-	// Computes DEC pulse with backlash-aware reversal suppression and mode constraints.
+	// Computes DEC pulse with backlash-aware reversal suppression and mode constraints, and the adaptive backlash
+	// compensation of an accepted reversal (see DeclinationBacklashCompensation).
 	#computeDEC(axisErrorDEC: number, cadenceScale: number): AxisPulse {
+		this.state.decBacklashCompensationMs = 0
 		if (this.config.decMode === 'off') return NO_PULSE
+		this.#adaptBacklash(axisErrorDEC)
 
 		this.state.filteredDEC = hysteresisCorrection(axisErrorDEC, this.state.filteredDEC, this.config.hysteresisDEC, this.config.aggressivenessDEC, this.config.minMoveDEC)
 
@@ -907,10 +957,32 @@ export class Guider {
 			this.state.oppositeDecErrorAccum = 0
 		}
 
-		const duration = clamp(magnitude * this.config.msPerDECUnit * cadenceScale, this.config.minPulseMsDEC, this.config.maxPulseMsDEC)
+		const reversal = last !== undefined && last !== direction
+		const nominal = clamp(magnitude * this.config.msPerDECUnit * cadenceScale, this.config.minPulseMsDEC, this.config.maxPulseMsDEC)
+		const compensation = this.config.decBacklashCompensation
+		// The compensation never takes a pulse past the DEC maximum, which the pulse ceiling of a run is sized for.
+		const added = reversal && compensation.mode === 'adaptive' && !this.state.ditherActive ? Math.max(0, Math.min(this.state.decBacklashEstimateMs, compensation.maxCompensationMs, this.config.maxPulseMsDEC - nominal)) : 0
 		this.state.lastDecDirection = direction
 		this.state.oppositeDecErrorAccum = 0
-		return { direction, duration }
+		this.state.decBacklashCompensationMs = added
+		// Every accepted reversal is watched, so an estimate of 0 can still grow.
+		this.state.decBacklashCheck = reversal && compensation.mode === 'adaptive' && !this.state.ditherActive ? { direction, compensationMs: added } : undefined
+		return { direction, duration: nominal + added }
+	}
+
+	// Adapts the DEC backlash estimate from the DEC error of the first correction tick after an accepted reversal, once:
+	// an error still on the side that reversal corrected means too little compensation, one past the lock too much. An
+	// error within the DEC dead band, a dither in progress, or a missing reversal changes nothing.
+	#adaptBacklash(axisErrorDEC: number) {
+		const check = this.state.decBacklashCheck
+		const compensation = this.config.decBacklashCompensation
+		this.state.decBacklashCheck = undefined
+		if (check === undefined || compensation.mode !== 'adaptive' || this.state.ditherActive || !(Math.abs(axisErrorDEC) > this.config.minMoveDEC)) return
+
+		// Positive when the error is still on the side the compensated pulse corrected.
+		const remaining = check.direction === this.config.decPositiveDirection ? axisErrorDEC : -axisErrorDEC
+		const step = compensation.adaptationRate * clamp(remaining * this.config.msPerDECUnit, -compensation.maxCompensationMs, compensation.maxCompensationMs)
+		this.state.decBacklashEstimateMs = clamp(this.state.decBacklashEstimateMs + step, 0, compensation.maxCompensationMs)
 	}
 
 	// Updates diagnostics payload for telemetry and testing.
@@ -937,6 +1009,8 @@ export class Guider {
 			axisErrorDEC: measurement?.axisErrorDEC,
 			filteredRA: this.state.filteredRA,
 			filteredDEC: this.state.filteredDEC,
+			...(this.state.decBacklashCompensationMs > 0 && { decBacklashCompensationMs: this.state.decBacklashCompensationMs }),
+			...(this.config.decBacklashCompensation.mode === 'adaptive' && { decBacklashEstimateMs: this.state.decBacklashEstimateMs }),
 			rejectedReasons: tracking.rejectedReasons,
 			badFrame,
 			lostFrames: this.state.consecutiveBadFrames,
@@ -949,6 +1023,11 @@ export class Guider {
 			correctionSamples,
 		}
 	}
+}
+
+// Returns the DEC backlash estimate a guider starts from: the initial estimate of an adaptive compensation, else 0.
+function initialBacklashEstimate(compensation: DeclinationBacklashCompensation) {
+	return compensation.mode === 'adaptive' ? compensation.initialMs : 0
 }
 
 // Gets opposite RA guide direction.
