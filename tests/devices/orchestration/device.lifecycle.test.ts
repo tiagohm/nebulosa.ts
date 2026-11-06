@@ -1,10 +1,10 @@
 import { describe, expect, spyOn, test } from 'bun:test'
-import { CLIENT, type Camera, type Cover, type Device, type Dome, type GuideOutput, type Mount, type SubDevice, DEFAULT_CAMERA, DEFAULT_COVER, DEFAULT_DOME, DEFAULT_GUIDE_OUTPUT, DEFAULT_MOUNT } from '../../../src/devices/indi/device'
-import type { DeviceHandler } from '../../../src/devices/indi/manager/device'
+import { CLIENT, type Camera, type Cover, type Device, type Dome, type GuideOutput, type Mount, type SubDevice, type Wheel, DEFAULT_CAMERA, DEFAULT_COVER, DEFAULT_DOME, DEFAULT_GUIDE_OUTPUT, DEFAULT_MOUNT, DEFAULT_WHEEL } from '../../../src/devices/indi/device'
+import { type DeviceHandler, proxyDevice } from '../../../src/devices/indi/manager/device'
 import { DomeManager } from '../../../src/devices/indi/manager/dome'
 import type { DefSwitchVector } from '../../../src/devices/indi/types'
 import { DeviceLifecycle, isDeviceQuiescent } from '../../../src/devices/orchestration/device.lifecycle'
-import { failedOperationResult, OperationCoordinator, type OperationContext, type OperationResult } from '../../../src/devices/orchestration/operation'
+import { failedOperationResult, OperationCoordinator, type OperationContext, type OperationResult, successfulOperationResult } from '../../../src/devices/orchestration/operation'
 import { ResourceArbiter, resourceKey } from '../../../src/devices/orchestration/resource'
 import { flushMicrotasks } from '../../util'
 import { client, defSwitch } from '../indi/manager/util'
@@ -863,5 +863,141 @@ describe('device lifecycle', () => {
 
 		device.pulsing = true
 		expect(isDeviceQuiescent(device)).toBeFalse()
+	})
+})
+
+describe('camera capabilities', () => {
+	function st4(parent: Camera): SubDevice<GuideOutput, Camera> {
+		return proxyDevice(parent, 'st4-1', 'guideOutput') as unknown as SubDevice<GuideOutput, Camera>
+	}
+
+	function wheel(parent: Camera): Wheel {
+		return { ...structuredClone(DEFAULT_WHEEL), id: 'wheel-1', hardwareId: parent.hardwareId, name: parent.name, connected: true, client: parent.client }
+	}
+
+	function rig() {
+		const cameraManager = new TestDeviceManager<Camera>()
+		const wheelManager = new TestDeviceManager<Wheel>()
+		const guideOutputManager = new TestDeviceManager<GuideOutput>()
+		const arbiter = new ResourceArbiter()
+		const coordinator = new OperationCoordinator(arbiter)
+		const lifecycle = new DeviceLifecycle(arbiter, coordinator)
+		const sensor = { ...camera(), hardwareId: 'camera-hardware' }
+		const port = st4(sensor)
+		const filters = wheel(sensor)
+		const logicalKey = `logical:guide-output:${resourceKey(port)}`
+
+		lifecycle.observe(cameraManager)
+		lifecycle.observe(wheelManager)
+		lifecycle.observe(guideOutputManager)
+		cameraManager.add(sensor)
+		wheelManager.add(filters)
+		guideOutputManager.add(port)
+
+		arbiter.markAvailable({ key: logicalKey, device: port, capability: resourceKey(port) })
+
+		const keys = () => [resourceKey(sensor), resourceKey(port), logicalKey].map((key) => arbiter.availability(key))
+
+		return { cameraManager, wheelManager, guideOutputManager, arbiter, coordinator, lifecycle, sensor, port, filters, logicalKey, keys }
+	}
+
+	test('validates the quiescence of the sensor and of the ST4 port apart', () => {
+		const { cameraManager, wheelManager, guideOutputManager, arbiter, lifecycle, sensor, port, filters, keys } = rig()
+
+		expect(resourceKey(port)).not.toBe(resourceKey(sensor))
+		expect(resourceKey(filters)).toBe(resourceKey(sensor))
+		expect(keys()).toEqual(['available', 'available', 'available'])
+
+		sensor.exposuring = true
+		sensor.exposure.state = 'Busy'
+		cameraManager.update(sensor, 'exposuring')
+		expect(keys()).toEqual(['unavailable', 'available', 'available'])
+
+		port.pulsing = true
+		guideOutputManager.update(port, 'pulsing')
+		expect(keys()).toEqual(['unavailable', 'unavailable', 'unavailable'])
+
+		sensor.exposuring = false
+		sensor.exposure.state = 'Idle'
+		cameraManager.update(sensor, 'exposuring')
+		expect(keys()).toEqual(['available', 'unavailable', 'unavailable'])
+
+		port.pulsing = false
+		guideOutputManager.update(port, 'pulsing')
+		expect(keys()).toEqual(['available', 'available', 'available'])
+
+		// An integrated wheel still blocks the exposures of its camera, and only them.
+		filters.moving = true
+		wheelManager.update(filters, 'moving')
+		expect(keys()).toEqual(['unavailable', 'available', 'available'])
+		expect(arbiter.availability(resourceKey(filters))).toBe('unavailable')
+
+		lifecycle.dispose()
+	})
+
+	test('cancels the holders of every capability on disconnect and revalidates all of them on reconnection', async () => {
+		const { cameraManager, coordinator, lifecycle, sensor, port, logicalKey, keys } = rig()
+
+		const exposure = coordinator.start('capture', [{ key: resourceKey(sensor), device: sensor }], waitForAbort)
+		sensor.exposuring = true
+		cameraManager.update(sensor, 'exposuring')
+
+		// The run through the ST4 port starts while the sensor exposes.
+		const guiding = coordinator.start(
+			'guidingRun',
+			[
+				{ key: resourceKey(port), device: port },
+				{ key: logicalKey, device: port, capability: resourceKey(port) },
+			],
+			waitForAbort,
+		)
+		expect(guiding.signal.aborted).toBeFalse()
+		expect(await coordinator.start('second', [{ key: resourceKey(port), device: port }], () => successfulOperationResult(undefined)).result).toMatchObject(failedOperationResult('busy'))
+
+		sensor.exposuring = false
+		sensor.exposure.state = 'Idle'
+
+		sensor.connected = false
+		cameraManager.update(sensor, 'connected')
+
+		expect(exposure.signal.aborted).toBeTrue()
+		expect(guiding.signal.aborted).toBeTrue()
+		expect(await exposure.result).toEqual(failedOperationResult('disconnected'))
+		expect(await guiding.result).toEqual(failedOperationResult('disconnected'))
+		expect(keys()).toEqual(['unavailable', 'unavailable', 'unavailable'])
+
+		// Only the camera view reports the reconnection, as the second manager to see a shared field does not.
+		sensor.connected = true
+		cameraManager.update(sensor, 'connected')
+		expect(keys()).toEqual(['available', 'available', 'available'])
+		expect(port.connected).toBeTrue()
+
+		lifecycle.dispose()
+	})
+
+	test('cancels every holder on removal of the ST4 port and keeps only the port blocked', async () => {
+		const { guideOutputManager, coordinator, lifecycle, sensor, port, logicalKey, keys, arbiter } = rig()
+
+		const exposure = coordinator.start('capture', [{ key: resourceKey(sensor), device: sensor }], waitForAbort)
+		const guiding = coordinator.start(
+			'guidingRun',
+			[
+				{ key: resourceKey(port), device: port },
+				{ key: logicalKey, device: port, capability: resourceKey(port) },
+			],
+			waitForAbort,
+		)
+
+		guideOutputManager.remove(port)
+
+		expect(await exposure.result).toEqual(failedOperationResult('removed'))
+		expect(await guiding.result).toEqual(failedOperationResult('removed'))
+		expect(keys()).toEqual(['available', 'unavailable', 'unavailable'])
+		expect(arbiter.snapshot(resourceKey(port)).hardwareId).toBeUndefined()
+
+		guideOutputManager.add(port)
+		expect(keys()).toEqual(['available', 'available', 'available'])
+
+		lifecycle.dispose()
 	})
 })

@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, spyOn, te
 import { type Camera, DEFAULT_CAMERA } from '../../../src/devices/indi/device'
 import type { CameraManager } from '../../../src/devices/indi/manager/camera'
 import { failedOperationResult, successfulOperationResult } from '../../../src/devices/orchestration/operation'
-import { resourceKey } from '../../../src/devices/orchestration/resource'
+import { guideOutputKey, resourceKey } from '../../../src/devices/orchestration/resource'
 import { DEFAULT_CAMERA_CAPTURE_START } from '../../../src/observation/capture/types'
 import { GuiderClient, type GuiderClientHandler } from '../../../src/observation/guiding/client'
 import type { GuidingSettle } from '../../../src/observation/guiding/session'
@@ -202,14 +202,16 @@ describe('guiding run', () => {
 		expect(rig.arbiter.ownersOf(resourceKey(mount))).toEqual([])
 
 		expect(await startGuiding(context)).toEqual(successfulOperationResult(undefined))
-		expect(rig.arbiter.ownersOf(resourceKey(camera)).map((owner) => owner.id)).toEqual([root])
+		expect(rig.arbiter.ownersOf(guideOutputKey(camera)).map((owner) => owner.id)).toEqual([root])
+		// The ST4 port is a capability of its own: the sensor of that camera stays free for an exposure.
+		expect(rig.arbiter.ownersOf(resourceKey(camera))).toEqual([])
 		expect(rig.arbiter.ownersOf(resourceKey(mount)).map((owner) => owner.id)).toEqual([root])
 		// The mount shares no key with the camera, and still nothing else moves it while guiding.
 		expect(await rig.commanders.mount.setTracking(rig.coordinator, mount, true)).toMatchObject({ ok: false, reason: 'busy' })
 
 		expect(await session.stopGuiding(rig.coordinator)).toEqual(successfulOperationResult(undefined))
 		expect(rig.arbiter.ownersOf(resourceKey(mount))).toEqual([])
-		expect(rig.arbiter.ownersOf(resourceKey(camera))).toEqual([])
+		expect(rig.arbiter.ownersOf(guideOutputKey(camera))).toEqual([])
 		expect(await rig.commanders.mount.setTracking(rig.coordinator, mount, false)).toEqual(successfulOperationResult(undefined))
 	}, 20000)
 

@@ -3,7 +3,7 @@ import { GUIDE_PULSE_STOP_SETTLE_TIMEOUT, type GuideOutputCommander, guidePulseR
 import type { Camera, GuideDirection, GuideOutput, Mount } from '../../devices/indi/device'
 import { failedOperationResult, type OperationContext, type OperationFailureReason, type OperationHandle, type OperationResult, type OperationScope, successfulOperationResult } from '../../devices/orchestration/operation'
 import { type AbortableDelay, abortableDelay, abortReason } from '../../devices/orchestration/operation.wait'
-import { type ResourceRequest, resourceKey } from '../../devices/orchestration/resource'
+import { guideOutputKey, type ResourceRequest, resourceKey } from '../../devices/orchestration/resource'
 import { toArcsec } from '../../math/units/angle'
 import { type CameraExposureConfiguration, configureCameraExposure } from '../capture/capture'
 import type { CameraCaptureClock } from '../capture/types'
@@ -17,13 +17,14 @@ import { DEFAULT_GUIDING_CLOCK, type GuidingInterruptionKind, GuidingInterruptio
 // with the first looped guide exposure and ends only with `stop` or the loss of a device, so preview, target
 // selection, calibration, guiding, pauses and dithers all run under one root operation. Two operations carry its
 // resources:
-// - the root `guiding`, opened by `startLoop`, holds the physical key of the guide camera for the whole session, since
-//   the client exposes the camera directly and only that lease keeps a second owner off it;
+// - the root `guiding`, opened by `startLoop`, holds the capability key of the guide camera for the whole session,
+//   since the client exposes the camera directly and only that lease keeps a second owner off it;
 // - its child `guidingRun`, opened by `startGuiding` (or a `resume` after a releasing pause) and ended by
-//   `stopGuiding`, holds the physical key of the guide output, its logical lifecycle resource and, given `mount`, the
-//   physical key of the mount the guide output drives, atomically, so the mount or camera behind the guide output and
-//   the mount it moves are only taken while guiding is wanted, nothing else moves that mount between two pulses (a
-//   guide output on the ST4 port of a camera shares no key with it), and losing any of them cancels the run.
+//   `stopGuiding`, holds the capability key of the guide output, its logical lifecycle resource and, given `mount`, the
+//   capability key of the mount the guide output drives, atomically, so the guide output and the mount it moves are
+//   only taken while guiding is wanted, nothing else moves that mount between two pulses (a guide output on the ST4
+//   port of a camera shares no key with it), and losing any of them cancels the run. The ST4 port of the guide camera
+//   itself is a capability of its own, so a run through it starts and pulses while the root keeps the camera exposing.
 //
 // Every pulse of the client goes through its pulse admission, installed closed by `beginRun` (or `startLoop`) with a
 // ceiling frozen at construction (`pulseCeiling`, ms), and is dispatched through `GuideOutputCommander.dispatch` under
@@ -136,10 +137,11 @@ export interface InteractiveGuidingSnapshot {
 // Every direction of a guide output, zeroed by a pause.
 const ALL_DIRECTIONS: readonly GuideDirection[] = ['NORTH', 'SOUTH', 'WEST', 'EAST']
 
-// Logical lifecycle resource of a guide output: never conflicts with the physical key of the device that publishes it,
-// but names the guide output as its device, so the device lifecycle cancels its owner when the guide output is lost.
+// Logical lifecycle resource of a guide output: never conflicts with the capability key of the guide output, but names
+// the guide output as its device, so it follows the lifecycle of that capability and the device lifecycle cancels its
+// owner when the device behind the guide output is lost.
 export function guideOutputLifecycleKey(guideOutput: GuideOutput) {
-	return `logical:guide-output:${resourceKey(guideOutput)}`
+	return `logical:guide-output:${guideOutputKey(guideOutput)}`
 }
 
 // A pending operation of the session while it lives.
@@ -190,13 +192,13 @@ export class InteractiveGuidingSession {
 		this.#delay = options.delay ?? abortableDelay
 	}
 
-	// Physical key of the guide camera, held by the root, and the physical key and lifecycle resource of the guide
-	// output and the physical key of the mount it drives (when `options.mount` names one), held by the run; together what
-	// an owner reserves for the session.
+	// Capability key of the guide camera, held by the root, and the capability key and lifecycle resource of the guide
+	// output and the capability key of the mount it drives (when `options.mount` names one), held by the run; together
+	// what an owner reserves for the session.
 	resources() {
 		const camera: ResourceRequest = { key: resourceKey(this.camera), device: this.camera }
-		const guideOutput: ResourceRequest = { key: resourceKey(this.guideOutput), device: this.guideOutput }
-		const lifecycle: ResourceRequest = { key: guideOutputLifecycleKey(this.guideOutput), device: this.guideOutput }
+		const guideOutput: ResourceRequest = { key: guideOutputKey(this.guideOutput), device: this.guideOutput }
+		const lifecycle: ResourceRequest = { key: guideOutputLifecycleKey(this.guideOutput), device: this.guideOutput, capability: guideOutputKey(this.guideOutput) }
 		const { mount } = this.options
 		return { camera, guideOutput, lifecycle, mount: mount && { key: resourceKey(mount), device: mount } } as const
 	}

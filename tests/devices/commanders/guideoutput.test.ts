@@ -10,7 +10,7 @@ import { ClientSimulator } from '../../../src/devices/indi/simulator/client'
 import type { PropertyState } from '../../../src/devices/indi/types'
 import { DeviceLifecycle } from '../../../src/devices/orchestration/device.lifecycle'
 import { OperationCoordinator, failedOperationResult, successfulOperationResult } from '../../../src/devices/orchestration/operation'
-import { ResourceArbiter, resourceKey } from '../../../src/devices/orchestration/resource'
+import { guideOutputKey, ResourceArbiter, resourceKey } from '../../../src/devices/orchestration/resource'
 import { waitUntil } from '../../util'
 
 const cameraManager = new CameraManager()
@@ -47,7 +47,7 @@ function getCamera() {
 }
 
 function isFree(camera: Camera) {
-	return resourceArbiter.availability(resourceKey(camera)) === 'available'
+	return resourceArbiter.availability(guideOutputKey(camera)) === 'available'
 }
 
 async function connected() {
@@ -65,7 +65,7 @@ function guideVector(camera: Camera, name: 'TELESCOPE_TIMED_GUIDE_NS' | 'TELESCO
 }
 
 async function stop(camera: Camera) {
-	await operationCoordinator.cancelByResource(resourceKey(camera))
+	await operationCoordinator.cancelByResource(guideOutputKey(camera))
 	return await guideOutputCommander.stopPulses(camera, ['NORTH', 'WEST'], { settleTimeout: 500 })
 }
 
@@ -75,6 +75,31 @@ test('pulses one direction for its complete duration', async () => {
 	expect(await guideOutputCommander.pulse(operationCoordinator, camera, 'NORTH', 50, { settleTimeout: 500 })).toMatchObject({ ok: true })
 	expect(camera.pulsing).toBeFalse()
 	await waitUntil(() => isFree(camera))
+})
+
+test('pulses the ST4 port of a camera while another operation exposes that camera', async () => {
+	const camera = await connected()
+	const exposed = Promise.withResolvers<void>()
+	const exposure = operationCoordinator.start('capture', [{ key: resourceKey(camera), device: camera }], async () => {
+		cameraManager.startExposure(camera, 2)
+		await exposed.promise
+		return successfulOperationResult(undefined)
+	})
+
+	try {
+		await waitUntil(() => camera.exposuring)
+		expect(guideOutputKey(camera)).not.toBe(resourceKey(camera))
+		expect(resourceArbiter.ownersOf(resourceKey(camera)).map((owner) => owner.id)).toEqual([exposure.id])
+		expect(isFree(camera)).toBeTrue()
+
+		expect(await guideOutputCommander.pulse(operationCoordinator, camera, 'NORTH', 50, { settleTimeout: 500 })).toMatchObject({ ok: true })
+		expect(camera.exposuring).toBeTrue()
+		expect(resourceArbiter.ownersOf(resourceKey(camera)).map((owner) => owner.id)).toEqual([exposure.id])
+	} finally {
+		cameraManager.stopExposure(camera)
+		exposed.resolve()
+		await exposure.result
+	}
 })
 
 test('runs perpendicular pulses in one operation and waits for both', async () => {
@@ -95,7 +120,7 @@ test('runs perpendicular pulses in one operation and waits for both', async () =
 	await waitUntil(() => isFree(camera))
 })
 
-test('sets both guide rates under the camera resource and resolves once they are reported', async () => {
+test('sets both guide rates under the guide output resource and resolves once they are reported', async () => {
 	const camera = await connected()
 	// The camera simulator publishes no GUIDE_RATE, so the answer of a driver that has one is fed here.
 	const guideRate = spyOn(guideOutputManager, 'guideRate').mockImplementation((device, rightAscension, declination) => {
@@ -292,7 +317,7 @@ test('rejects pulses without capability and reports a disconnected output', asyn
 	expect(await guideOutputCommander.stopPulse(camera, 'NORTH')).toMatchObject(failedOperationResult('disconnected'))
 })
 
-test('refuses guide-rate changes while a pulse owns the physical camera', async () => {
+test('refuses guide-rate changes while a pulse owns the guide output', async () => {
 	const camera = await connected()
 	const pulsing = guideOutputCommander.pulse(operationCoordinator, camera, 'NORTH', 1000, { settleTimeout: 500 })
 
@@ -350,7 +375,7 @@ function silentDriver() {
 }
 
 function causesOf(camera: Camera) {
-	return resourceArbiter.snapshot(resourceKey(camera)).causes
+	return resourceArbiter.snapshot(guideOutputKey(camera)).causes
 }
 
 describe('pulse window', () => {
@@ -511,7 +536,7 @@ describe('dispatched pulse evidence', () => {
 			expect(window!.endsBy).toBeCloseTo(guidePulseWindow(dispatchedAt, 1000).endsBy, 0)
 			expect(causesOf(camera)).toContain('guidePulse')
 			// The lease was released all the same.
-			expect(resourceArbiter.ownersOf(resourceKey(camera))).toBeEmpty()
+			expect(resourceArbiter.ownersOf(guideOutputKey(camera))).toBeEmpty()
 		} finally {
 			driver.spy.mockRestore()
 		}
@@ -672,7 +697,7 @@ describe('dispatched pulse evidence', () => {
 		const camera = await connected()
 		const windows: (ReturnType<typeof guideOutputCommander.dispatch> | undefined)[] = []
 
-		const result = await operationCoordinator.start('guiding', [{ key: resourceKey(camera), device: camera }], (context) => {
+		const result = await operationCoordinator.start('guiding', [{ key: guideOutputKey(camera), device: camera }], (context) => {
 			const dispatchedAt = performance.now()
 			windows.push(guideOutputCommander.dispatch(context, camera, 'NORTH', 200))
 			windows.push(guideOutputCommander.dispatch(context, camera, 'WEST', 100))
@@ -699,7 +724,7 @@ describe('dispatched pulse evidence', () => {
 			expect(unrelated).toMatchObject({ ok: true, value: undefined })
 
 			let refused: unknown = 'not attempted'
-			const holder = operationCoordinator.start('guiding', [{ key: resourceKey(camera), device: camera }], async (context) => {
+			const holder = operationCoordinator.start('guiding', [{ key: guideOutputKey(camera), device: camera }], async (context) => {
 				await new Promise((resolve) => {
 					context.signal.addEventListener('abort', resolve, { once: true })
 				})
@@ -721,7 +746,7 @@ describe('dispatched pulse evidence', () => {
 		const driver = silentDriver()
 
 		try {
-			const result = await operationCoordinator.start('guiding', [{ key: resourceKey(camera), device: camera }], (context) => {
+			const result = await operationCoordinator.start('guiding', [{ key: guideOutputKey(camera), device: camera }], (context) => {
 				expect(guideOutputCommander.dispatch(context, camera, 'EAST', 1000)).toBeDefined()
 				cameraManager.disconnect(camera)
 				return successfulOperationResult(undefined)
@@ -730,7 +755,7 @@ describe('dispatched pulse evidence', () => {
 			expect(result.ok).toBeFalse()
 			expect(guideOutputCommander.dispatchedPulseWindow(camera)).toBeDefined()
 			expect(causesOf(camera)).toContain('guidePulse')
-			expect(resourceArbiter.ownersOf(resourceKey(camera))).toBeEmpty()
+			expect(resourceArbiter.ownersOf(guideOutputKey(camera))).toBeEmpty()
 		} finally {
 			driver.spy.mockRestore()
 		}
@@ -742,7 +767,7 @@ describe('dispatched pulse evidence', () => {
 
 	test('keeps the guidePulse cause independent from the other causes and lifts only its own on dispose', async () => {
 		const camera = await connected()
-		const key = resourceKey(camera)
+		const key = guideOutputKey(camera)
 		const commander = new GuideOutputCommander(guideOutputManager, resourceArbiter)
 
 		try {
@@ -751,7 +776,7 @@ describe('dispatched pulse evidence', () => {
 			expect(causesOf(camera)).toEqual(['guidePulse', 'quarantine'])
 
 			// Lifecycle revalidation only clears its own cause.
-			resourceArbiter.markDeviceAvailable(key)
+			resourceArbiter.markCapabilityAvailable(key)
 			resourceArbiter.markAvailable(key)
 			expect(causesOf(camera)).toEqual(['guidePulse', 'quarantine'])
 

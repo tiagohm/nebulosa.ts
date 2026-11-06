@@ -4,17 +4,17 @@ import type { GuideOutputManager } from '../indi/manager/guideoutput'
 import type { PropertyState } from '../indi/types'
 import { failedOperationResult, successfulOperationResult, type OperationResult, type OperationContext, type OperationScope } from '../orchestration/operation'
 import { waitForDeviceState } from '../orchestration/operation.wait'
-import { resourceKey, type ResourceArbiter, type ResourceKey } from '../orchestration/resource'
+import { guideOutputKey, type ResourceArbiter, type ResourceKey } from '../orchestration/resource'
 
 // Coordinated timed pulses of an INDI guide output, and the single temporal model of a dispatched pulse.
-// A pulse acquires the physical device that provides the guide port and resolves only after the device
+// A pulse acquires the capability of the guide port (`guideOutputKey`) and resolves only after the device
 // reported the axis busy and then stopped, or, when no Busy arrives, after the last instant a late Busy could
 // still begin. A canceled pulse is asked to stop with a zero duration, but the standard INDI guider interface
 // and the Alpaca bridge ignore it, so the device is held until the pulse already running has ended.
 // Perpendicular pulses of one nudge run together in one operation. A loop that issues one correction per frame
 // dispatches it synchronously under the operation that holds the device instead, with the same evidence.
 //
-// Every pulse this commander dispatches is recorded per physical key as evidence until the end of the pulse
+// Every pulse this commander dispatches is recorded per capability key as evidence until the end of the pulse
 // is physically observed, per axis, on a registered and connected guide output view: a whole Busy → stopped
 // cycle, or a stopped state observed continuously until the Busy deadline. Disconnect, removal and the frozen
 // fields of a removed view are never taken as the end of a pulse. While the evidence stays open after the
@@ -76,7 +76,7 @@ interface GuideOutputUpdate {
 	readonly state?: PropertyState
 }
 
-// What the registered views of one physical key last published for one axis.
+// What the registered views of one capability key last published for one axis.
 interface AxisObservation {
 	// Start, in `performance.now()` milliseconds, of the continuous period in which a registered and connected
 	// view published the axis stopped; undefined when no such period is running.
@@ -89,7 +89,7 @@ interface AxisObservation {
 // Busy (or refused with Alert).
 type DispatchedLeg = 'awaiting' | 'busy' | 'stopped'
 
-// Evidence of the pulses dispatched on one physical key whose end was not observed yet.
+// Evidence of the pulses dispatched on one capability key whose end was not observed yet.
 interface DispatchedPulseEntry {
 	// Device the pulses were dispatched on, used to block the key and wake its waiters.
 	readonly device: GuideOutput
@@ -184,26 +184,26 @@ export function guidePulseReleaseBound(maximumDuration: number) {
 }
 
 // Owns every timed pulse of a guide output and turns it into an awaitable operation.
-// The pulse opens its own nested scope holding the physical device behind the guide output, so a
-// composite feature passing its own context inherits the device it already owns, and the scope's cleanup
-// holds the device until the pulse has ended whenever it is canceled, instead of releasing it while the
-// axis is still being driven. A guide output is arbitrated under the key of the device providing it, which
-// is why a camera's guide port and the camera itself, or a mount's and the mount itself, are one resource.
+// The pulse opens its own nested scope holding the capability of the guide output, so a composite feature
+// passing its own context inherits the capability it already owns, and the scope's cleanup holds it until the
+// pulse has ended whenever it is canceled, instead of releasing it while the axis is still being driven. A
+// guide output is arbitrated under `guideOutputKey`: a mount's guide output and the mount itself are one
+// resource, while a camera's ST4 port has a capability of its own, so it pulses while the camera exposes.
 export class GuideOutputCommander implements DeviceHandler<GuideOutput>, Disposable {
-	// Waiters per physical resource, fed by the manager callbacks. The key is used instead of the device
-	// object because a pulse may be commanded through the parent device while the manager reports updates
-	// through its guide output proxy, and both resolve to the same key.
+	// Waiters per capability key, fed by the manager callbacks. The key is used instead of the device object
+	// because a pulse on a mount's own guide output may be commanded through the mount while the manager
+	// reports updates through its guide output proxy, and both resolve to the same key.
 	readonly #listeners = new Map<ResourceKey, Set<(update: GuideOutputUpdate) => void>>()
 	// Guide output views the manager currently has registered. Only their notifications are physical evidence:
 	// a removed view keeps its last fields frozen, and a parent device is notified alongside its proxy.
 	readonly #views = new Set<GuideOutput>()
-	// Per physical key and axis, what the registered views last published.
+	// Per capability key and axis, what the registered views last published.
 	readonly #observations = new Map<ResourceKey, Record<GuideAxis, AxisObservation>>()
-	// Dispatched pulses whose end was not observed yet, per physical key.
+	// Dispatched pulses whose end was not observed yet, per capability key.
 	readonly #entries = new Map<ResourceKey, DispatchedPulseEntry>()
 	// Keys this commander blocked with the `guidePulse` cause.
 	readonly #blocked = new Set<ResourceKey>()
-	// Physical keys each operation dispatched pulses on, so its stop is registered once per key.
+	// Capability keys each operation dispatched pulses on, so its stop is registered once per key.
 	readonly #dispatchers = new WeakMap<OperationContext, Set<ResourceKey>>()
 
 	// Registers the commander as a guide output observer so waits settle on device events instead of
@@ -242,7 +242,7 @@ export class GuideOutputCommander implements DeviceHandler<GuideOutput>, Disposa
 	// Records per-axis evidence from the timed-guide notifications of registered and connected views, breaks
 	// continuity on disconnect, and feeds every waiter observing the device.
 	updated(device: GuideOutput, property: keyof GuideOutput & string, state?: PropertyState) {
-		const key = resourceKey(device)
+		const key = guideOutputKey(device)
 		const axis = PROPERTY_AXIS[property]
 
 		if (axis !== undefined && state !== undefined && this.#views.has(device) && device.connected) {
@@ -258,7 +258,7 @@ export class GuideOutputCommander implements DeviceHandler<GuideOutput>, Disposa
 	// it reevaluates. The operation itself is canceled independently by DeviceLifecycle.
 	removed(device: GuideOutput) {
 		this.#views.delete(device)
-		this.#forgetObservations(resourceKey(device))
+		this.#forgetObservations(guideOutputKey(device))
 		this.#emit({ device })
 	}
 
@@ -267,7 +267,7 @@ export class GuideOutputCommander implements DeviceHandler<GuideOutput>, Disposa
 	// passed with the axis stopped. A driver that reports Alert fails the pulse at once. A canceled pulse is held
 	// until it has ended before the scope releases the device, so no axis keeps drifting into the next operation.
 	async pulse(scope: OperationScope, device: GuideOutput, direction: GuideDirection, duration: number, options: GuidePulseOptions = {}): Promise<OperationResult<void>> {
-		return await scope.start<void>('guidePulse', [{ key: resourceKey(device), device }], async (context) => {
+		return await scope.start<void>('guidePulse', [{ key: guideOutputKey(device), device }], async (context) => {
 			// Capabilities are only published while the device is connected, so a disconnected guide output
 			// would otherwise be reported as one that cannot pulse at all.
 			if (!device.connected) return failedOperationResult('disconnected')
@@ -288,7 +288,7 @@ export class GuideOutputCommander implements DeviceHandler<GuideOutput>, Disposa
 	// vectors only reports the short leg stopped once the long one stopped too. The operation succeeds only
 	// with the aggregate flag down.
 	async pulseAxes(scope: OperationScope, device: GuideOutput, pulses: readonly GuidePulse[], options: GuidePulseOptions = {}): Promise<OperationResult<void>> {
-		return await scope.start<void>('guidePulse', [{ key: resourceKey(device), device }], async (context) => {
+		return await scope.start<void>('guidePulse', [{ key: guideOutputKey(device), device }], async (context) => {
 			if (!device.connected) return failedOperationResult('disconnected')
 			if (!device.canPulseGuide) return failedOperationResult('unexpectedState', `guide output ${device.name} cannot pulse guide`)
 
@@ -325,7 +325,7 @@ export class GuideOutputCommander implements DeviceHandler<GuideOutput>, Disposa
 	// undefined without sending anything when the operation is being canceled or does not own the device, or
 	// when the device is disconnected or cannot pulse guide.
 	dispatch(context: OperationContext, device: GuideOutput, direction: GuideDirection, duration: number): GuidePulseQuiescenceWindow | undefined {
-		const key = resourceKey(device)
+		const key = guideOutputKey(device)
 		if (context.signal.aborted || !context.owns(key) || !device.connected || !device.canPulseGuide) return undefined
 
 		let keys = this.#dispatchers.get(context)
@@ -351,7 +351,7 @@ export class GuideOutputCommander implements DeviceHandler<GuideOutput>, Disposa
 	// every pulse issued after it, and changing it under a running guider or a DARV leg would silently rescale
 	// a correction already in flight.
 	async setGuideRate(scope: OperationScope, device: GuideOutput, rightAscension: number, declination: number, options: GuideRateOptions = {}): Promise<OperationResult<void>> {
-		return await scope.start<void>('guideRate', [{ key: resourceKey(device), device }], async (context) => {
+		return await scope.start<void>('guideRate', [{ key: guideOutputKey(device), device }], async (context) => {
 			if (!device.connected) return failedOperationResult('disconnected')
 			if (!device.canSetGuideRate) return failedOperationResult('unexpectedState', `guide output ${device.name} cannot set guide rate`)
 
@@ -390,7 +390,7 @@ export class GuideOutputCommander implements DeviceHandler<GuideOutput>, Disposa
 	// is not the end of a pulse.
 	async stopPulses(device: GuideOutput, directions: readonly GuideDirection[], options: GuidePulseOptions = {}): Promise<OperationResult<void>> {
 		if (!device.connected) return failedOperationResult('disconnected')
-		if (!device.canPulseGuide && this.#entry(resourceKey(device)) === undefined) return successfulOperationResult(undefined)
+		if (!device.canPulseGuide && this.#entry(guideOutputKey(device)) === undefined) return successfulOperationResult(undefined)
 
 		const zeroed = new Set<GuideDirection>()
 
@@ -404,10 +404,10 @@ export class GuideOutputCommander implements DeviceHandler<GuideOutput>, Disposa
 		})
 	}
 
-	// Returns the open quiescence window of the pulses dispatched on the physical key of the device, or
+	// Returns the open quiescence window of the pulses dispatched on the capability key of the device, or
 	// undefined once their end was observed. Reading it evaluates the evidence at the current instant.
 	dispatchedPulseWindow(device: GuideOutput): GuidePulseQuiescenceWindow | undefined {
-		const entry = this.#entry(resourceKey(device))
+		const entry = this.#entry(guideOutputKey(device))
 		return entry === undefined ? undefined : { busyAckDeadline: entry.busyAckDeadline, endsBy: entry.endsBy }
 	}
 
@@ -416,7 +416,7 @@ export class GuideOutputCommander implements DeviceHandler<GuideOutput>, Disposa
 	// cause until its end is observed, and asks the driver to republish both timed-guide vectors. Sends no
 	// physical command. Returns the window that has to be observed.
 	assumeDispatchedPulse(device: GuideOutput, maximumDuration: number): GuidePulseQuiescenceWindow {
-		const key = resourceKey(device)
+		const key = guideOutputKey(device)
 		const window = guidePulseWindow(performance.now(), maximumDuration)
 
 		this.#record(device, window, ['NS', 'WE'])
@@ -439,7 +439,7 @@ export class GuideOutputCommander implements DeviceHandler<GuideOutput>, Disposa
 	#stopOnCleanup(context: OperationContext, device: GuideOutput, directions: readonly GuideDirection[]) {
 		context.onCleanup(async () => {
 			const stopped = await this.stopPulses(device, directions)
-			const key = resourceKey(device)
+			const key = guideOutputKey(device)
 			const open = this.#entry(key) !== undefined
 
 			if (open) this.#block(key, device)
@@ -513,7 +513,7 @@ export class GuideOutputCommander implements DeviceHandler<GuideOutput>, Disposa
 	// to be observed and, for pulses nobody recorded, nothing before `options.busyAckDeadline`. The allowance
 	// starts at the latest recorded `endsBy`, because a driver that ignores the stop keeps pulsing until then.
 	async #settle(device: GuideOutput, options: GuidePulseOptions, command: VoidFunction): Promise<OperationResult<void>> {
-		const key = resourceKey(device)
+		const key = guideOutputKey(device)
 		const endsBy = this.#entries.get(key)?.endsBy ?? 0
 		const minimum = options.busyAckDeadline ?? Number.NEGATIVE_INFINITY
 		let cancelTimer: VoidFunction | undefined
@@ -547,7 +547,7 @@ export class GuideOutputCommander implements DeviceHandler<GuideOutput>, Disposa
 
 	// Records the window of a pulse dispatched on the given axes, extending the open entry of its key.
 	#record(device: GuideOutput, window: GuidePulseQuiescenceWindow, axes: readonly GuideAxis[]) {
-		const key = resourceKey(device)
+		const key = guideOutputKey(device)
 		let entry = this.#entries.get(key)
 
 		if (entry === undefined) {
@@ -643,7 +643,7 @@ export class GuideOutputCommander implements DeviceHandler<GuideOutput>, Disposa
 	// Whether a registered view of the key is connected, which is what makes its notifications evidence.
 	#observable(key: ResourceKey) {
 		for (const view of this.#views) {
-			if (view.connected && resourceKey(view) === key) return true
+			if (view.connected && guideOutputKey(view) === key) return true
 		}
 
 		return false
@@ -667,9 +667,9 @@ export class GuideOutputCommander implements DeviceHandler<GuideOutput>, Disposa
 		this.#observations.delete(key)
 	}
 
-	// Registers a waiter for one physical resource and returns its idempotent unsubscriber.
+	// Registers a waiter for one capability and returns its idempotent unsubscriber.
 	#subscribe(device: GuideOutput, listener: (update: GuideOutputUpdate) => void) {
-		const key = resourceKey(device)
+		const key = guideOutputKey(device)
 		let listeners = this.#listeners.get(key)
 
 		if (listeners === undefined) {
@@ -686,9 +686,9 @@ export class GuideOutputCommander implements DeviceHandler<GuideOutput>, Disposa
 		}
 	}
 
-	// Notifies the waiters of one physical resource.
+	// Notifies the waiters of one capability.
 	#emit(update: GuideOutputUpdate) {
-		const listeners = this.#listeners.get(resourceKey(update.device))
+		const listeners = this.#listeners.get(guideOutputKey(update.device))
 		if (listeners === undefined) return
 		for (const listener of listeners) listener(update)
 	}

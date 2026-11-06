@@ -1,11 +1,11 @@
 import { describe, expect, test } from 'bun:test'
 import { IndiClientHandlerSet } from '../../../src/devices/indi/client'
-import { type Camera, type Focuser, type GuideOutput, type Rotator, type SubDevice, DEFAULT_CAMERA, DEFAULT_FOCUSER, DEFAULT_GUIDE_OUTPUT, DEFAULT_ROTATOR } from '../../../src/devices/indi/device'
+import { type Camera, type Cover, type FlatPanel, type Focuser, type GuideOutput, type Mount, type Rotator, type SubDevice, type Wheel, DEFAULT_CAMERA, DEFAULT_COVER, DEFAULT_FLAT_PANEL, DEFAULT_FOCUSER, DEFAULT_GUIDE_OUTPUT, DEFAULT_MOUNT, DEFAULT_ROTATOR, DEFAULT_WHEEL } from '../../../src/devices/indi/device'
 import { GuideOutputManager } from '../../../src/devices/indi/manager/guideoutput'
 import { MountManager } from '../../../src/devices/indi/manager/mount'
 import { ClientSimulator } from '../../../src/devices/indi/simulator/client'
 import { MountSimulator } from '../../../src/devices/indi/simulator/mount'
-import { ResourceArbiter, resourceDevice, resourceKey, type ResourceOwner, type ResourceReservationOwner } from '../../../src/devices/orchestration/resource'
+import { deviceKey, guideOutputKey, ResourceArbiter, resourceDevice, resourceKey, type ResourceOwner, type ResourceReservationOwner } from '../../../src/devices/orchestration/resource'
 
 const CAMERA = 'camera-1'
 const MOUNT = 'mount-1'
@@ -195,7 +195,7 @@ describe('resource arbiter', () => {
 		expect(arbiter.snapshot(key).causes).toEqual(['guidePulse', 'lifecycle', 'quarantine'])
 
 		// Lifecycle revalidation clears only the lifecycle cause.
-		arbiter.markDeviceAvailable(key)
+		arbiter.markCapabilityAvailable(key)
 		expect(arbiter.snapshot(key).causes).toEqual(['guidePulse', 'quarantine'])
 
 		arbiter.markAvailable(key, 'quarantine')
@@ -281,8 +281,8 @@ describe('resource arbiter', () => {
 			ok: false,
 			conflicts: [{ key: logicalKey, by: 'lease', ownerId: 'owner-1', ownerKind: 'test', causes: [] }],
 		})
-		expect(arbiter.ownersOfDevice(resourceKey(device))).toEqual([context])
-		expect(arbiter.ownersOfDevice(resourceKey(contender))).toEqual([])
+		expect(arbiter.ownersOfDevice(deviceKey(device))).toEqual([context])
+		expect(arbiter.ownersOfDevice(deviceKey(contender))).toEqual([])
 
 		if (acquired.ok) acquired.lease.release()
 	})
@@ -383,7 +383,7 @@ describe('resource arbiter', () => {
 		const key = resourceKey(proxy)
 		const context = owner('owner-1')
 
-		expect(key).toBe(parent.hardwareId)
+		expect(key).toBe(`${parent.hardwareId}:guideOutput`)
 		expect(resourceDevice(proxy)).toBe(parent)
 		expect(arbiter.acquire(context, [{ key, device: proxy }]).ok).toBeTrue()
 		expect(arbiter.ownersOfClient(parent.client.id)).toEqual([context])
@@ -427,6 +427,78 @@ describe('resource arbiter', () => {
 		expect(proxy.parentId).toBe(parent.id)
 		expect(resourceKey(proxy)).toBe(resourceKey(parent))
 		expect(resourceDevice(proxy)).toBe(parent)
+	})
+})
+
+describe('capability keys', () => {
+	function view<D extends GuideOutput | Wheel | Focuser | Cover | FlatPanel | Mount>(model: D, hardwareId: string, parent?: Camera | Mount): D {
+		return { ...structuredClone(model), id: `${model.type}-${hardwareId}`, hardwareId, name: hardwareId, connected: true, client: { type: 'SIMULATOR', id: 'client' }, ...(parent && { parentId: parent.id, parent }) }
+	}
+
+	test('gives only a guide output hosted by anything but a mount a capability of its own', () => {
+		const sensor = camera(true)
+		const st4 = guideOutputProxy(sensor)
+		const mount = view(DEFAULT_MOUNT, 'hardware-3')
+		const mountPort = view(DEFAULT_GUIDE_OUTPUT, 'hardware-3', mount)
+
+		expect(resourceKey(st4)).not.toBe(resourceKey(sensor))
+		expect(guideOutputKey(sensor)).toBe(resourceKey(st4))
+		expect(deviceKey(st4)).toBe(deviceKey(sensor))
+		expect(resourceKey(mountPort)).toBe(resourceKey(mount))
+		expect(guideOutputKey(mount)).toBe(resourceKey(mount))
+
+		// The pairs whose sharing keeps a frame or a settled cap intact still share one key.
+		expect(resourceKey(view(DEFAULT_WHEEL, sensor.hardwareId))).toBe(resourceKey(sensor))
+		expect(resourceKey(view(DEFAULT_FOCUSER, sensor.hardwareId))).toBe(resourceKey(sensor))
+		expect(resourceKey(view(DEFAULT_COVER, 'hardware-4'))).toBe(resourceKey(view(DEFAULT_FLAT_PANEL, 'hardware-4')))
+	})
+
+	test('grants the sensor and the ST4 port of one camera to two operation trees at the same time', () => {
+		const arbiter = new ResourceArbiter()
+		const sensor = camera(true)
+		const st4 = guideOutputProxy(sensor)
+		const exposure = owner('exposure')
+		const guiding = owner('guiding')
+
+		const exposing = arbiter.acquire(exposure, [{ key: resourceKey(sensor), device: sensor }])
+		const pulsing = arbiter.acquire(guiding, [{ key: resourceKey(st4), device: st4 }])
+
+		expect(exposing.ok).toBeTrue()
+		expect(pulsing.ok).toBeTrue()
+		expect(arbiter.acquire(owner('wheel'), [{ key: resourceKey(view(DEFAULT_WHEEL, sensor.hardwareId)), device: sensor }])).toMatchObject({ ok: false, conflicts: [{ by: 'lease', ownerId: 'exposure' }] })
+		expect(arbiter.acquire(owner('pulse'), [{ key: guideOutputKey(sensor), device: sensor }])).toMatchObject({ ok: false, conflicts: [{ by: 'lease', ownerId: 'guiding' }] })
+		// A device-wide question reaches the holders of every capability.
+		expect(arbiter.ownersOfDevice(deviceKey(sensor))).toEqual([exposure, guiding])
+		expect(arbiter.snapshot(resourceKey(st4)).hardwareId).toBe(sensor.hardwareId)
+	})
+
+	test('keeps the lifecycle of each capability and the logical resources that follow it apart', () => {
+		const arbiter = new ResourceArbiter()
+		const sensor = camera(true)
+		const st4 = guideOutputProxy(sensor)
+		const sensorKey = resourceKey(sensor)
+		const st4Key = resourceKey(st4)
+		const logicalKey = `logical:guide-output:${st4Key}`
+
+		arbiter.markAvailable({ key: sensorKey, device: sensor })
+		// A guide output commanded through its host still associates the guide output capability with its own key.
+		arbiter.markAvailable({ key: st4Key, device: sensor })
+		arbiter.markAvailable({ key: logicalKey, device: sensor, capability: st4Key })
+
+		arbiter.markCapabilityUnavailable(sensorKey)
+		expect([sensorKey, st4Key, logicalKey].map((key) => arbiter.availability(key))).toEqual(['unavailable', 'available', 'available'])
+
+		arbiter.markCapabilityAvailable(sensorKey)
+		arbiter.markCapabilityUnavailable(st4Key)
+		expect([sensorKey, st4Key, logicalKey].map((key) => arbiter.availability(key))).toEqual(['available', 'unavailable', 'unavailable'])
+
+		// A disconnect blocks every capability; each comes back only through its own validation.
+		arbiter.markDeviceUnavailable(deviceKey(sensor))
+		arbiter.markCapabilityAvailable(sensorKey)
+		expect([sensorKey, st4Key, logicalKey].map((key) => arbiter.availability(key))).toEqual(['available', 'unavailable', 'unavailable'])
+
+		arbiter.markCapabilityAvailable(st4Key)
+		expect([sensorKey, st4Key, logicalKey].map((key) => arbiter.availability(key))).toEqual(['available', 'available', 'available'])
 	})
 })
 

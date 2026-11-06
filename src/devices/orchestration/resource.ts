@@ -1,18 +1,27 @@
 import { CLIENT, type Device, type SubDevice } from '../indi/device'
 
 // Resource arbitration for device orchestration. A ResourceArbiter grants atomic, non-blocking, reentrant
-// leases over physical devices (keyed by hardware id) and logical resources, tracks durable reservations
+// leases over device capabilities (keyed by `resourceKey`) and logical resources, tracks durable reservations
 // held by long-lived sessions, and records independent unavailability causes such as lifecycle state.
 // Records are retained across disconnects and discarded once they carry no state. A removed device keeps
 // its lifecycle cause, so its record stays blocked until the device comes back under the same hardware id,
 // which is stable per client endpoint and device name; device churn therefore does not grow memory.
-// Acquisition never waits and never preempts: a conflict is reported immediately.
+// Acquisition never waits and never preempts: a conflict is reported immediately. Device-wide questions,
+// such as which owners a disconnect cancels, are asked by `deviceKey`, which spans every capability.
 
-// Opaque stable identity of one physical or logical resource. A physical key is the device hardware id, an
-// MD5 digest of client and name, so it is unique across clients and shared by every interface the same
-// driver exposes for one piece of hardware. A resource with no device behind it, such as a remote guider
-// session, must use a `logical:` prefix to stay outside that key space.
+// Opaque stable identity of one capability or logical resource. A capability key starts with the device
+// hardware id, an MD5 digest of client and name, so it is unique across clients; most interfaces of one
+// piece of hardware share the bare hardware id, and an interface arbitrated on its own appends a suffix
+// (see `resourceKey`). A resource with no device behind it, such as a remote guider session, must use a
+// `logical:` prefix to stay outside that key space.
 export type ResourceKey = string
+
+// Suffix of the capability key of a guide output that is not the mount it moves, such as the ST4 port of a
+// camera; appended to the hardware id of the device that hosts it.
+const GUIDE_OUTPUT_CAPABILITY_SUFFIX = ':guideOutput'
+
+// Prefix of a logical resource key, which names no capability of its own.
+const LOGICAL_KEY_PREFIX = 'logical:'
 
 // Observable arbitration state; unavailable takes precedence over an existing lease, which in turn takes
 // precedence over a reservation, because a reserved resource is still acquirable by its own reservation.
@@ -30,8 +39,12 @@ export type ResourceUnavailableCause = 'lifecycle' | 'quarantine' | 'guidePulse'
 export interface ResourceRequest {
 	// Canonical identity used for ordering, conflict checks, and ownership.
 	readonly key: ResourceKey
-	// Physical device used to index the resource by client and seed its availability.
+	// Device used to index the resource by physical device and client and to seed its availability: for a
+	// capability key, the device that capability belongs to; for a logical key, the device it stands for.
 	readonly device?: Device
+	// Capability whose lifecycle a logical resource follows; defaults to `resourceKey(device)`. Ignored for a
+	// capability key, which follows its own lifecycle.
+	readonly capability?: ResourceKey
 }
 
 // Context identity that owns leases; object identity, not just id equality, defines reentrancy.
@@ -149,6 +162,9 @@ interface ResourceRecord {
 	clientId?: string
 	// Latest physical device instance associated with the key.
 	device?: Device
+	// Capability of the view the record was associated through, whose lifecycle validation it follows; the
+	// key itself for a capability record, the capability it stands for on a logical one.
+	capability?: ResourceKey
 	// Context currently holding the resource, when leased.
 	owner?: ResourceOwner
 	// Durable reservation covering the resource, when reserved.
@@ -163,27 +179,48 @@ const UNAVAILABLE_OWNER: ResourceOwner = {
 	kind: 'unavailable',
 }
 
-// Builds the canonical resource key from the hardware behind the device view. Every interface of one
-// physical device, whether a subdevice proxy or a second top-level device published by the same driver,
-// carries the same hardware id, so they are all arbitrated as the single resource they really are.
-//
-// The rule has no exception, and each co-resident pair the drivers actually produce earns it:
+// Builds the capability key of a device view: the capability an operation acquires to command it. Every
+// interface of one physical device, whether a subdevice proxy or a second top-level device published by the
+// same driver, carries the same hardware id, and most of them are arbitrated under that bare id as the
+// single resource they really are. Each co-resident pair the drivers actually produce earns the sharing:
 // - camera and wheel, on an integrated filter camera, because a filter that turns during an exposure ruins
 //   the frame that is being read out;
 // - camera and focuser, because a focus move during an exposure trails every star in it;
 // - focuser and rotator, on a combined focus/rotation unit, because rotating the field during a focus scan
 //   moves the very stars the curve is measured from, and one controller usually drives one motor at a time;
 // - cover and flat panel, on a flip-flat, because the lamp level is only meaningful for a settled cap;
-// - camera or focuser and the guide output, thermometer, or dew heater they publish, which are channels of
-//   that same body rather than devices of their own.
-// A read-only interface such as a thermometer is never acquired, so sharing costs it nothing.
+// - a mount and its guide output, because a pulse drives the very axes a slew or a tracking change does;
+// - camera or focuser and the thermometer or dew heater they publish, which are channels of that same body
+//   rather than devices of their own. A read-only interface such as a thermometer is never acquired, so
+//   sharing costs it nothing.
 //
-// The price is that two interfaces of one device cannot be commanded from two independent operation trees:
-// the second attempt is refused as busy rather than queued. That is the intent, and it is not a limit on
-// composite features, which pass their own context down and reacquire the same key reentrantly. It does
-// mean a feature cannot drive two interfaces of one device in parallel scopes, since sibling scopes of a
-// tree still conflict with each other: an integrated camera and wheel have to be commanded in sequence.
+// The one exception is a guide output hosted by anything but a mount, in practice the ST4 port of a camera:
+// it is keyed `<hardwareId>:guideOutput`. A pulse on that port moves the mount, not the sensor, and guiding
+// through it has to pulse while the same camera exposes, which a shared key would refuse. Its quiescence
+// (pulsing) is validated apart from the exposure state of the sensor (see DeviceLifecycle), while a
+// disconnect or removal of the device still cancels the holders of both (see `deviceKey`).
+//
+// The price of sharing is that two interfaces under one key cannot be commanded from two independent
+// operation trees: the second attempt is refused as busy rather than queued. That is the intent, and it is
+// not a limit on composite features, which pass their own context down and reacquire the same key
+// reentrantly. It does mean a feature cannot drive two such interfaces in parallel scopes, since sibling
+// scopes of a tree still conflict with each other: an integrated camera and wheel have to be commanded in
+// sequence.
 export function resourceKey(device: Device): ResourceKey {
+	return device.type === 'guideOutput' ? guideOutputKey(device) : device.hardwareId
+}
+
+// Builds the capability key of the guide output of a device, whether it is given as the guide output view or
+// as the device that hosts it, since a guide port can be commanded through either: the bare hardware id for a
+// mount, `<hardwareId>:guideOutput` for anything else (see `resourceKey`). Use it wherever a `GuideOutput`
+// may be a camera or a mount object rather than its guide output proxy.
+export function guideOutputKey(device: Device): ResourceKey {
+	return resourceDevice(device).type === 'mount' ? device.hardwareId : device.hardwareId + GUIDE_OUTPUT_CAPABILITY_SUFFIX
+}
+
+// Builds the key of the physical device behind a view, shared by every capability it has: the hardware id.
+// It is what a device-wide question is asked by, such as which owners a disconnect or removal cancels.
+export function deviceKey(device: Device): ResourceKey {
 	return device.hardwareId
 }
 
@@ -228,7 +265,7 @@ export class ResourceArbiter {
 			owner: resource.owner,
 			reservationOwner: resource.reservation?.owner,
 			causes: this.#causesOf(resource),
-			hardwareId: resource.device === undefined ? undefined : resourceKey(resource.device),
+			hardwareId: resource.device?.hardwareId,
 			clientId: resource.clientId,
 		}
 	}
@@ -253,18 +290,27 @@ export class ResourceArbiter {
 		this.#unavailableClients.delete(clientId)
 	}
 
-	// Adds the lifecycle cause to every logical or physical resource associated with one physical device.
+	// Adds the lifecycle cause to every capability and logical resource associated with one physical device
+	// (`deviceKey`), as a disconnect or removal does. Nothing device-wide clears it: each capability is cleared
+	// by its own validation (`markCapabilityAvailable`).
 	markDeviceUnavailable(key: ResourceKey) {
 		for (const resource of this.#resources.values()) {
-			if (resource.device !== undefined && resourceKey(resource.device) === key) resource.causes.add('lifecycle')
+			if (resource.device?.hardwareId === key) resource.causes.add('lifecycle')
 		}
 	}
 
-	// Clears the lifecycle cause from every resource associated with one physical device after all its views
-	// pass validation.
-	markDeviceAvailable(key: ResourceKey) {
+	// Adds the lifecycle cause to one capability (`resourceKey`) and to every logical resource standing for it.
+	markCapabilityUnavailable(key: ResourceKey) {
 		for (const resource of this.#resources.values()) {
-			if (resource.device !== undefined && resourceKey(resource.device) === key) resource.causes.delete('lifecycle')
+			if (resource.capability === key) resource.causes.add('lifecycle')
+		}
+	}
+
+	// Clears the lifecycle cause from one capability and every logical resource standing for it, after all
+	// the views of that capability pass validation. The other capabilities of the device keep their causes.
+	markCapabilityAvailable(key: ResourceKey) {
+		for (const resource of this.#resources.values()) {
+			if (resource.capability === key) resource.causes.delete('lifecycle')
 		}
 	}
 
@@ -275,6 +321,7 @@ export class ResourceArbiter {
 		if (resource?.device !== device) return false
 
 		resource.device = undefined
+		resource.capability = undefined
 		resource.clientId = undefined
 
 		// A record with nothing left to remember carries no state a future acquisition could not rebuild,
@@ -409,15 +456,16 @@ export class ResourceArbiter {
 		return owner === undefined ? [] : [owner]
 	}
 
-	// Returns each distinct owner holding any resource associated with one physical device key.
-	// A device is arbitrated under its own key, but an operation may hold it under another name: a logical
-	// resource standing for the device reserves it without leasing the device itself. Looking the device up
-	// by key alone would miss those holders, and a lifecycle event has to reach every one of them.
+	// Returns each distinct owner holding any resource associated with one physical device (`deviceKey`).
+	// A device is arbitrated under one or more capability keys, and an operation may also hold it under
+	// another name: a logical resource standing for the device reserves it without leasing the device itself.
+	// Looking the device up by one key alone would miss those holders, and a lifecycle event has to reach
+	// every one of them.
 	ownersOfDevice(key: ResourceKey): readonly ResourceOwner[] {
 		const owners = new Set<ResourceOwner>()
 
 		for (const resource of this.#resources.values()) {
-			if (resource.owner !== undefined && resource.device !== undefined && resourceKey(resource.device) === key) {
+			if (resource.owner !== undefined && resource.device?.hardwareId === key) {
 				owners.add(resource.owner)
 			}
 		}
@@ -519,6 +567,7 @@ export class ResourceArbiter {
 				causes: new Set(device !== undefined && !device.connected ? (['lifecycle'] as const) : undefined),
 				clientId: device?.[CLIENT]?.id ?? device?.client.id,
 				device,
+				capability: typeof request === 'string' || request.device === undefined ? undefined : capabilityOf(key, request.device, request.capability),
 				depth: 0,
 			}
 
@@ -530,6 +579,7 @@ export class ResourceArbiter {
 			if (resource.device === undefined && !device.connected) resource.causes.add('lifecycle')
 
 			resource.device = device
+			resource.capability = capabilityOf(key, request.device, request.capability)
 			resource.clientId = device[CLIENT]?.id ?? device.client.id
 		}
 
@@ -566,6 +616,12 @@ export class ResourceArbiter {
 
 		if (owned.size === 0) this.#ownerResources.delete(owner)
 	}
+}
+
+// Resolves the capability whose lifecycle a record follows: a capability key follows itself, a logical key the
+// capability it names, or else the default capability of its device.
+function capabilityOf(key: ResourceKey, device: Device, capability: ResourceKey | undefined): ResourceKey {
+	return key.startsWith(LOGICAL_KEY_PREFIX) ? (capability ?? resourceKey(device)) : key
 }
 
 // Compares two ResourceRequest by key.

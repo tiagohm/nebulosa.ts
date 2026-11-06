@@ -1,12 +1,14 @@
 import type { Camera, Cover, Device, DeviceType, Dome, Focuser, GuideOutput, Mount, Rotator, Wheel } from '../indi/device'
 import type { DeviceHandler } from '../indi/manager/device'
 import { OperationCoordinator, type OperationFailureReason } from './operation'
-import { resourceDevice, resourceKey, ResourceArbiter, type ResourceKey } from './resource'
+import { deviceKey, resourceDevice, resourceKey, ResourceArbiter, type ResourceKey } from './resource'
 
 // Device lifecycle bridge for orchestration. DeviceLifecycle observes INDI device managers and turns their
-// added/updated/removed events into resource availability: a device is acquirable only while connected and
-// physically quiescent, and a disconnect or removal cancels every operation holding it. Several manager
-// views of one physical device are aggregated under its hardware key.
+// added/updated/removed events into resource availability: a capability is acquirable only while its device
+// is connected and every view of that capability is physically quiescent, and a disconnect or removal of
+// any view cancels every operation holding any capability of the device. Manager views are grouped by
+// physical device (`deviceKey`) for connectivity and cancellation, and by capability (`resourceKey`) for
+// quiescence, so the ST4 port of a camera can be granted while its sensor exposes, and the other way around.
 
 // Minimal manager surface required to observe device lifecycle without depending on transport handlers.
 export interface DeviceLifecycleManager<D extends Device> {
@@ -38,20 +40,23 @@ interface Registration {
 	readonly dispose: VoidFunction
 }
 
-// One manager-specific view contributing readiness to a shared physical resource.
+// One manager-specific view contributing readiness to one capability of a physical device.
 interface DeviceView {
 	// Exact device or subdevice instance emitted by its manager.
 	readonly device: Device
+	// Capability whose availability this view's quiescence decides (`resourceKey(device)`).
+	readonly key: ResourceKey
 	// Evaluates type-specific quiescence for this view.
 	readonly verify: () => boolean | Promise<boolean>
 }
 
 // Bridges manager add/update/remove events into availability and operation cancellation.
 export class DeviceLifecycle {
-	// Live views per physical resource. One key can carry several instances, since a camera and the guide
-	// output it exposes are separate manager objects that share a single physical device.
+	// Live views per physical device (`deviceKey`). One device can carry several instances, since a camera and
+	// the guide output it exposes are separate manager objects over a single physical device, whether they
+	// share one capability or not.
 	readonly #devices = new Map<ResourceKey, Map<Device, DeviceView>>()
-	// Per-resource token discarding readiness results from a verification a newer transition superseded.
+	// Per-capability token discarding readiness results from a verification a newer transition superseded.
 	readonly #validationGeneration = new Map<ResourceKey, number>()
 	// Manager observers to detach on disposal.
 	readonly #registrations = new Set<Registration>()
@@ -63,7 +68,7 @@ export class DeviceLifecycle {
 	) {}
 
 	// Observes existing and future devices from one manager and returns an idempotent disposer. Disposing
-	// forgets the views this manager contributed: a device left without any view becomes unavailable, since
+	// forgets the views this manager contributed: a capability left without any view becomes unavailable, since
 	// nothing would cancel its owners on a later disconnect, but operations already running are not cancelled.
 	observe<D extends Device>(manager: DeviceLifecycleManager<D>, options: DeviceObserveOptions<D> = {}): VoidFunction {
 		const verify = options.verify ?? isDeviceQuiescent
@@ -117,106 +122,117 @@ export class DeviceLifecycle {
 		this.#devices.clear()
 	}
 
-	// Drops one view of a disposed observer without cancelling its owners. Generations keep advancing rather
-	// than being reset, so a verification still in flight can never match a later registration of the key.
+	// Drops one view of a disposed observer without cancelling its owners. A capability left without any view
+	// becomes unavailable, since nothing would revalidate it; one that keeps views is revalidated without the
+	// dropped one. Generations keep advancing rather than being reset, so a verification still in flight can
+	// never match a later registration of the key.
 	#forget(device: Device) {
-		const key = resourceKey(device)
-		const devices = this.#devices.get(key)
+		const hardware = deviceKey(device)
+		const views = this.#devices.get(hardware)
+		const view = views?.get(device)
 
-		if (!devices?.delete(device)) return
+		if (views === undefined || view === undefined) return
 
-		if (devices.size === 0) {
-			this.#devices.delete(key)
-			this.#nextValidation(key)
-			this.arbiter.markUnavailable({ key, device: resourceDevice(device) })
-			this.arbiter.markDeviceUnavailable(key)
+		views.delete(device)
+		if (views.size === 0) this.#devices.delete(hardware)
+
+		if (this.#views(hardware, view.key).length > 0) {
+			this.#validate(hardware, view.key)
 		} else {
-			this.#validate(key)
+			this.#nextValidation(view.key)
+			this.arbiter.markUnavailable({ key: view.key, device })
+			this.arbiter.markCapabilityUnavailable(view.key)
 		}
 	}
 
-	// Registers a new instance as unavailable until its quiescence check succeeds.
+	// Registers a new instance as unavailable until the quiescence check of its capability succeeds.
 	#added<D extends Device>(device: D, verify: DeviceAvailabilityVerifier<D>) {
+		const hardware = deviceKey(device)
 		const key = resourceKey(device)
-		let devices = this.#devices.get(key)
+		let views = this.#devices.get(hardware)
 
-		if (devices === undefined) {
-			devices = new Map()
-			this.#devices.set(key, devices)
+		if (views === undefined) {
+			views = new Map()
+			this.#devices.set(hardware, views)
 		}
 
-		devices.set(device, { device, verify: () => verify(device) })
-		this.arbiter.markUnavailable({ key, device: resourceDevice(device) })
-		this.#validate(key)
+		views.set(device, { device, key, verify: () => verify(device) })
+		this.arbiter.markUnavailable({ key, device })
+		this.#validate(hardware, key)
 	}
 
 	// Cancels on disconnect and revalidates only the updates that can change quiescence. The view keeps the
-	// verifier it was added with.
+	// verifier it was added with. A reconnection revalidates every capability of the device: connectivity is
+	// physical, and only one of its views is guaranteed to report the change, since the managers share the
+	// underlying fields and the second one to see a value finds it unchanged.
 	#updated<D extends Device>(device: D, property: keyof D & string, affects: DeviceQuiescenceFilter<D>) {
-		const key = resourceKey(device)
+		const hardware = deviceKey(device)
+		const view = this.#devices.get(hardware)?.get(device)
 
-		if (!this.#devices.get(key)?.has(device)) return
+		if (view === undefined) return
 
 		if (property === 'connected' && !device.connected) {
-			this.#invalidate(key, resourceDevice(device), 'disconnected')
+			this.#invalidate(hardware, 'disconnected')
+		} else if (property === 'connected' && device.connected) {
+			for (const key of this.#capabilities(hardware)) this.#validate(hardware, key)
 		} else if (device.connected && affects(device, property)) {
-			// Revalidating on unrelated traffic such as temperature would also advance the generation and
-			// discard any verification still in flight, which an asynchronous verifier could never survive.
-			this.#validate(key)
+			// Revalidating on unrelated traffic such as temperature, or another capability of the device, would
+			// also advance the generation and discard any verification still in flight, which an asynchronous
+			// verifier could never survive.
+			this.#validate(hardware, view.key)
 		}
 	}
 
-	// Cancels on any removed view and releases the physical association only after the last view disappears.
+	// Cancels every owner of the device on any removed view, and releases the association of a capability only
+	// after its last view disappears; the remaining capabilities are revalidated without the removed view.
 	#removed(device: Device) {
-		const key = resourceKey(device)
-		const devices = this.#devices.get(key)
+		const hardware = deviceKey(device)
+		const views = this.#devices.get(hardware)
+		const view = views?.get(device)
 
-		if (!devices?.delete(device)) return
+		if (views === undefined || view === undefined) return
 
-		const physicalDevice = resourceDevice(device)
-		this.#invalidate(key, physicalDevice, 'removed')
+		this.#invalidate(hardware, 'removed')
+		views.delete(device)
+		if (views.size === 0) this.#devices.delete(hardware)
 
-		if (devices.size === 0) {
-			this.#devices.delete(key)
-			this.arbiter.disassociate(key, physicalDevice)
-		} else {
-			this.#validate(key)
-		}
+		if (this.#views(hardware, view.key).length === 0) this.arbiter.disassociate(view.key, resourceDevice(device))
+
+		for (const key of this.#capabilities(hardware)) this.#validate(hardware, key)
 	}
 
-	// Invalidates pending verification and starts cancellation without waiting inside manager callbacks.
-	#invalidate(key: ResourceKey, device: Device, reason: OperationFailureReason) {
-		this.#nextValidation(key)
-		this.arbiter.markUnavailable({ key, device })
-		this.arbiter.markDeviceUnavailable(key)
+	// Invalidates pending verification of every capability of the device and starts cancellation without
+	// waiting inside manager callbacks.
+	#invalidate(hardware: ResourceKey, reason: OperationFailureReason) {
+		for (const view of this.#devices.get(hardware)?.values() ?? []) {
+			this.#nextValidation(view.key)
+			this.arbiter.markUnavailable({ key: view.key, device: view.device })
+		}
+
+		this.arbiter.markDeviceUnavailable(hardware)
 		// Cancellation aborts owners synchronously; only its cleanup is awaited, and a manager callback is
 		// the wrong place to block. The resource stays unavailable either way, so a failure is reported.
-		// Owners are looked up by device rather than by key, because a device can be held under a logical
-		// resource that reserves it without leasing it, and such an owner would otherwise survive the
-		// disappearance of the very device it stands for.
-		void this.coordinator.cancelByDevice(key, reason).catch((error: unknown) => console.error('failed to cancel owners of:', key, error))
+		// Owners are looked up by device rather than by key, because a device can be held under several
+		// capabilities and under a logical resource that reserves it without leasing it, and such an owner
+		// would otherwise survive the disappearance of the very device it stands for.
+		void this.coordinator.cancelByDevice(hardware, reason).catch((error: unknown) => console.error('failed to cancel owners of:', hardware, error))
 	}
 
-	// Blocks acquisition while aggregating every live view under one generation guard.
-	#validate(key: ResourceKey) {
-		const devices = this.#devices.get(key)
+	// Blocks acquisition of one capability while aggregating every live view of it under one generation guard.
+	#validate(hardware: ResourceKey, key: ResourceKey) {
+		const views = this.#views(hardware, key)
 
-		if (devices === undefined || devices.size === 0) return
+		if (views.length === 0) return
 
 		const generation = this.#nextValidation(key)
-		const first = devices.values().next().value
-
-		if (first === undefined) return
-
-		const physicalDevice = resourceDevice(first.device)
 		const pending: Promise<boolean>[] = []
 
-		this.arbiter.markUnavailable({ key, device: physicalDevice })
-		this.arbiter.markDeviceUnavailable(key)
+		this.arbiter.markUnavailable({ key, device: views[0].device })
+		this.arbiter.markCapabilityUnavailable(key)
 
-		for (const view of devices.values()) {
+		for (const view of views) {
 			if (!view.device.connected) {
-				this.#validated(key, generation, false)
+				this.#validated(hardware, key, generation, false)
 				return
 			}
 
@@ -225,55 +241,69 @@ export class DeviceLifecycle {
 
 				if (typeof available === 'boolean') {
 					if (!available) {
-						this.#validated(key, generation, false)
+						this.#validated(hardware, key, generation, false)
 						return
 					}
 				} else {
 					pending.push(available)
 				}
 			} catch (error) {
-				// A verifier that cannot decide leaves the device blocked, never acquirable by mistake.
+				// A verifier that cannot decide leaves the capability blocked, never acquirable by mistake.
 				console.error('device availability check failed:', key, error)
-				this.#validated(key, generation, false)
+				this.#validated(hardware, key, generation, false)
 				return
 			}
 		}
 
 		if (pending.length === 0) {
-			this.#validated(key, generation, true)
+			this.#validated(hardware, key, generation, true)
 		} else {
 			void Promise.all(pending).then(
-				(results) => this.#validated(key, generation, results.every(Boolean)),
+				(results) => this.#validated(hardware, key, generation, results.every(Boolean)),
 				(error) => {
 					console.error('device availability check failed:', key, error)
-					this.#validated(key, generation, false)
+					this.#validated(hardware, key, generation, false)
 				},
 			)
 		}
 	}
 
-	// Applies the latest aggregate result only while the same resource generation remains registered.
-	#validated(key: ResourceKey, generation: number, available: boolean) {
-		const devices = this.#devices.get(key)
+	// Applies the latest aggregate result only while the same capability generation remains registered.
+	#validated(hardware: ResourceKey, key: ResourceKey, generation: number, available: boolean) {
+		const views = this.#views(hardware, key)
 
-		if (devices === undefined || devices.size === 0 || this.#validationGeneration.get(key) !== generation) return
+		if (views.length === 0 || this.#validationGeneration.get(key) !== generation) return
 
-		const first = devices.values().next().value
-
-		if (first === undefined) return
-
-		const physicalDevice = resourceDevice(first.device)
+		const request = { key, device: views[0].device }
 
 		if (available) {
-			this.arbiter.markAvailable({ key, device: physicalDevice })
-			this.arbiter.markDeviceAvailable(key)
+			this.arbiter.markAvailable(request)
+			this.arbiter.markCapabilityAvailable(key)
 		} else {
-			this.arbiter.markUnavailable({ key, device: physicalDevice })
-			this.arbiter.markDeviceUnavailable(key)
+			this.arbiter.markUnavailable(request)
+			this.arbiter.markCapabilityUnavailable(key)
 		}
 	}
 
-	// Advances the per-resource token used to discard stale asynchronous readiness results.
+	// Lists the live views of one capability of a physical device, in registration order.
+	#views(hardware: ResourceKey, key: ResourceKey) {
+		const views: DeviceView[] = []
+
+		for (const view of this.#devices.get(hardware)?.values() ?? []) {
+			if (view.key === key) views.push(view)
+		}
+
+		return views
+	}
+
+	// Lists the distinct capabilities the live views of a physical device decide.
+	#capabilities(hardware: ResourceKey) {
+		const keys = new Set<ResourceKey>()
+		for (const view of this.#devices.get(hardware)?.values() ?? []) keys.add(view.key)
+		return keys
+	}
+
+	// Advances the per-capability token used to discard stale asynchronous readiness results.
 	#nextValidation(key: ResourceKey) {
 		const generation = (this.#validationGeneration.get(key) ?? 0) + 1
 		this.#validationGeneration.set(key, generation)

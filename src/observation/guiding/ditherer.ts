@@ -6,7 +6,7 @@ import type { MountCommander } from '../../devices/commanders/mount'
 import type { GuideOutput, Mount } from '../../devices/indi/device'
 import { type FailedOperationResult, failedOperationResult, type OperationResult, type OperationScope, successfulOperationResult } from '../../devices/orchestration/operation'
 import { type AbortableDelay, abortableDelay, abortReason } from '../../devices/orchestration/operation.wait'
-import { type ResourceRequest, resourceKey } from '../../devices/orchestration/resource'
+import { guideOutputKey, type ResourceRequest, resourceKey } from '../../devices/orchestration/resource'
 import { sphericalOffsetVector } from '../../math/numerical/geometry'
 import type { Random } from '../../math/numerical/random'
 import { type Angle, normalizeAngle } from '../../math/units/angle'
@@ -85,8 +85,8 @@ export interface Ditherer {
 	readonly dither: (scope: OperationScope, request: DitherRequest, onPhase?: (phase: DitherPhase) => void) => Promise<OperationResult<DitherResult>>
 }
 
-// Resource that can physically move a mount during a dither of a mount ditherer. It is potential motion: a lease of the
-// same key by another operation (a capture on the camera that carries the ST4 port) is not motion.
+// Resource that can physically move a mount during a dither of a mount ditherer. It is potential motion: a lease of it by
+// another operation is not motion by itself.
 export interface MountMovementResource {
 	// Resource whose lease can move the mount.
 	readonly request: ResourceRequest
@@ -192,7 +192,7 @@ export class MountDitherer implements Ditherer {
 		const { method, maxPulseDuration } = this.options
 		if (method === 'slew') return [{ request: { key: resourceKey(this.mount), device: this.mount }, releaseBound: settleTimeout }]
 		if (this.guideOutput === undefined) return []
-		return [{ request: { key: resourceKey(this.guideOutput), device: this.guideOutput }, releaseBound: guidePulseReleaseBound(maxPulseDuration) }]
+		return [{ request: { key: guideOutputKey(this.guideOutput), device: this.guideOutput }, releaseBound: guidePulseReleaseBound(maxPulseDuration) }]
 	}
 
 	// Reserves exactly the resources of `movement`; holds nothing.
