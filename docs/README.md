@@ -17530,6 +17530,8 @@ A lease lasts as long as one operation tree, but a session such as an imaging se
 
 `arbiter.reserve(owner, requests)` reserves every resource or none, and returns `{ ok: true, reservation }` or the conflicts. Reserving again for the same owner extends the same reservation. A lease held by another tree, or another owner's reservation, refuses it, while an unavailable device can be reserved but stays unacquirable until it becomes available. `reservation.resources` lists the reserved keys, `reservation.token` is the credential and `reservation.release()` frees them. `availability(key)` reports `'reserved'` and `reservationOwnerOf(key)` the owner. The token is matched by object identity and must never be serialized. A token whose reservation was released refuses every acquisition rather than degrading to an ordinary one.
 
+A reservation can take a resource from a session that is still running without any instant at which a third owner could grab it. A request may name a `guest`: the root `OperationContext` of one tree. Reserving a key the guest leases is then not a conflict, the guest keeps its lease, and when that lease ends the key stays reserved instead of becoming available. While the reservation holds the key, the guest may acquire it again without the token, as a paused session resuming does, while every other owner, manual commands included, is still refused. The token holder and the guest exclude each other like any two leases. A tree that ended never matches again, because each start is a new context. `reservation.extend(requests)` adds keys to the same reservation (an extension without a guest keeps the guest a key already has) and refuses every key once the reservation was released. `release()` clears the guest together with the reservation and leaves a guest's lease standing. `snapshot(key).guest` reports it. `arbiter.transfer(from, to, keys)` moves keys between two live reservations at once, so a session can lend what it reserved and get it back under the same token. Every key must be reserved by `from` and leased by nobody, otherwise nothing moves. A moved key loses its guest.
+
 `coordinator.reservedScope(reservation)` returns an `OperationScope` whose trees acquire under the token, and `tokenScope(token)` does the same from the token alone, for a service that keeps a root operation of its own, such as a guiding session opened on behalf of the sequence. Nested scopes inherit the token. `drainByReservationOwner(owner, reason?, preserve?)` cancels every tree of the reservation and awaits their cleanup, then leaves the reservation open for the work that follows, as in a pause or before a terminal shutdown sequence. `preserve` names one root operation id to leave running. `cancelByReservationOwner(owner, reason?)` does the same but closes the reservation for good: later starts under it fail as `aborted` with `reservation has been cancelled`, so it is the call to make before `release()`. Both close the reservation to new trees during the drain, so no tree can start behind it. Running trees are explained in [Device Operations](#device-operations) and keys and conflicts in [Device Resource Arbitration](#device-resource-arbitration).
 
 ```ts
@@ -17564,6 +17566,19 @@ await coordinator.cancelByReservationOwner(session)
 console.log(await scope.start('capture', [{ key: 'camera' }], () => successfulOperationResult(1)).result) // { ok: false, reason: 'aborted', error: 'reservation has been cancelled' }
 reservation.release()
 console.log(arbiter.availability('mount')) // 'available'
+
+// Handoff: a guiding session's run holds the mount; the flip reserves it with the session as guest.
+await coordinator.start('guiding', [], async (root) => {
+	const run = root.start('guidingRun', [{ key: 'mount' }], () => successfulOperationResult(undefined))
+	const flip = arbiter.reserve({ id: 'flip-1', kind: 'meridianFlip' }, [{ key: 'mount', guest: root }])
+	if (!flip.ok) throw new Error('mount in use')
+	await run.result
+	console.log(arbiter.availability('mount')) // 'reserved', never 'available'
+	await coordinator.reservedScope(flip.reservation).start('flip', [{ key: 'mount' }], () => successfulOperationResult(undefined)).result
+	const resumed = await root.start('guidingRun', [{ key: 'mount' }], () => successfulOperationResult('guiding')).result // the guest takes it back
+	flip.reservation.release()
+	return resumed
+}).result
 ```
 
 ### Device Resource Arbitration

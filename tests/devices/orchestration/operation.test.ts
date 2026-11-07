@@ -945,3 +945,77 @@ describe('reserved operation scope', () => {
 		expect(await coordinator.cancelByReservationOwner(SESSION)).toBeUndefined()
 	})
 })
+
+describe('reservation guest', () => {
+	const EXECUTOR: ResourceReservationOwner = { id: 'executor-1', kind: 'mount.meridianFlip' }
+
+	test('hands a resource from a running tree to a reservation and back with no gap', async () => {
+		const arbiter = new ResourceArbiter()
+		const coordinator = new OperationCoordinator(arbiter)
+		const run = Promise.withResolvers<void>()
+		const again = Promise.withResolvers<void>()
+		let root: OperationContext | undefined
+
+		// A long-lived session whose child holds the mount, as a guiding run does under its root.
+		const session = coordinator.start('session', [{ key: CAMERA }], async (context) => {
+			root = context
+			await context.start('run', [{ key: MOUNT }], async () => {
+				await run.promise
+				return successfulOperationResult(undefined)
+			}).result
+			await again.promise
+			return await context.start('run', [{ key: MOUNT }], () => successfulOperationResult(arbiter.availability(MOUNT))).result
+		})
+
+		await Bun.sleep(0)
+
+		const reserved = arbiter.reserve(EXECUTOR, [{ key: MOUNT, guest: root }])
+
+		expect(reserved.ok).toBeTrue()
+
+		if (!reserved.ok) return
+
+		run.resolve()
+		await Bun.sleep(0)
+
+		// The run ended: the mount fell into the reservation, never available to a manual command.
+		expect(arbiter.availability(MOUNT)).toBe('reserved')
+		expect(await coordinator.start('manual', [{ key: MOUNT }], () => successfulOperationResult(undefined)).result).toMatchObject(failedOperationResult('busy'))
+
+		const flip = coordinator.reservedScope(reserved.reservation).start('flip', [{ key: MOUNT }], () => successfulOperationResult(undefined))
+
+		expect(await flip.result).toEqual(successfulOperationResult(undefined))
+
+		// Cancelling the reservation's own work never reaches the guest tree.
+		await coordinator.cancelByReservationOwner(EXECUTOR)
+		expect(coordinator.get(session.id)).toBeDefined()
+
+		again.resolve()
+
+		// The session took the mount back inside the reservation as its guest.
+		expect(await session.result).toEqual(successfulOperationResult('leased'))
+
+		reserved.reservation.release()
+
+		expect(arbiter.availability(MOUNT)).toBe('available')
+	})
+
+	test('never admits a guest tree that already ended', async () => {
+		const arbiter = new ResourceArbiter()
+		const coordinator = new OperationCoordinator(arbiter)
+		let root: OperationContext | undefined
+		const ended = coordinator.start('session', [{ key: CAMERA }], (context) => {
+			root = context
+			return successfulOperationResult(undefined)
+		})
+
+		await ended.result
+
+		const reserved = arbiter.reserve(EXECUTOR, [{ key: MOUNT, guest: root }])
+
+		expect(reserved.ok).toBeTrue()
+
+		// A new tree is a new context: being started under the same kind gives it nothing of the old guest.
+		expect(await coordinator.start('session', [{ key: MOUNT }], () => successfulOperationResult(undefined)).result).toMatchObject(failedOperationResult('busy'))
+	})
+})

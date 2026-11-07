@@ -47,6 +47,16 @@ export interface ResourceRequest {
 	readonly capability?: ResourceKey
 }
 
+// One resource requested by a reservation, optionally naming the guest admitted on it. A guest is the root
+// context of one operation tree that may keep the lease it already holds when the reservation takes the
+// resource, and acquire it again while the reservation still holds it, without carrying the reservation's
+// token. Everyone else stays excluded, so a reservation with a guest hands a resource between a running
+// session and the holder of the reservation with no instant at which a third owner could take it.
+export interface ReservationRequest extends ResourceRequest {
+	// Root context admitted on the resource besides the reservation's own token; identity is by object.
+	readonly guest?: ResourceOwner
+}
+
 // Context identity that owns leases; object identity, not just id equality, defines reentrancy.
 export interface ResourceOwner {
 	// Stable operation identifier exposed to transports and diagnostics.
@@ -81,6 +91,9 @@ export interface ResourceReservation {
 	readonly resources: readonly ResourceKey[]
 	// Opaque authorization handed to operations that run inside the reservation.
 	readonly token: ReservationToken
+	// Adds resources to this same reservation, as `ResourceArbiter.reserve` does for its owner, and refuses
+	// every key once the reservation was released rather than creating a new one.
+	readonly extend: (requests: readonly ReservationRequest[]) => ReserveResult
 	// Releases every resource of the reservation; repeated calls have no effect.
 	readonly release: VoidFunction
 }
@@ -122,6 +135,8 @@ export interface ResourceSnapshot {
 	readonly owner?: ResourceOwner
 	// Context holding the durable reservation, when reserved.
 	readonly reservationOwner?: ResourceReservationOwner
+	// Root context the reservation admits on the resource besides its token, when it names one.
+	readonly guest?: ResourceOwner
 	// Canonically sorted causes blocking acquisition, including a disconnected client.
 	readonly causes: readonly ResourceUnavailableCause[]
 	// Hardware id of the physical device currently associated with the key, when one is.
@@ -169,6 +184,9 @@ interface ResourceRecord {
 	owner?: ResourceOwner
 	// Durable reservation covering the resource, when reserved.
 	reservation?: ReservationRecord
+	// Root context the reservation admits on the resource besides its own token; cleared with the reservation
+	// and on a transfer.
+	guest?: ResourceOwner
 	// Number of active reentrant lease levels held by the same context.
 	depth: number
 }
@@ -264,6 +282,7 @@ export class ResourceArbiter {
 			availability: this.availability(key),
 			owner: resource.owner,
 			reservationOwner: resource.reservation?.owner,
+			guest: resource.guest,
 			causes: this.#causesOf(resource),
 			hardwareId: resource.device?.hardwareId,
 			clientId: resource.clientId,
@@ -341,38 +360,46 @@ export class ResourceArbiter {
 	//
 	// A reservation is logical ownership and says nothing about connectivity: an unavailable resource is
 	// reserved successfully and stays unacquirable, because reserving a disconnected device must not make it
-	// usable. A lease held by anyone else does refuse the reservation, since the two are mutually exclusive.
-	reserve(owner: ResourceReservationOwner, requests: readonly ResourceRequest[]): ReserveResult {
-		const normalized = normalizeRequests(requests)
+	// usable. A lease held by anyone else does refuse the reservation, since the two are mutually exclusive,
+	// unless the request names that lease's owner as its guest (see `ReservationRequest`): the guest keeps its
+	// lease, and when the lease ends the resource stays in the reservation instead of becoming available.
+	reserve(owner: ResourceReservationOwner, requests: readonly ReservationRequest[]): ReserveResult {
+		return this.#extend(this.#reservations.get(owner), owner, requests)
+	}
+
+	// Moves resources from one live reservation to another at once, so no instant leaves them available. Every
+	// key must be reserved by `from` and leased by nobody; otherwise nothing moves and every conflict is
+	// returned. A moved resource loses its guest, and `from` stays live, holding whatever keys remain.
+	transfer(from: ResourceReservation, to: ResourceReservation, keys: readonly ResourceKey[]): ReserveResult {
+		const source = this.#live(from)
+		const target = this.#live(to)
 		const conflicts: ResourceConflict[] = []
-		const current = this.#reservations.get(owner)
 
-		for (const request of normalized) {
-			// As in acquire, a rejected contender must not steal the physical association of an existing record.
-			const resource = this.#resource(request, false)
+		for (const key of keys) {
+			const resource = this.#resources.get(key)
 
-			// A lease taken inside the caller's own reservation belongs to the caller: only its own token could
-			// have authorized it. Refusing it would make a session unable to extend a reservation it already
-			// holds while one of its actions is commanding a device it reserved.
-			const own = current !== undefined && resource.reservation === current
-
-			if (resource.owner !== undefined && !own) {
-				conflicts.push(conflict(request.key, 'lease', resource.owner))
-			} else if (resource.reservation !== undefined && resource.reservation !== current) {
-				conflicts.push(conflict(request.key, 'reservation', resource.reservation.owner))
+			if (source === undefined) {
+				conflicts.push(conflict(key, 'reservation', from.token.owner))
+			} else if (target === undefined) {
+				conflicts.push(conflict(key, 'reservation', to.token.owner))
+			} else if (resource?.reservation !== source) {
+				conflicts.push(conflict(key, 'reservation', resource?.reservation?.owner ?? source.owner))
+			} else if (resource.owner !== undefined) {
+				conflicts.push(conflict(key, 'lease', resource.owner))
 			}
 		}
 
-		if (conflicts.length > 0) return { ok: false, conflicts }
+		if (conflicts.length > 0 || source === undefined || target === undefined) return { ok: false, conflicts }
 
-		const record = current ?? this.#createReservation(owner)
-
-		for (const request of normalized) {
-			this.#resource(request).reservation = record
-			record.resources.add(request.key)
+		for (const key of keys) {
+			const resource = this.#resources.get(key)!
+			resource.reservation = target
+			resource.guest = undefined
+			source.resources.delete(key)
+			target.resources.add(key)
 		}
 
-		return { ok: true, reservation: record.reservation }
+		return { ok: true, reservation: target.reservation }
 	}
 
 	// Returns the durable reservation owner of one resource, when reserved.
@@ -407,7 +434,7 @@ export class ResourceArbiter {
 				conflicts.push(conflict(request.key, 'unavailable', UNAVAILABLE_OWNER, this.#causesOf(resource)))
 			} else if (resource.owner !== undefined && resource.owner !== owner) {
 				conflicts.push(conflict(request.key, 'lease', resource.owner))
-			} else if (resource.reservation !== undefined && resource.reservation !== authorized) {
+			} else if (resource.reservation !== undefined && resource.reservation !== authorized && resource.guest !== owner) {
 				conflicts.push(conflict(request.key, 'reservation', resource.reservation.owner))
 			}
 		}
@@ -491,6 +518,54 @@ export class ResourceArbiter {
 		return this.#ownerResources.get(owner)?.keys().toArray().sort() ?? []
 	}
 
+	// Reserves the requested resources into `current`, creating the reservation of `owner` when it is undefined.
+	// Every key is checked before any is marked. A request naming a guest sets that guest on its key; one that
+	// names none keeps the guest the key already had, so extending a reservation never strips one.
+	#extend(current: ReservationRecord | undefined, owner: ResourceReservationOwner, requests: readonly ReservationRequest[]): ReserveResult {
+		const normalized = normalizeRequests(requests)
+		const conflicts: ResourceConflict[] = []
+
+		// A released record must refuse, not silently start a new reservation the caller never asked for.
+		if (current?.released) {
+			return { ok: false, conflicts: normalized.map((request) => conflict(request.key, 'reservation', owner)) }
+		}
+
+		for (const request of normalized) {
+			// As in acquire, a rejected contender must not steal the physical association of an existing record.
+			const resource = this.#resource(request, false)
+
+			// A lease taken inside the caller's own reservation belongs to the caller: only its own token could
+			// have authorized it, or a guest it admitted. Refusing it would make a session unable to extend a
+			// reservation it already holds while one of its actions is commanding a device it reserved.
+			const own = current !== undefined && resource.reservation === current
+
+			if (resource.owner !== undefined && !own && resource.owner !== request.guest) {
+				conflicts.push(conflict(request.key, 'lease', resource.owner))
+			} else if (resource.reservation !== undefined && resource.reservation !== current) {
+				conflicts.push(conflict(request.key, 'reservation', resource.reservation.owner))
+			}
+		}
+
+		if (conflicts.length > 0) return { ok: false, conflicts }
+
+		const record = current ?? this.#createReservation(owner)
+
+		for (const request of normalized) {
+			const resource = this.#resource(request)
+			resource.reservation = record
+			if (request.guest !== undefined) resource.guest = request.guest
+			record.resources.add(request.key)
+		}
+
+		return { ok: true, reservation: record.reservation }
+	}
+
+	// Returns the live record behind a public reservation view, or undefined once it was released.
+	#live(reservation: ResourceReservation) {
+		const record = this.#reservations.get(reservation.token.owner)
+		return record !== undefined && record.reservation === reservation && !record.released ? record : undefined
+	}
+
 	// Builds the reservation record and its stable public view. The resource list is derived on read so an
 	// idempotent extension of the same reservation stays visible through the object already handed out.
 	#createReservation(owner: ResourceReservationOwner) {
@@ -508,6 +583,7 @@ export class ResourceArbiter {
 				get resources() {
 					return resources.values().toArray().sort()
 				},
+				extend: (requests) => this.#extend(record, owner, requests),
 				release: () => this.#releaseReservation(record),
 			},
 		}
@@ -530,6 +606,7 @@ export class ResourceArbiter {
 			if (resource?.reservation !== record) continue
 
 			resource.reservation = undefined
+			resource.guest = undefined
 			this.#discard(key, resource)
 		}
 
@@ -630,8 +707,8 @@ function resourceRequestCompare(a: ResourceRequest, b: ResourceRequest) {
 }
 
 // Sorts and deduplicates an acquisition batch, retaining a provided device association.
-function normalizeRequests(requests: readonly ResourceRequest[]) {
-	const normalized = new Map<ResourceKey, ResourceRequest>()
+function normalizeRequests<R extends ResourceRequest>(requests: readonly R[]) {
+	const normalized = new Map<ResourceKey, R>()
 
 	for (const request of requests) {
 		const previous = normalized.get(request.key)

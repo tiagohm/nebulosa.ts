@@ -763,3 +763,155 @@ describe('resource reservation', () => {
 		expect(arbiter.snapshot(CAMERA)).toMatchObject({ availability: 'unavailable', owner: context, reservationOwner, causes: ['quarantine'] })
 	})
 })
+
+describe('reservation guest', () => {
+	test('refuses a key leased by a running session unless the reservation names it as guest', () => {
+		const arbiter = new ResourceArbiter()
+		const guiding = owner('guiding')
+
+		expect(arbiter.acquire(guiding, [{ key: MOUNT }]).ok).toBeTrue()
+		expect(arbiter.reserve(session('executor'), [{ key: MOUNT }]).ok).toBeFalse()
+
+		const reserved = arbiter.reserve(session('executor'), [{ key: MOUNT, guest: guiding }])
+
+		expect(reserved.ok).toBeTrue()
+		expect(arbiter.availability(MOUNT)).toBe('leased')
+		expect(arbiter.snapshot(MOUNT)).toMatchObject({ owner: guiding, reservationOwner: { id: 'executor' }, guest: guiding })
+
+		// Another owner's lease is still a conflict, whoever the guest is.
+		expect(arbiter.reserve(session('other'), [{ key: MOUNT, guest: owner('stranger') }]).ok).toBeFalse()
+	})
+
+	test('keeps the resource reserved when the guest releases and admits the guest again', () => {
+		const arbiter = new ResourceArbiter()
+		const guiding = owner('guiding')
+		const lease = arbiter.acquire(guiding, [{ key: MOUNT }])
+		const reserved = arbiter.reserve(session('executor'), [{ key: MOUNT, guest: guiding }])
+
+		expect(lease.ok && reserved.ok).toBeTrue()
+
+		if (!lease.ok || !reserved.ok) return
+
+		lease.lease.release()
+
+		// The instant the guest lets go, the resource belongs to the reservation and to nobody else.
+		expect(arbiter.availability(MOUNT)).toBe('reserved')
+		expect(arbiter.acquire(owner('manual'), [{ key: MOUNT }])).toEqual({
+			ok: false,
+			conflicts: [{ key: MOUNT, by: 'reservation', ownerId: 'executor', ownerKind: 'sequencer', causes: [] }],
+		})
+
+		const flip = arbiter.acquire(owner('flip'), [{ key: MOUNT }], reserved.reservation.token)
+
+		expect(flip.ok).toBeTrue()
+
+		// The token holder and the guest exclude each other like any two leases.
+		expect(arbiter.acquire(guiding, [{ key: MOUNT }])).toMatchObject({ ok: false, conflicts: [{ by: 'lease', ownerId: 'flip' }] })
+
+		if (flip.ok) flip.lease.release()
+
+		expect(arbiter.acquire(guiding, [{ key: MOUNT }]).ok).toBeTrue()
+		expect(arbiter.availability(MOUNT)).toBe('leased')
+	})
+
+	test('leaves the guest lease standing and clears the guest when the reservation is released', () => {
+		const arbiter = new ResourceArbiter()
+		const guiding = owner('guiding')
+		const reserved = arbiter.reserve(session('executor'), [{ key: MOUNT, guest: guiding }])
+
+		expect(reserved.ok).toBeTrue()
+
+		if (!reserved.ok) return
+
+		const lease = arbiter.acquire(guiding, [{ key: MOUNT }])
+
+		expect(lease.ok).toBeTrue()
+
+		reserved.reservation.release()
+
+		expect(arbiter.snapshot(MOUNT)).toMatchObject({ availability: 'leased', owner: guiding, reservationOwner: undefined, guest: undefined })
+
+		if (lease.ok) lease.lease.release()
+
+		expect(arbiter.availability(MOUNT)).toBe('available')
+	})
+
+	test('extends the same reservation and keeps an existing guest', () => {
+		const arbiter = new ResourceArbiter()
+		const capture = owner('capture')
+		const reserved = arbiter.reserve(session('executor'), [])
+
+		expect(reserved.ok).toBeTrue()
+
+		if (!reserved.ok) return
+
+		expect(arbiter.acquire(capture, [{ key: CAMERA }]).ok).toBeTrue()
+		expect(reserved.reservation.extend([{ key: CAMERA, guest: capture }])).toEqual({ ok: true, reservation: reserved.reservation })
+		expect(reserved.reservation.extend([{ key: CAMERA }, { key: MOUNT }]).ok).toBeTrue()
+		expect(reserved.reservation.resources).toEqual([CAMERA, MOUNT])
+		expect(arbiter.snapshot(CAMERA).guest).toBe(capture)
+	})
+
+	test('refuses to extend a released reservation instead of starting a new one', () => {
+		const arbiter = new ResourceArbiter()
+		const reserved = arbiter.reserve(session('executor'), [{ key: CAMERA }])
+
+		expect(reserved.ok).toBeTrue()
+
+		if (!reserved.ok) return
+
+		reserved.reservation.release()
+
+		expect(reserved.reservation.extend([{ key: MOUNT }])).toEqual({
+			ok: false,
+			conflicts: [{ key: MOUNT, by: 'reservation', ownerId: 'executor', ownerKind: 'sequencer', causes: [] }],
+		})
+		expect(arbiter.availability(MOUNT)).toBe('available')
+	})
+})
+
+describe('reservation transfer', () => {
+	test('moves free keys between live reservations at once and drops their guest', () => {
+		const arbiter = new ResourceArbiter()
+		const dither = arbiter.reserve(session('dither'), [{ key: MOUNT, guest: owner('capture') }, { key: CAMERA }])
+		const executor = arbiter.reserve(session('executor'), [])
+
+		expect(dither.ok && executor.ok).toBeTrue()
+
+		if (!dither.ok || !executor.ok) return
+
+		expect(arbiter.transfer(dither.reservation, executor.reservation, [MOUNT])).toEqual({ ok: true, reservation: executor.reservation })
+		expect(arbiter.reservationOwnerOf(MOUNT)?.id).toBe('executor')
+		expect(arbiter.snapshot(MOUNT).guest).toBeUndefined()
+		expect(dither.reservation.resources).toEqual([CAMERA])
+		expect(executor.reservation.resources).toEqual([MOUNT])
+
+		// The source keeps its token: the keys come back under the very same reservation.
+		expect(arbiter.transfer(executor.reservation, dither.reservation, [MOUNT]).ok).toBeTrue()
+		expect(arbiter.acquire(owner('dither-1'), [{ key: MOUNT }], dither.reservation.token).ok).toBeTrue()
+	})
+
+	test('moves nothing when a key is leased, held elsewhere, or a side was released', () => {
+		const arbiter = new ResourceArbiter()
+		const dither = arbiter.reserve(session('dither'), [{ key: MOUNT }, { key: CAMERA }])
+		const executor = arbiter.reserve(session('executor'), [])
+
+		expect(dither.ok && executor.ok).toBeTrue()
+
+		if (!dither.ok || !executor.ok) return
+
+		expect(arbiter.acquire(owner('pulse'), [{ key: CAMERA }], dither.reservation.token).ok).toBeTrue()
+		expect(arbiter.transfer(dither.reservation, executor.reservation, [MOUNT, CAMERA])).toEqual({
+			ok: false,
+			conflicts: [{ key: CAMERA, by: 'lease', ownerId: 'pulse', ownerKind: 'test', causes: [] }],
+		})
+		expect(arbiter.reservationOwnerOf(MOUNT)?.id).toBe('dither')
+
+		expect(arbiter.transfer(executor.reservation, dither.reservation, [MOUNT])).toMatchObject({ ok: false, conflicts: [{ key: MOUNT, by: 'reservation', ownerId: 'dither' }] })
+
+		executor.reservation.release()
+
+		expect(arbiter.transfer(dither.reservation, executor.reservation, [MOUNT])).toMatchObject({ ok: false, conflicts: [{ key: MOUNT, by: 'reservation', ownerId: 'executor' }] })
+		expect(arbiter.reservationOwnerOf(MOUNT)?.id).toBe('dither')
+	})
+})
