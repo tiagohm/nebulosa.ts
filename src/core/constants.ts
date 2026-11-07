@@ -136,6 +136,18 @@ export const SUN_RADIUS_KM = 695700
 // Solar photospheric radius in AU (IAU 2015 nominal radius).
 export const SUN_RADIUS_AU = SUN_RADIUS_KM / AU_KM
 
+// Jupiter's equatorial radius in km at the 1-bar level (IAU WGCCRE 2015).
+export const JUPITER_EQUATORIAL_RADIUS_KM = 71492
+
+// Jupiter's polar radius in km at the 1-bar level (IAU WGCCRE 2015).
+export const JUPITER_POLAR_RADIUS_KM = 66854
+
+// Jupiter's equatorial radius in AU (IAU WGCCRE 2015, 1 bar).
+export const JUPITER_EQUATORIAL_RADIUS_AU = JUPITER_EQUATORIAL_RADIUS_KM / AU_KM
+
+// Jupiter's polar radius in AU (IAU WGCCRE 2015, 1 bar).
+export const JUPITER_POLAR_RADIUS_AU = JUPITER_POLAR_RADIUS_KM / AU_KM
+
 // Radians to degrees.
 export const RAD2DEG = 180 / PI
 

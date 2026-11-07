@@ -2354,6 +2354,39 @@ console.log(w[1], w[3]) // 6.3004 -6.3004 — the dominant spin term, about 2π 
 console.log(instantaneousEarthAngularVelocity(time)) // [-5.2e-7, 6.9e-8, 6.30039] — mostly along +z
 ```
 
+### Jovian Ephemeris Sources
+
+Predicting a phenomenon of Jupiter's system needs the positions of the Sun, the Earth, Jupiter's centre and the four Galilean satellites at many epochs. To keep a prediction coherent, every state of one computation must come from the same source. A `JovianEphemeris` is that source: `position(body, time)` returns the barycentric position of `'sun'`, `'earth'`, `'jupiter'`, `'io'`, `'europa'`, `'ganymede'` or `'callisto'` in AU and ICRF axes, as a fresh vector, and `source` tells where it comes from.
+
+- `analyticalJovianEphemeris` uses VSOP87E for the Sun, the Earth and Jupiter, and adds the L1.2 jovicentric offsets (see [Galilean Satellite Theory (L1.2)](#galilean-satellite-theory-l12)) to the VSOP87E Jupiter for the satellites. It never fails.
+- `spkJovianEphemeris(set)` resolves each body through a prepared SPK kernel set with the NAIF precedence rules (see [SPK State Kernels](#spk-state-kernels)). Jupiter is NAIF 599, the planet's centre, never the system barycenter 5. A body that cannot be resolved throws a `JovianEphemerisMiss` carrying the requested `target`, the NAIF `body` of the chain where resolution stopped, the `reason` (`'missing'`, `'coverage'`, `'cycle'`, `'dataType'` or `'frame'`) and the `time`. Throwing lets the caller abandon the whole computation and rerun it with another source instead of mixing sources. `kernelsByBody` accumulates the files that supplied each evaluated body.
+
+`hasJovianTargets(set)` tells whether a set has a segment for each of the seven bodies (NAIF 10, 399, 599 and 501-504). It is a necessary condition only; centers, coverage and segment support are checked per epoch. A planetary kernel such as DE440s has the Jovian barycenter but not Jupiter's centre or its satellites, so it is not a Jovian source on its own. `GALILEAN_RADIUS_KM` and `GALILEAN_RADIUS_AU` hold the mean radii of the satellites, and `JUPITER_EQUATORIAL_RADIUS_KM` (71492) and `JUPITER_POLAR_RADIUS_KM` (66854) in `nebulosa/src/core/constants` the IAU 1-bar radii of Jupiter.
+
+```ts
+import { analyticalJovianEphemeris, hasJovianTargets, JovianEphemerisMiss, spkJovianEphemeris } from 'nebulosa/src/astronomy/ephemeris/jovian'
+import type { SpkKernelSet } from 'nebulosa/src/astronomy/ephemeris/kernels/spk.kernelset'
+import { findGalileanMutualEvents } from 'nebulosa/src/astronomy/events/mutual'
+import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+
+declare const set: SpkKernelSet // prepared with prepareSpkKernelSet from a JUP satellite kernel and a planetary kernel
+
+const start = timeYMDHMS(2026, 12, 5, 0, 0, 0, Timescale.UTC)
+const stop = timeYMDHMS(2026, 12, 6, 0, 0, 0, Timescale.UTC)
+
+let events
+
+try {
+	// One source for the whole search: either every state from the kernels...
+	events = hasJovianTargets(set) ? findGalileanMutualEvents(spkJovianEphemeris(set), start, stop) : findGalileanMutualEvents(analyticalJovianEphemeris, start, stop)
+} catch (e) {
+	if (!(e instanceof JovianEphemerisMiss)) throw e
+	// ...or, after a miss anywhere in the search, every state from the analytical theories.
+	console.log(e.target, e.reason, e.body) // e.g. callisto coverage 504
+	events = findGalileanMutualEvents(analyticalJovianEphemeris, start, stop)
+}
+```
+
 ### Jupiter Central Meridian
 
 The central meridian of Jupiter is the line of longitude that crosses the middle of the disk as the observer sees it, and its longitude tells you which part of the planet faces you. Because Jupiter is a gas giant, there are three conventional rotation systems. System I covers the equatorial jet and System II the temperate latitudes, where the Great Red Spot lies; System III is the magnetic or radio system tied to the interior. Longitudes in Systems I and II are the ones almanacs and observers quote for features on the disk, and they are measured positive to the west.
@@ -4192,11 +4225,13 @@ console.log(unpackDate('J9611')) // [1996, 1, 1]
 
 ### Mutual Planetary-Satellite Events
 
-The satellites of a giant planet occult and eclipse each other when the Earth (or the Sun) crosses the planet's equatorial plane, a season that comes around once per planetary year: about every six years for Jupiter and about every fifteen for Saturn, so most windows return nothing. A **mutual occultation** is one moon passing in front of another as seen from Earth, and a **mutual eclipse** is one moon casting its shadow on another. `galileanMutualEvents(start, stop, options?)` covers Io, Europa, Ganymede and Callisto with the L1.2 theory, and `saturnianMutualEvents(start, stop, options?)` the seven main moons of Saturn (Mimas, Enceladus, Tethys, Dione, Rhea, Titan and Iapetus) with TASS 1.7; Hyperion is omitted. All pairs are screened for both kinds of event and the result is chronological.
+The satellites of a giant planet occult and eclipse each other when the Earth (or the Sun) crosses the planet's equatorial plane, a season that comes around once per planetary year: about every six years for Jupiter and about every fifteen for Saturn, so most windows return nothing. A **mutual occultation** is one moon passing in front of another as seen from Earth, and a **mutual eclipse** is one moon casting its shadow on another. `galileanMutualEvents(start, stop, options?)` covers Io, Europa, Ganymede and Callisto with the analytical VSOP87E + L1.2 positions, and `saturnianMutualEvents(start, stop, options?)` the seven main moons of Saturn (Mimas, Enceladus, Tethys, Dione, Rhea, Titan and Iapetus) with TASS 1.7; Hyperion is omitted. All pairs are screened for both kinds of event and the result is chronological.
 
 This is the detection layer only: it reports the times, the pair and how central the event is, and it has no light curve, no obscured-area fraction and no magnitude drop. Satellite positions are added to the VSOP87E planet position, so every body shares one barycentric frame. Occultations use the apparent geocentric directions of the two moons, each corrected for its own light time. Eclipses are evaluated from the heliocentric shadow geometry (the shadowed moon must lie behind the caster, and the contact limit is the penumbral radius plus the moon's radius) and are reported at the instant they are seen from Earth. `options` is a `TimeSearchOptions`: `step` (days, default 10 minutes) must be shorter than the width of a conjunction, and `tolerance` is the refinement tolerance.
 
 Each `MutualEvent` has the `kind`, the `front` moon (the nearer one for an occultation, the caster for an eclipse), the `back` moon, the instants of the first contact (`start`), of maximum obscuration (`middle`) and of the last contact (`end`), and the `impactParameter` in `[0, 1)`: the minimum separation divided by the contact limit, zero for a central event and close to one for a grazing one. `start` or `end` is `undefined` when the event is already underway at the start of the window or still underway at its end; the window is padded internally so events that overlap its edges are not lost.
+
+`findGalileanMutualEvents(ephemeris, start, stop, options?)` runs the same Galilean search on any `JovianEphemeris` (see [Jovian Ephemeris Sources](#jovian-ephemeris-sources)), taking the Sun, the Earth and every moon from that one source, so a kernel-backed search never mixes in analytical positions; a `JovianEphemerisMiss` from the source abandons the search. Its window is half-open on the maximum: an event is returned when its `middle` lies in `[start, stop)`, and its contacts are never blanked, even when they fall outside the window. Consecutive windows therefore concatenate without duplicates, and a caller can tell which events reach beyond its own range. A contact is `undefined` only when it lies more than six hours from the maximum, which no real event does.
 
 ```ts
 import { galileanMutualEvents, saturnianMutualEvents } from 'nebulosa/src/astronomy/events/mutual'
