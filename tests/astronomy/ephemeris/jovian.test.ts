@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import fs from 'fs/promises'
-import { analyticalJovianEphemeris, GALILEAN_RADIUS_AU, hasJovianTargets, JovianEphemerisMiss, spkJovianEphemeris } from '../../../src/astronomy/ephemeris/jovian'
+import { analyticalJovianEphemeris, GALILEAN_RADIUS_AU, hasJovianTargets, interpolatedJovianEphemeris, JOVIAN_BODIES, JovianEphemerisMiss, spkJovianEphemeris } from '../../../src/astronomy/ephemeris/jovian'
 import { type Daf, readDaf, type Summary } from '../../../src/astronomy/ephemeris/kernels/daf'
 import { SPK_FRAME_J2000 } from '../../../src/astronomy/ephemeris/kernels/spk'
 import { inspectSpk } from '../../../src/astronomy/ephemeris/kernels/spk.inspect'
@@ -8,7 +8,7 @@ import { prepareSpkKernelSet, type SpkKernelEntry } from '../../../src/astronomy
 import { callisto, io } from '../../../src/astronomy/ephemeris/models/analytical/l12'
 import { earth, jupiter, sun } from '../../../src/astronomy/ephemeris/models/analytical/vsop87e'
 import { findGalileanMutualEvents, galileanMutualEvents } from '../../../src/astronomy/events/mutual'
-import { type Time, Timescale, timeSubtract, timeYMDHMS } from '../../../src/astronomy/time/time'
+import { type Time, Timescale, timeShift, timeSubtract, timeYMDHMS } from '../../../src/astronomy/time/time'
 import { AU_KM, DAYSEC, J2000 } from '../../../src/core/constants'
 import { fileHandleSource } from '../../../src/io/file'
 import { downloadPerTag } from '../../download'
@@ -225,4 +225,29 @@ test('the source-aware mutual finder keeps contacts and partitions windows by ma
 	expect(legacy.length).toBe(1)
 	expect(timeSubtract(legacy[0].middle, events[0].middle) * DAYSEC).toBeCloseTo(0, 6)
 	expect(timeSubtract(legacy[0].end!, events[0].end!) * DAYSEC).toBeCloseTo(0, 6)
+})
+
+test('the interpolated source stays within 0.1 km of the analytical one', () => {
+	const ephemeris = interpolatedJovianEphemeris(analyticalJovianEphemeris)
+	expect(ephemeris.source).toBe(analyticalJovianEphemeris.source)
+	const start = timeYMDHMS(2026, 12, 1, 0, 0, 0, Timescale.UTC)
+
+	for (let i = 0; i < 120; i++) {
+		// Irregular epochs, so they fall at every phase between the nodes.
+		const time = timeShift(start, i * 0.0371)
+
+		for (const body of JOVIAN_BODIES) {
+			const exact = analyticalJovianEphemeris.position(body, time)
+			const interpolated = ephemeris.position(body, time)
+			expect(Math.hypot(exact[0] - interpolated[0], exact[1] - interpolated[1], exact[2] - interpolated[2]) * AU_KM).toBeLessThan(0.1)
+		}
+	}
+})
+
+test('the interpolated source propagates a kernel miss from its nodes', async () => {
+	const set = await prepareSpkKernelSet([entry('planets', PLANETARY), entry('jup', SATELLITES)])
+	const ephemeris = interpolatedJovianEphemeris(spkJovianEphemeris(set))
+	expect(ephemeris.source).toEqual({ kind: 'spk', kernels: ['planets', 'jup'] })
+	// The synthetic segments cover 100 s around J2000, far less than one interpolation node step.
+	expect(() => ephemeris.position('io', at(50))).toThrow(JovianEphemerisMiss)
 })
