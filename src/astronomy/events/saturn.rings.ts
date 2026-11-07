@@ -151,8 +151,13 @@ export interface SaturnRingGeometry {
 // Computes the apparent geometry of Saturn's disk and rings at an observed instant. Evaluates the
 // precession-nutation matrix for the sky basis, so it is meant for display rather than for scanning.
 export function saturnRingGeometry(ephemeris: SaturnianEphemeris, time: Time): SaturnRingGeometry {
-	const { state, earthOpening, solarOpening } = saturnRingOpenings(ephemeris, time)
-	const basis = skyBasis(time, state.lineOfSight)
+	const openings = saturnRingOpenings(ephemeris, time)
+	return saturnRingGeometryOf(openings, skyBasis(time, openings.state.lineOfSight))
+}
+
+// Builds the apparent disk and ring geometry from already computed openings and the sky basis of their
+// state's line of sight, so a caller that also needs the satellites evaluates the system state once.
+export function saturnRingGeometryOf({ state, earthOpening, solarOpening }: SaturnRingOpenings, basis: SkyBasis): SaturnRingGeometry {
 	const equatorialRadius = Math.atan(SATURN_EQUATORIAL_RADIUS_AU / state.distance)
 	const ringSemiMajor = Math.atan(SATURN_RING_MODEL.outerRadius / AU_KM / state.distance)
 
