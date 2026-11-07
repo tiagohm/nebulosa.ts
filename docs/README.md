@@ -5617,6 +5617,23 @@ const maxima = saturnianSeparationMaxima(ephemeris, timeYMDHMS(2026, 11, 1, 0, 0
 for (const maximum of maxima) console.log(maximum.moon, maximum.time, toDeg(maximum.separation) * 3600) // Iapetus ~567″ on 2026-11-10
 ```
 
+### Saturnian Satellite Phenomena
+
+Saturn's major moons orbit in its ring plane, so they pass in front of the planet, cast shadows on it, hide behind it, or enter its shadow only in the seasons around Saturn's equinoxes, when the Earth and the Sun lie close to that plane. `saturnianPhenomena(ephemeris, start, stop, options?)` (`events/saturn.phenomena.ts`) finds the transits, shadow transits, occultations, and eclipses of Mimas, Enceladus, Tethys, Dione, Rhea, Titan, and Iapetus whose conjunction lies in `[start, stop)`, with the same contacts, grazing events, and window conventions as [Galilean Satellite Phenomena](#galilean-satellite-phenomena), on Saturn's oblate IAU 1-bar disk (see [Saturnian Satellite Geometry](#saturnian-satellite-geometry)). Titan's and Iapetus's phenomena, up to about ten hours long, are followed twice as far from their conjunction as the inner moons'. Both finders are instances of the generic `satellitePhenomena` of `events/satellites.phenomena.ts`.
+
+The rings are not part of this geometry: a moon or a shadow seen across the rings is reported like any other, and the rings' own occultations and shadows are not predicted. Against JPL Horizons the inner moons' transits, the moons becoming wholly umbral, and the occultation ends agree within about a minute with the analytical source; Horizons' transit and occultation flags for Titan's off-centre 2025 chords last a few minutes longer than these oblate-limb contacts, while its eclipse contacts agree.
+
+```ts
+import { analyticalSaturnianEphemeris, interpolatedSaturnianEphemeris } from 'nebulosa/src/astronomy/ephemeris/saturnian'
+import { saturnianPhenomena } from 'nebulosa/src/astronomy/events/saturn.phenomena'
+import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+
+const ephemeris = interpolatedSaturnianEphemeris(analyticalSaturnianEphemeris)
+const phenomena = saturnianPhenomena(ephemeris, timeYMDHMS(2025, 4, 1, 0, 0, 0, Timescale.UTC), timeYMDHMS(2025, 4, 14, 0, 0, 0, Timescale.UTC), { moons: ['titan'] })
+
+for (const p of phenomena) console.log(p.kind, p.external1, p.maximum, p.external2) // Titan's eclipse and occultation on April 5, its shadow transit and transit on April 13
+```
+
 ### Saturnian Satellite Theory (TASS1.7)
 
 TASS 1.7 (Vienne and Duriez) is the IMCCE analytical theory of the eight major Saturnian satellites, including Hyperion. The shared satellite mean longitudes are evaluated first; each body's equinoctial element series is then summed using integer combinations of those longitudes, converted to rectangular coordinates, and rotated into the J2000 equatorial frame.
