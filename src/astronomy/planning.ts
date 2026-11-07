@@ -73,32 +73,54 @@ export function moonInterference(illumination: number, moonAltitude: Angle, sepa
 	return clamp(illumination * altitudeWeight * kernel, 0, 1)
 }
 
-// Observing score of one target from altitude, airmass, twilight, lunar interference, and duration.
+// Factors of one observation score, each on 0..1 where 1 is best. Optional factors are present exactly
+// when their inputs were supplied.
+export interface ObservationScoreFactors {
+	// Altitude ramp: 0 at and below the minimum altitude, 1 at and above the good altitude.
+	readonly altitude: number
+	// Airmass ramp: 1 at zenith, 0 at and above the maximum airmass, and 0 when the target is not above the horizon.
+	readonly airmass: number
+	// Twilight ramp: 0 at solar altitude −12° and above, 1 at −18° and below.
+	readonly twilight?: number
+	// One minus the lunar interference.
+	readonly moon?: number
+	// Capped ratio of available to required hours; 1 when nothing is required.
+	readonly duration?: number
+}
+
+// Factors that observationScore combines, so a caller can explain which one limits a score.
 // Parameters: input carries the already-reduced quantities. options changes the altitude and airmass
-// ramps and the output scale. The score is the geometric mean of the altitude factor, the airmass
-// factor, and whichever of twilight, Moon, and duration were supplied. Altitude rises from 0 at the
-// horizon to 1 at 60°. Airmass falls from 1 at zenith to 0 at airmass 3. Twilight rises from 0 at
-// solar altitude −12° to 1 at −18°. Duration is the capped ratio of available hours to required
-// hours. Returns a value in 0..1, or 0..100 when scale is 100.
-export function observationScore(input: ObservationScoreInput, options: ObservationScoreOptions = {}): number {
+// ramps; its scale is ignored. Altitude rises from 0 at the minimum altitude (the horizon by default)
+// to 1 at the good altitude (60° by default). Airmass falls from 1 at zenith to 0 at the maximum
+// airmass (3 by default). Twilight rises from 0 at solar altitude −12° to 1 at −18°. Moon is one minus
+// the interference. Duration is the capped ratio of available hours to required hours.
+export function observationScoreFactors(input: ObservationScoreInput, options: ObservationScoreOptions = {}): ObservationScoreFactors {
 	const minimumAltitude = options.minimumAltitude ?? 0
 	const goodAltitude = options.goodAltitude ?? GOOD_ALTITUDE
 	const maximumAirmass = options.maximumAirmass ?? MAXIMUM_AIRMASS
-	const factors = [ramp(input.altitude, minimumAltitude, goodAltitude)]
+	const airmass = input.altitude > 0 ? 1 - ramp(input.airmass ?? airmassKastenYoung(Math.min(input.altitude, PIOVERTWO)), 1, maximumAirmass) : 0
+	const required = input.requiredDurationHours
 
-	if (!(input.altitude > 0)) {
-		factors.push(0)
-	} else {
-		const airmass = input.airmass ?? airmassKastenYoung(Math.min(input.altitude, PIOVERTWO))
-		factors.push(1 - ramp(airmass, 1, maximumAirmass))
+	return {
+		altitude: ramp(input.altitude, minimumAltitude, goodAltitude),
+		airmass,
+		twilight: input.sunAltitude !== undefined ? ramp(input.sunAltitude, NAUTICAL_SUN, ASTRONOMICAL_SUN) : undefined,
+		moon: input.moonInterference !== undefined ? 1 - clamp(input.moonInterference, 0, 1) : undefined,
+		duration: input.availableDurationHours !== undefined && required !== undefined ? (required > 0 ? clamp(input.availableDurationHours / required, 0, 1) : 1) : undefined,
 	}
+}
 
-	if (input.sunAltitude !== undefined) factors.push(ramp(input.sunAltitude, NAUTICAL_SUN, ASTRONOMICAL_SUN))
-	if (input.moonInterference !== undefined) factors.push(1 - clamp(input.moonInterference, 0, 1))
-	if (input.availableDurationHours !== undefined && input.requiredDurationHours !== undefined) {
-		factors.push(!(input.requiredDurationHours > 0) ? 1 : clamp(input.availableDurationHours / input.requiredDurationHours, 0, 1))
-	}
-
+// Observing score of one target from altitude, airmass, twilight, lunar interference, and duration.
+// Parameters: input carries the already-reduced quantities. options changes the altitude and airmass
+// ramps and the output scale. The score is the geometric mean of the factors of
+// observationScoreFactors: altitude, airmass, and whichever of twilight, Moon, and duration were
+// supplied. Returns a value in 0..1, or 0..100 when scale is 100.
+export function observationScore(input: ObservationScoreInput, options: ObservationScoreOptions = {}): number {
+	const { altitude, airmass, twilight, moon, duration } = observationScoreFactors(input, options)
+	const factors = [altitude, airmass]
+	if (twilight !== undefined) factors.push(twilight)
+	if (moon !== undefined) factors.push(moon)
+	if (duration !== undefined) factors.push(duration)
 	const score = geometricMeanOf(factors)
 	return options.scale === 100 ? score * 100 : score
 }

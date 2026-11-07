@@ -131,3 +131,20 @@ test('independent constraints find a hidden overlap with provider-local singleto
 	expect(sunScratch).toEqual([Math.cos(0.8), Math.sin(0.8), 0])
 	expect(moonScratch).toEqual([Math.cos(0.4), Math.sin(0.4), 0])
 })
+
+test('a lunar horizon enforces the moon separation only while the moon is above it', () => {
+	const end = timeShift(DAY, 1)
+	const same = () => SIRIUS
+	// The Moon on the target blocks the whole day without a horizon, and only while it is up with one.
+	expect(visibilityWindows(same, SITE, DAY, end, { minimumMoonSeparation: deg(10) }, { moonAt: same })).toEqual([])
+	const conditional = visibilityWindows(same, SITE, DAY, end, { minimumMoonSeparation: deg(10), moonSeparationHorizon: 0 }, { moonAt: same })
+	const up = riseTransitSet(same, SITE, DAY, { horizon: 0 })
+	if (up.rise === undefined || up.set === undefined) throw new Error('expected horizon crossings')
+	const { rise, set } = up
+	const crossings = conditional.flatMap((window) => [window.start, window.end])
+	expect(crossings.some((time) => secondsBetween(time, rise) < 2)).toBe(true)
+	expect(crossings.some((time) => secondsBetween(time, set) < 2)).toBe(true)
+	// A horizon under every lunar altitude enforces the separation always, one above every altitude never.
+	expect(visibilityWindows(same, SITE, DAY, end, { minimumMoonSeparation: deg(10), moonSeparationHorizon: -PIOVERTWO }, { moonAt: same })).toEqual([])
+	expect(visibilityWindows(same, SITE, DAY, end, { minimumMoonSeparation: deg(10), moonSeparationHorizon: PIOVERTWO }, { moonAt: same })).toHaveLength(1)
+})

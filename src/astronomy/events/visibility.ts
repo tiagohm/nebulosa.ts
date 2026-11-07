@@ -9,7 +9,7 @@ import { searchIntervals, type TimeSearchOptions } from './search'
 
 // Intervals in which a target clears a set of observing constraints at once: a minimum altitude, a
 // maximum Kasten–Young airmass, a maximum solar altitude, and minimum angular separations from the
-// Sun and Moon. The target, Sun, and Moon use ICRS-oriented direction callbacks. No origin or
+// Sun and Moon, the lunar one optionally enforced only while the Moon is above a given altitude. The target, Sun, and Moon use ICRS-oriented direction callbacks. No origin or
 // correction-stage transformations are applied: callers choose matching origins and corrections,
 // including topocentric parallax when desired. Each provider may reuse its own borrowed storage.
 // Omitted constraints are not applied. A constraint naming the Sun or Moon without its callback is rejected,
@@ -45,6 +45,11 @@ export interface VisibilityConstraints {
 	// Minimum great-circle target-Moon separation in radians, at the supplied origin/correction stage.
 	// Topocentric parallax is included when supplied by the providers; none is added here.
 	readonly minimumMoonSeparation?: Angle
+	// Geometric lunar altitude, in radians, at and below which minimumMoonSeparation is not enforced: a Moon under
+	// it does not light the sky near the target, so its separation does not matter. Omitted enforces the separation
+	// at every lunar altitude. The altitude comes from the supplied Moon direction, so a topocentric Moon gives a
+	// topocentric altitude. Ignored without minimumMoonSeparation.
+	readonly moonSeparationHorizon?: Angle
 }
 
 // Lowest altitude whose Kasten–Young airmass is at most maximumAirmass. Undefined when no altitude
@@ -88,6 +93,7 @@ export function visibilityWindows(targetAt: PositionOverTime, location: Geograph
 	const maximumSunAltitude = constraints.maximumSunAltitude
 	const minimumMoonSeparation = constraints.minimumMoonSeparation
 	const minimumSunSeparation = constraints.minimumSunSeparation
+	const moonSeparationHorizon = minimumMoonSeparation !== undefined ? constraints.moonSeparationHorizon : undefined
 	const needsTarget = minimumAltitude !== undefined || minimumSunSeparation !== undefined || minimumMoonSeparation !== undefined
 	const needsSun = maximumSunAltitude !== undefined || minimumSunSeparation !== undefined
 	const targetAltitudeLimit = minimumAltitude
@@ -96,6 +102,7 @@ export function visibilityWindows(targetAt: PositionOverTime, location: Geograph
 	let solarAltitude = 0
 	let solarSeparation = 0
 	let lunarSeparation = 0
+	let lunarAltitude = 0
 
 	// All provider calls are centralized here, so each borrowed vector remains valid until
 	// its scalar geometry is computed. Cache only the current epoch, keeping memory bounded.
@@ -109,6 +116,7 @@ export function visibilityWindows(targetAt: PositionOverTime, location: Geograph
 		if (maximumSunAltitude !== undefined && solar !== undefined) solarAltitude = altitudeOf(solar, time, location)
 		if (minimumSunSeparation !== undefined && target !== undefined && solar !== undefined) solarSeparation = separationFrom(target, solar)
 		if (minimumMoonSeparation !== undefined && target !== undefined && lunar !== undefined) lunarSeparation = separationFrom(target, lunar)
+		if (moonSeparationHorizon !== undefined && lunar !== undefined) lunarAltitude = altitudeOf(lunar, time, location)
 		epoch = offset
 	}
 
@@ -128,10 +136,13 @@ export function visibilityWindows(targetAt: PositionOverTime, location: Geograph
 			evaluate(time)
 			return solarSeparation - minimumSunSeparation
 		})
+	// With a lunar horizon the limit holds while either the separation is enough or the Moon is below that
+	// horizon; the larger of the two margins is continuous, so the root finder refines both crossings.
 	if (minimumMoonSeparation !== undefined)
 		margins.push((time) => {
 			evaluate(time)
-			return lunarSeparation - minimumMoonSeparation
+			const separation = lunarSeparation - minimumMoonSeparation
+			return moonSeparationHorizon === undefined ? separation : Math.max(separation, moonSeparationHorizon - lunarAltitude)
 		})
 	return searchIntervals(margins, start, end, sources)
 }
