@@ -183,6 +183,24 @@ export function interpolatedSaturnianEphemeris<E extends SaturnianEphemeris>(sou
 	return interpolatedSatelliteEphemeris(SATURNIAN_SYSTEM, source)
 }
 
+// The Saturnian system with coarse interpolation nodes for ring-only computations, which evaluate only the
+// Sun, the Earth and Saturn. Ring angles need no kilometre-level positions: 3-day Earth nodes (the lunar
+// wobble gives under 10 km), 4-day Saturn nodes (Titan's 16-day reflex wobble of an SPK 699, ~1 km/day⁶,
+// gives ~20 km) and 8-day Sun nodes keep the error below 25 km, about 2e-8 rad at Saturn's distance,
+// while sampling the theories about four times less often than the moon nodes.
+const SATURNIAN_RING_SYSTEM: SatelliteSystem<SaturnianBody, SaturnianMoon> = {
+	...SATURNIAN_SYSTEM,
+	nodeStep: { ...SATURNIAN_SYSTEM.nodeStep, sun: 8, earth: 3, saturn: 4 },
+}
+
+// Builds an interpolating ephemeris for ring-only computations (multi-year ring histories and ring-plane
+// event searches) over `source`, with SATURNIAN_RING_SYSTEM's coarse nodes for the Sun, the Earth and
+// Saturn; positions stay within 25 km of the source. Do not use it for the satellites. See
+// interpolatedSatelliteEphemeris for the caching, provenance and miss behavior.
+export function interpolatedSaturnianRingEphemeris<E extends SaturnianEphemeris>(source: E): SaturnianEphemeris & Pick<E, 'source'> {
+	return interpolatedSatelliteEphemeris(SATURNIAN_RING_SYSTEM, source)
+}
+
 // Whether a kernel set has a segment for every body of `bodies` (by default every Saturnian body; pass
 // SATURNIAN_RING_BODIES for a ring-only computation). This is a necessary condition only: the centers,
 // coverage and segment support are resolved per epoch by stateAt.
