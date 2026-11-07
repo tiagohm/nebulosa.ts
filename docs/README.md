@@ -4295,7 +4295,7 @@ This is the detection layer only: it reports the times, the pair and how central
 
 Each `MutualEvent` has the `kind`, the `front` moon (the nearer one for an occultation, the caster for an eclipse), the `back` moon, the instants of the first contact (`start`), of maximum obscuration (`middle`) and of the last contact (`end`), and the `impactParameter` in `[0, 1)`: the minimum separation divided by the contact limit, zero for a central event and close to one for a grazing one. `start` or `end` is `undefined` when the event is already underway at the start of the window or still underway at its end; the window is padded internally so events that overlap its edges are not lost.
 
-`findGalileanMutualEvents(ephemeris, start, stop, options?)` runs the same Galilean search on any `JovianEphemeris` (see [Jovian Ephemeris Sources](#jovian-ephemeris-sources)), taking the Sun, the Earth and every moon from that one source, so a kernel-backed search never mixes in analytical positions; a `JovianEphemerisMiss` from the source abandons the search. Its window is half-open on the maximum: an event is returned when its `middle` lies in `[start, stop)`, and its contacts are never blanked, even when they fall outside the window. Consecutive windows therefore concatenate without duplicates, and a caller can tell which events reach beyond its own range. A contact is `undefined` only when it lies more than six hours from the maximum, which no real event does.
+`findGalileanMutualEvents(ephemeris, start, stop, options?)` runs the same Galilean search on any `JovianEphemeris` (see [Jovian Ephemeris Sources](#jovian-ephemeris-sources)), taking the Sun, the Earth and every moon from that one source, so a kernel-backed search never mixes in analytical positions; a `JovianEphemerisMiss` from the source abandons the search. Its window is half-open on the maximum: an event is returned when its `middle` lies in `[start, stop)`, and its contacts are never blanked, even when they fall outside the window. Consecutive windows therefore concatenate without duplicates, and a caller can tell which events reach beyond its own range. A contact is `undefined` only when it lies more than six hours from the maximum, which no real event does. `findSaturnianMutualEvents(ephemeris, start, stop, options?)` does the same for the seven Saturnian moons on any `SaturnianEphemeris` (see [Saturnian Ephemeris Sources](#saturnian-ephemeris-sources)), abandoning the search on a `SaturnianEphemerisMiss`.
 
 ```ts
 import { galileanMutualEvents, saturnianMutualEvents } from 'nebulosa/src/astronomy/events/mutual'
@@ -5527,6 +5527,94 @@ console.log(bright.magnitude) // −3.057
 console.log(toDeg(bright.phaseAngle)) // 69.20
 console.log(toKilometer(bright.range)) // 651.76
 console.log(bright.illuminated) // true
+```
+
+### Saturn Ring Geometry
+
+Saturn's rings lie in its equatorial plane, which is tilted about 27° to its orbit, so over Saturn's 29.5-year year the rings swing from wide open to edge-on and back. Twice per Saturnian year the Earth crosses the ring plane and the rings nearly vanish, and the Sun crosses it at Saturn's equinox; the two crossings are different events, often weeks apart, and the Earth may cross three times in one season. `saturnRingGeometry(ephemeris, time)` (`events/saturn.rings.ts`) computes the apparent geometry at an observed geocentric instant from one [Saturnian ephemeris source](#saturnian-ephemeris-sources), evaluating only the Sun, the Earth and Saturn's centre:
+
+- `earthOpening` (B) and `solarOpening` (B′): the Saturnicentric latitudes of the Earth and of the Sun above the ring plane, signed and positive on the north side, in radians;
+- `polePositionAngle` (P): the position angle of the projected north pole from the true celestial north toward the east, in `(−π, π]`;
+- `equatorialRadius` and `polarRadius` of the oblate disk outline, and `ringSemiMajor` and `ringSemiMinor` of the outer edge of the A ring, all apparent angular radii in radians, with `ringSemiMinor = ringSemiMajor·|sin B|`;
+- `illumination`: `'sameFace'` when the Earth and the Sun face the same side of the rings, `'oppositeFaces'` when the Earth sees the unlit side, and `'edgeOn'` within 0.1° of the plane (a display tolerance; crossings are found by root search).
+
+Saturn is light-time retarded and its IAU pole is evaluated at the emission instant; the Sun is retarded for the Sun-to-Saturn light time. B and B′ are planetocentric latitudes: JPL Horizons tabulates planetodetic ones, which differ away from zero but cross zero together. `SATURN_RING_MODEL` (version 1) holds the C, B and A rings and the Cassini Division from the NASA NSSDC fact sheet, in km; the rings are an infinitely thin annulus with no photometry. `SATURN_EQUATORIAL_RADIUS_KM` (60268) and `SATURN_POLAR_RADIUS_KM` (54364) in `nebulosa/src/core/constants` are the IAU 1-bar radii.
+
+`saturnRingEvents(ephemeris, start, stop, options?)` finds the ring-plane events whose instant lies in `[start, stop)`: `'earthPlaneCrossing'` and `'solarPlaneCrossing'` (sign changes of B and B′), `'openingMaximum'` and `'openingMinimum'` (local extrema of B), and `'nearPlaneApproach'`, an extremum of B toward zero within `nearPlaneLimit` (1° by default) that does not cross the plane. Each event carries both openings at its instant. The scan samples every two days and refines with Brent's method, so consecutive windows partition the events without duplicates. The solar crossing is when the sunlight reaching the rings is edge-on; Horizons' sub-solar latitude places the Sun as an observer of Saturn and crosses zero about 80 minutes later. With the analytical source, B agrees with Horizons within 0.001°, P within 0.01° and the Earth crossings within about two minutes. For multi-year windows wrap the source in `interpolatedSaturnianRingEphemeris`.
+
+```ts
+import { analyticalSaturnianEphemeris, interpolatedSaturnianRingEphemeris } from 'nebulosa/src/astronomy/ephemeris/saturnian'
+import { saturnRingEvents, saturnRingGeometry } from 'nebulosa/src/astronomy/events/saturn.rings'
+import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { toDeg } from 'nebulosa/src/math/units/angle'
+
+const rings = saturnRingGeometry(analyticalSaturnianEphemeris, timeYMDHMS(2026, 11, 1, 0, 0, 0, Timescale.UTC))
+console.log(toDeg(rings.earthOpening), toDeg(rings.solarOpening), toDeg(rings.polePositionAngle), rings.illumination) // ~-6.58 ~-8.11 ~3.40 sameFace
+
+const ephemeris = interpolatedSaturnianRingEphemeris(analyticalSaturnianEphemeris)
+for (const event of saturnRingEvents(ephemeris, timeYMDHMS(2038, 1, 1, 0, 0, 0, Timescale.UTC), timeYMDHMS(2040, 1, 1, 0, 0, 0, Timescale.UTC))) {
+	console.log(event.kind, event.time, toDeg(event.earthOpening)) // three Earth crossings and one solar crossing
+}
+```
+
+### Saturnian Ephemeris Sources
+
+A Saturnian computation needs the positions of the Sun, the Earth, Saturn's centre and its seven major moons, Mimas to Iapetus (Hyperion is omitted), and every state of one computation must come from the same source. A `SaturnianEphemeris` (`ephemeris/saturnian.ts`) is that source, with the same contract as a [Jovian ephemeris](#jovian-ephemeris-sources): `position(body, time)` returns the barycentric position of `'sun'`, `'earth'`, `'saturn'` or a moon in AU and ICRF axes, as a fresh vector.
+
+- `analyticalSaturnianEphemeris` uses VSOP87E for the Sun, the Earth and Saturn, and adds the [TASS 1.7](#saturnian-satellite-theory-tass17) Saturnicentric offsets to the VSOP87E Saturn for the moons. It never fails.
+- `spkSaturnianEphemeris(set)` resolves each body through a prepared [SPK kernel set](#spk-state-kernels). Saturn is NAIF 699, the planet's centre, never the system barycenter 6, and the moons are 601-606 and 608; NAIF's SAT kernels chain them through barycenter 6, which is resolved. A body that cannot be resolved throws a `SaturnianEphemerisMiss` with the `target`, the NAIF `body` where resolution stopped, the `reason` and the `time`.
+
+`interpolatedSaturnianEphemeris(source)` interpolates a source for dense searches with daily nodes for the Sun, the Earth and Saturn, 30-minute nodes for Mimas and Enceladus and hourly nodes for the others, within 0.1 km. `interpolatedSaturnianRingEphemeris(source)` interpolates only the Sun, the Earth and Saturn on coarse nodes (within 25 km, about 2e-8 rad of angle), for multi-year [ring geometry](#saturn-ring-geometry). `hasSaturnianTargets(set, bodies?)` tells whether a set has a segment for each body, all ten by default or only `SATURNIAN_RING_BODIES` for a ring-only computation: a planetary kernel that has Saturn's centre, such as NAIF's `sat480.bsp`, is enough for the rings, while the moons need a satellite kernel such as `sat441.bsp`. DE440s has neither 699 nor the moons. `SATURNIAN_RADIUS_KM` and `SATURNIAN_RADIUS_AU` hold the mean radii of the moons.
+
+The Jovian and Saturnian sources are instances of the generic satellite-system ephemeris of `ephemeris/satellites.ts` (`spkSatelliteEphemeris`, `interpolatedSatelliteEphemeris`, `hasSatelliteTargets`, `SatelliteEphemerisMiss`), configured by a `SatelliteSystem` descriptor.
+
+```ts
+import type { SpkKernelSet } from 'nebulosa/src/astronomy/ephemeris/kernels/spk.kernelset'
+import { analyticalSaturnianEphemeris, hasSaturnianTargets, SATURNIAN_RING_BODIES, SaturnianEphemerisMiss, spkSaturnianEphemeris } from 'nebulosa/src/astronomy/ephemeris/saturnian'
+import { saturnRingGeometry } from 'nebulosa/src/astronomy/events/saturn.rings'
+import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+
+declare const set: SpkKernelSet // prepared with prepareSpkKernelSet from sat480.bsp
+
+const time = timeYMDHMS(2026, 11, 1, 0, 0, 0, Timescale.UTC)
+let rings
+
+try {
+	// The rings need only the Sun, the Earth and Saturn's centre...
+	rings = saturnRingGeometry(hasSaturnianTargets(set, SATURNIAN_RING_BODIES) ? spkSaturnianEphemeris(set) : analyticalSaturnianEphemeris, time)
+} catch (e) {
+	if (!(e instanceof SaturnianEphemerisMiss)) throw e
+	// ...and after a miss the whole computation is redone from the theories.
+	rings = saturnRingGeometry(analyticalSaturnianEphemeris, time)
+}
+```
+
+### Saturnian Satellite Geometry
+
+`saturnianView(ephemeris, time, moons?)` (`events/saturn.geometry.ts`) returns the [ring geometry](#saturn-ring-geometry) of an observed geocentric instant together with each requested moon (all seven by default), from one state and one [Saturnian ephemeris source](#saturnian-ephemeris-sources):
+
+- `east`, `north` and `depth` (positive toward the Earth) from Saturn's apparent centre, and the apparent `radius`, all in Saturn equatorial radii;
+- `separation` from Saturn's centre and `positionAngle` (from the true celestial north toward the east), in radians;
+- `diskClearance` and `ringClearance`: the signed angular distances of the moon's limb from Saturn's oblate limb and from the outer edge of the A ring, negative when they overlap;
+- `ringOverlap`: `'none'`, `'front'` when the moon is over the projected ring annulus but nearer the Earth than the ring plane there, or `'behind'` when the rings may hide it (also when the moon reaches the ring plane or the rings are edge-on);
+- `disk` (`'clear'`, `'transit'`, `'occulted'`), `eclipse` (`'none'`, `'penumbra'`, `'umbra'`) and, when the shadow axis meets the globe, the `shadow` centre.
+
+The disk, shadow and eclipse geometry is the generic oblate-planet geometry shared with [Jovian Satellite Geometry](#jovian-satellite-geometry) (`events/satellites.geometry.ts`) with Saturn's IAU radii and pole. A ring overlap is only geometric: the rings have no optical depth in this model, and their shadows and the moons' shadows on the rings are not modeled. With the analytical source the offsets agree with JPL Horizons within 0.1″ (0.25″ for Iapetus). `saturnianMoonView(ephemeris, state, basis, moon)` computes one moon from a shared state and sky basis, for tracks.
+
+`saturnianSeparationMaxima(ephemeris, start, stop, moons?)` finds the local maxima of each moon's angular separation from Saturn in `[start, stop)`, two per orbit, with the `separation` and `positionAngle` at each. They are maxima of the separation itself, not of an east-west coordinate, which differ for the inclined orbit of Iapetus; a window shorter than half an orbit of a slow moon may hold none, and a window edge is never reported.
+
+```ts
+import { analyticalSaturnianEphemeris, interpolatedSaturnianEphemeris } from 'nebulosa/src/astronomy/ephemeris/saturnian'
+import { saturnianSeparationMaxima, saturnianView } from 'nebulosa/src/astronomy/events/saturn.geometry'
+import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { toDeg } from 'nebulosa/src/math/units/angle'
+
+const view = saturnianView(analyticalSaturnianEphemeris, timeYMDHMS(2026, 11, 1, 0, 0, 0, Timescale.UTC))
+for (const moon of view.moons) console.log(moon.moon, (toDeg(moon.separation) * 3600).toFixed(1), moon.disk, moon.ringOverlap)
+
+const ephemeris = interpolatedSaturnianEphemeris(analyticalSaturnianEphemeris)
+const maxima = saturnianSeparationMaxima(ephemeris, timeYMDHMS(2026, 11, 1, 0, 0, 0, Timescale.UTC), timeYMDHMS(2026, 12, 1, 0, 0, 0, Timescale.UTC), ['titan', 'iapetus'])
+for (const maximum of maxima) console.log(maximum.moon, maximum.time, toDeg(maximum.separation) * 3600) // Iapetus ~567″ on 2026-11-10
 ```
 
 ### Saturnian Satellite Theory (TASS1.7)
