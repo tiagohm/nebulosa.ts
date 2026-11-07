@@ -2272,3 +2272,250 @@ describe('frame writers', () => {
 		}
 	})
 })
+
+describe('suspension', () => {
+	let reservations = 0
+
+	function reservation() {
+		const reserved = arbiter.reserve({ id: `flip-${++reservations}`, kind: 'meridianFlip' }, [])
+		if (!reserved.ok) throw new Error('reservation refused')
+		return reserved.reservation
+	}
+
+	async function suspended(handle: ReturnType<CameraCapturer['start']>, lent: ReturnType<typeof reservation>, signal = new AbortController().signal) {
+		const result = await handle.suspend(lent, signal)
+		if (!result.ok) throw new Error(`suspension refused: ${result.reason}`)
+		return result.suspension
+	}
+
+	test('pauses after the frame in flight, lends the camera to the reservation, and resumes the same session', async () => {
+		const camera = await connected()
+		const lent = reservation()
+		const events = recorder()
+		const handle = capturer.start(coordinator, camera, request({ exposureMode: 'loop' }), { listener: events.listener, suspendable: true })
+
+		try {
+			await handle.started
+			const suspension = await suspended(handle, lent)
+
+			// The frame in flight finished and the camera is idle in the reservation, nobody leasing it.
+			expect(suspension.generation).toBeGreaterThanOrEqual(1)
+			expect(events.paths).toHaveLength(suspension.generation)
+			expect(events.states.at(-1)).toBe('paused')
+			expect(arbiter.snapshot(keyOf(camera))).toMatchObject({ availability: 'reserved', reservationOwner: { id: lent.ownerId } })
+
+			// A manual capture is refused; one under the reservation takes its frame and the paused session sees none of it.
+			expect(await capturer.start(coordinator, camera, request()).result).toMatchObject({ ok: false, reason: 'busy' })
+			const seen = events.records.length
+			const borrowed = await capturer.start(coordinator.reservedScope(lent), camera, request()).result
+			expect(borrowed).toMatchObject({ ok: true, value: { frameCount: 1 } })
+			expect(events.records).toHaveLength(seen)
+
+			expect(suspension.resume()).toEqual(successfulOperationResult(undefined))
+			await waitUntil(() => events.paths.length > suspension.generation, 5000, 10)
+			handle.stop()
+
+			const result = await handle.result
+			expect(result.ok).toBeTrue()
+			const frames = result.ok ? result.value.frames : []
+			expect(frames.map((frame) => frame.generation)).toEqual(frames.map((_, index) => index + 1))
+			expect(new Set(frames.map((frame) => frame.session)).size).toBe(1)
+			expect(arbiter.availability(keyOf(camera))).toBe('reserved')
+		} finally {
+			await handle.cancel()
+			lent.release()
+		}
+	})
+
+	test('ends a running inter-frame delay at once when a pause is requested', async () => {
+		const camera = await connected()
+		const lent = reservation()
+		const events = recorder()
+		const handle = capturer.start(coordinator, camera, request({ exposureMode: 'loop', delay: 10 }), { listener: events.listener, suspendable: true })
+
+		try {
+			await waitUntil(() => events.states.includes('waiting'), 5000, 10)
+			const requested = performance.now()
+			const suspension = await suspended(handle, lent)
+
+			expect(performance.now() - requested).toBeLessThan(2000)
+			expect(suspension.generation).toBe(1)
+		} finally {
+			await handle.cancel()
+			lent.release()
+		}
+	})
+
+	test('takes effect after a gate that was already running and runs the gate again for the same frame', async () => {
+		const camera = await connected()
+		const lent = reservation()
+		const gate = Promise.withResolvers<undefined>()
+		const gated: number[] = []
+		const handle = capturer.start(coordinator, camera, request({ exposureMode: 'fixed', count: 2 }), {
+			suspendable: true,
+			beforeFrame: ({ generation }) => {
+				gated.push(generation)
+				return generation === 2 && gated.length === 2 ? gate.promise : Promise.resolve(undefined)
+			},
+		})
+
+		try {
+			await waitUntil(() => gated.length === 2, 5000, 10)
+			const pending = handle.suspend(lent, new AbortController().signal)
+			gate.resolve(undefined)
+			const result = await pending
+			expect(result.ok).toBeTrue()
+			if (!result.ok) return
+
+			expect(result.suspension.generation).toBe(1)
+			expect(result.suspension.resume().ok).toBeTrue()
+			expect(await handle.result).toMatchObject({ ok: true, value: { frameCount: 2 } })
+			expect(gated).toEqual([1, 2, 2])
+		} finally {
+			lent.release()
+		}
+	})
+
+	test('ends successfully on a stop while paused without commanding the lent camera', async () => {
+		const camera = await connected()
+		const lent = reservation()
+		const handle = capturer.start(coordinator, camera, request({ exposureMode: 'loop' }), { suspendable: true })
+		await handle.started
+		const suspension = await suspended(handle, lent)
+		const stopExposure = spyOn(cameraManager, 'stopExposure')
+		const disableBlob = spyOn(cameraManager, 'disableBlob')
+
+		try {
+			handle.stop()
+			expect(await handle.result).toMatchObject({ ok: true, value: { frameCount: suspension.generation } })
+			expect(stopExposure).not.toHaveBeenCalled()
+			expect(disableBlob).not.toHaveBeenCalled()
+			expect(arbiter.snapshot(keyOf(camera))).toMatchObject({ availability: 'reserved', causes: [] })
+			expect(suspension.reclaim().ok).toBeFalse()
+			expect(await suspension.ended).toMatchObject({ ok: true })
+		} finally {
+			stopExposure.mockRestore()
+			disableBlob.mockRestore()
+			lent.release()
+		}
+	})
+
+	test('fails as aborted when cancelled while paused, leaving the camera unquarantined', async () => {
+		const camera = await connected()
+		const lent = reservation()
+		const handle = capturer.start(coordinator, camera, request({ exposureMode: 'loop' }), { suspendable: true })
+
+		try {
+			await handle.started
+			await suspended(handle, lent)
+			await handle.cancel()
+
+			expect(await handle.result).toMatchObject({ ok: false, reason: 'aborted' })
+			expect(arbiter.snapshot(keyOf(camera)).causes).toEqual([])
+		} finally {
+			lent.release()
+		}
+	})
+
+	test('ends as disconnected when the camera goes away while paused', async () => {
+		const camera = await connected()
+		const lent = reservation()
+		const handle = capturer.start(coordinator, camera, request({ exposureMode: 'loop' }), { suspendable: true })
+
+		try {
+			await handle.started
+			await suspended(handle, lent)
+			cameraManager.disconnect(camera)
+
+			expect(await handle.result).toMatchObject({ ok: false, reason: 'disconnected' })
+		} finally {
+			lent.release()
+		}
+	})
+
+	test('refuses to take the camera back while a borrower holds it', async () => {
+		const camera = await connected()
+		const lent = reservation()
+		const handle = capturer.start(coordinator, camera, request({ exposureMode: 'loop' }), { suspendable: true })
+
+		try {
+			await handle.started
+			const suspension = await suspended(handle, lent)
+			const borrowed = capturer.start(coordinator.reservedScope(lent), camera, request({ exposureTime: 500 }))
+
+			await borrowed.started
+			expect(suspension.resume()).toMatchObject({ ok: false, reason: 'busy' })
+			expect(await borrowed.result).toMatchObject({ ok: true })
+			expect(suspension.reclaim().ok).toBeTrue()
+			expect(arbiter.availability(keyOf(camera))).toBe('leased')
+			expect(suspension.resume().ok).toBeTrue()
+		} finally {
+			await handle.cancel()
+			lent.release()
+		}
+	})
+
+	test('answers ended when the last frame completes before the boundary', async () => {
+		const camera = await connected()
+		const lent = reservation()
+		const handle = capturer.start(coordinator, camera, request({ exposureMode: 'fixed', count: 1 }), { suspendable: true })
+
+		try {
+			await handle.started
+			expect(await handle.suspend(lent, new AbortController().signal)).toEqual({ ok: false, reason: 'ended' })
+			expect(await handle.result).toMatchObject({ ok: true, value: { frameCount: 1 } })
+		} finally {
+			lent.release()
+		}
+	})
+
+	test('withdraws a request whose signal aborts before the boundary and goes on capturing', async () => {
+		const camera = await connected()
+		const lent = reservation()
+		const events = recorder()
+		const handle = capturer.start(coordinator, camera, request({ exposureMode: 'fixed', count: 3 }), { listener: events.listener, suspendable: true })
+		const withdraw = new AbortController()
+
+		try {
+			await handle.started
+			const pending = handle.suspend(lent, withdraw.signal)
+			withdraw.abort()
+
+			expect(await pending).toEqual({ ok: false, reason: 'withdrawn' })
+			expect(await handle.result).toMatchObject({ ok: true, value: { frameCount: 3 } })
+			expect(events.states).not.toContain('paused')
+		} finally {
+			lent.release()
+		}
+	})
+
+	test('refuses a capture that is not suspendable, nested in a feature, or already asked', async () => {
+		const camera = await connected()
+		const lent = reservation()
+		const plain = capturer.start(coordinator, camera, request({ exposureMode: 'loop' }))
+
+		try {
+			expect(await plain.suspend(lent, new AbortController().signal)).toEqual({ ok: false, reason: 'unsupported' })
+			await plain.cancel()
+
+			const feature = coordinator.start('feature', [{ key: keyOf(camera), device: camera }], async (context) => {
+				const nested = capturer.start(context, camera, request({ exposureMode: 'loop' }), { suspendable: true })
+				await nested.started
+				const refused = await nested.suspend(lent, new AbortController().signal)
+				await nested.cancel()
+				return successfulOperationResult(refused)
+			})
+
+			expect(await feature.result).toMatchObject({ ok: true, value: { ok: false, reason: 'busy' } })
+
+			const suspendable = capturer.start(coordinator, camera, request({ exposureMode: 'loop' }), { suspendable: true })
+			await suspendable.started
+			const first = suspendable.suspend(lent, new AbortController().signal)
+			expect(await suspendable.suspend(lent, new AbortController().signal)).toMatchObject({ ok: false, reason: 'busy' })
+			expect((await first).ok).toBeTrue()
+			await suspendable.cancel()
+		} finally {
+			lent.release()
+		}
+	})
+})

@@ -733,7 +733,14 @@ describe('on the simulator rig', () => {
 		expect(isFits(readFileSync(join(directory, 'kept.1.fit')))).toBeTrue()
 		rmSync(join(directory, 'kept.1.fit'))
 
-		const failing = spyOn(rig.capturer, 'start').mockImplementation(() => ({ id: 'refused', started: Promise.resolve(failedOperationResult('busy')), result: Promise.resolve(failedOperationResult('busy')), cancel: () => Promise.resolve(), stop: () => {} }))
+		const failing = spyOn(rig.capturer, 'start').mockImplementation(() => ({
+			id: 'refused',
+			started: Promise.resolve(failedOperationResult('busy')),
+			result: Promise.resolve(failedOperationResult('busy')),
+			cancel: () => Promise.resolve(),
+			stop: () => {},
+			suspend: () => Promise.resolve({ ok: false, reason: 'unsupported' }),
+		}))
 		const refused = await centerTarget(rig.coordinator, mount, camera, rigTarget(), OPTIONS_RIG, servicesOf(fileSolver(calls), 'refused'))
 		failing.mockRestore()
 		expect(refused).toMatchObject({ ok: false, reason: 'busy' })

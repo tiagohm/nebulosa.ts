@@ -9,7 +9,7 @@ import type { DeviceHandler, DeviceProvider } from '../../devices/indi/manager/d
 import type { BlobEncoding, PropertyState } from '../../devices/indi/types'
 import { type FailedOperationResult, failedOperationResult, type OperationContext, type OperationFailureReason, type OperationResult, type OperationScope, successfulOperationResult } from '../../devices/orchestration/operation'
 import { abortableDelay, abortReason } from '../../devices/orchestration/operation.wait'
-import { type ResourceArbiter, resourceKey } from '../../devices/orchestration/resource'
+import { type ResourceArbiter, type ResourceKey, resourceKey, type ResourceReservation } from '../../devices/orchestration/resource'
 import { base64Source, bufferSource } from '../../io/io'
 import { directoryExists, isPathSegment } from '../../io/path'
 import { type CameraCaptureListener, CameraCaptureReporter } from './reporter'
@@ -27,6 +27,14 @@ import { type CameraAutoSubFolderMode, type CameraCaptureClock, type CameraCaptu
 // never an existing file. Exposure progress is in microseconds, timeouts in milliseconds, the inter-frame delay
 // in seconds, frame instants in milliseconds of the capture clock, and frame paths are absolute or relative to
 // the configured captures directory.
+//
+// A capture started `suspendable` can also be paused between two frames and lend its camera to the holder of a
+// reservation, then take it back and go on with the same session, counters and frame names (see
+// `CameraCaptureHandle.suspend`). Such a capture holds a logical key standing for the camera for its whole life
+// and the camera itself in a child scope that ends while it is paused.
+
+// Prefix of the logical key a suspendable capture holds for its whole life, followed by the camera key.
+const CAPTURE_KEY_PREFIX = 'logical:camera-capture:'
 
 // Minimum inter-frame delay that publishes waiting progress, in microseconds. Shorter delays are waited silently.
 const MINIMUM_WAITING_TIME = 1000000
@@ -66,6 +74,50 @@ export interface CameraCaptureHandle {
 	// inter-frame delay ends at once, and no further exposure starts. The result succeeds with the
 	// frames processed so far. Idempotent, and a no-op once the capture ended; `result` reports the end.
 	readonly stop: VoidFunction
+	// Asks a `suspendable` capture to pause at its next frame boundary and lend its camera to `reservation`. The
+	// camera joins the reservation at once, with this capture as its guest, so nobody else can take it from then
+	// on; the pause takes effect only once the frame in flight was exposed, received, written and the camera is
+	// idle, before the next frame's gate (and so before a dither the gate would run), and a running inter-frame
+	// delay ends at once. It resolves with the suspension once the camera lease was released into the
+	// reservation, `ended` when the capture ended first, `withdrawn` when `signal` aborted first or the
+	// reservation no longer holds the camera at the boundary (the capture then goes on and the camera stays in the
+	// reservation until it is released), `busy` for a second request or a camera the reservation cannot take,
+	// `unsupported` for a capture that is not suspendable, and `unexpectedState` when the camera did not become
+	// idle at the boundary. Never rejects.
+	readonly suspend: (reservation: ResourceReservation, signal: AbortSignal) => Promise<CameraCaptureSuspendResult>
+}
+
+// Why a suspension request did not pause the capture (see `CameraCaptureHandle.suspend`).
+export type CameraCaptureSuspendRefusal = 'ended' | 'busy' | 'withdrawn' | 'unsupported' | 'unexpectedState'
+
+// Refused or abandoned suspension request, with the reason and a detail meant for people.
+export interface CameraCaptureSuspendFailure {
+	readonly ok: false
+	// Why the capture was not paused.
+	readonly reason: CameraCaptureSuspendRefusal
+	// Detail of the refusal meant for people.
+	readonly error?: string
+}
+
+// Outcome of `CameraCaptureHandle.suspend`.
+export type CameraCaptureSuspendResult = { readonly ok: true; readonly suspension: CameraCaptureSuspension } | CameraCaptureSuspendFailure
+
+// A capture paused at a frame boundary, its camera lent to the reservation that asked for it. The capture stays
+// stoppable and cancellable while paused, and then sends no command to the camera, which it no longer holds.
+export interface CameraCaptureSuspension {
+	// Generation of the last frame dispatched before the pause; the next frame opens `generation + 1`.
+	readonly generation: number
+	// Takes the camera back, still paused: the capture leases it again as the guest of the reservation, routes its
+	// callbacks to itself again and tells the driver which devices to stamp into its headers, since a borrower may
+	// have changed them. Synchronous, so nothing can come between the borrower's end and the take-back. Fails
+	// `busy` while a borrower still leases the camera or it is unavailable (such as quarantined), and as the
+	// capture's end once it ended. Repeated calls after a success do nothing.
+	readonly reclaim: () => OperationResult<void>
+	// Takes the camera back if needed and lets the capture go on with its next frame, whose gate runs again.
+	// Single-use: a later call does nothing and succeeds. Fails like `reclaim`, and then the capture stays paused.
+	readonly resume: () => OperationResult<void>
+	// Resolves with the capture's result once it ended; never rejects.
+	readonly ended: Promise<OperationResult<CameraCaptureResult>>
 }
 
 // Device lookups used to resolve the devices a request names for the driver to stamp into frame headers.
@@ -160,6 +212,10 @@ export interface CameraCaptureHooks {
 	// `outputPath` and `outputName`, nor for frames that are not saved. A path that already exists fails the
 	// capture instead of being overwritten.
 	readonly framePath?: (frame: CameraFramePathRequest) => string | Promise<string>
+	// Whether the capture may be paused between two frames to lend its camera (see `CameraCaptureHandle.suspend`).
+	// Only a capture that opens its own operation tree can be: one nested in a feature's tree cannot lend a camera
+	// its ancestors also hold, and its suspension requests are refused as busy.
+	readonly suspendable?: boolean
 }
 
 // Frame whose destination a `framePath` resolver is asked for.
@@ -185,6 +241,16 @@ interface CameraAvailability {
 	readonly markUnavailable: VoidFunction
 	// Blocks the camera until its outstanding BLOB is observed and discarded.
 	readonly quarantine: VoidFunction
+	// Returns the owner of the reservation currently covering the camera, when one does.
+	readonly reservationOwner: () => ResourceReservation['token']['owner'] | undefined
+}
+
+// Routing of device callbacks to a session, which a paused session gives up while a borrower uses its camera.
+interface CameraCaptureRouting {
+	// Routes the camera's callbacks to the session again.
+	readonly attach: VoidFunction
+	// Stops routing the camera's callbacks to the session, if they still are.
+	readonly detach: VoidFunction
 }
 
 // Collaborators a session needs beyond its context, camera, and request.
@@ -209,6 +275,34 @@ interface CameraCaptureSessionContext {
 	readonly settleStarted: (result: OperationResult<void>) => void
 	// Applies availability transitions to the owned camera.
 	readonly availability: CameraAvailability
+	// Routing of the camera's callbacks to the session.
+	readonly routing: CameraCaptureRouting
+	// Physical camera hold of a suspendable capture, absent for one that holds the camera in its root scope.
+	readonly hold?: CameraCaptureHold
+}
+
+// Child scope of a suspendable capture that holds the physical camera; the root holds only the logical key.
+interface CameraCaptureHold {
+	// Whether the camera is currently held.
+	readonly holding: () => boolean
+	// Starts a new hold synchronously, failing `busy` when the camera cannot be acquired now.
+	readonly open: () => OperationResult<void>
+	// Ends the current hold and resolves once its lease was released; resolves at once when none is held.
+	readonly close: () => Promise<void>
+}
+
+// Pending or effective request to pause a suspendable capture.
+interface SuspensionRequest {
+	// Reservation the camera is lent to.
+	readonly reservation: ResourceReservation
+	// Settles the request exactly once: with the suspension when no refusal is given, else with the refusal.
+	readonly settle: (refusal?: CameraCaptureSuspendFailure) => void
+	// Resolves when the paused capture may go on.
+	readonly resumed: PromiseWithResolvers<void>
+	// Whether the suspension took effect.
+	effective: boolean
+	// Whether resume() was called.
+	resumeRequested: boolean
 }
 
 // Independent rendezvous for one exposure generation.
@@ -298,7 +392,7 @@ export class CameraCapturer implements DeviceHandler<Camera>, Disposable {
 	// composite feature passes its own context so the capture nests inside the operation already owning the
 	// camera; the coordinator starts a new operation tree. The hooks belong to this capture only: its writer is
 	// `hooks.write`, else `options.write`, else `writeFrameExclusively`.
-	start(scope: OperationScope, camera: Camera, request: CameraCaptureStart, { listener = () => {}, rejectedListener = listener, beforeFrame, beforeExposure, write, clock = SYSTEM_CAMERA_CAPTURE_CLOCK, framePath }: CameraCaptureHooks = {}): CameraCaptureHandle {
+	start(scope: OperationScope, camera: Camera, request: CameraCaptureStart, { listener = () => {}, rejectedListener = listener, beforeFrame, beforeExposure, write, clock = SYSTEM_CAMERA_CAPTURE_CLOCK, framePath, suspendable = false }: CameraCaptureHooks = {}): CameraCaptureHandle {
 		const key = resourceKey(camera)
 		const started = Promise.withResolvers<OperationResult<void>>()
 		let session: CameraCaptureSession | undefined
@@ -313,8 +407,20 @@ export class CameraCapturer implements DeviceHandler<Camera>, Disposable {
 		}
 
 		const frameWriter = write ?? this.options.write ?? writeFrameExclusively
+		// A suspendable capture holds a logical key standing for the camera, which follows its lifecycle, so a
+		// disconnect still reaches it while the camera itself is lent; the camera is held by a child scope.
+		const resources = suspendable ? [{ key: CAPTURE_KEY_PREFIX + key, device: camera, capability: key }] : [{ key, device: camera }]
 
-		const operation = scope.start<CameraCaptureResult>('cameraCapture', [{ key, device: camera }], (context) => {
+		const operation = scope.start<CameraCaptureResult>('cameraCapture', resources, async (context) => {
+			const routing: CameraCaptureRouting = {
+				attach: () => this.#sessions.set(key, current),
+				detach: () => {
+					if (this.#sessions.get(key) === current) this.#sessions.delete(key)
+				},
+			}
+
+			const hold = suspendable ? cameraHold(context, key, camera) : undefined
+
 			const current = new CameraCaptureSession(context, camera, structuredClone(request), {
 				cameraManager: this.cameraManager,
 				options: this.options,
@@ -328,19 +434,36 @@ export class CameraCapturer implements DeviceHandler<Camera>, Disposable {
 				availability: {
 					markUnavailable: () => this.arbiter.markUnavailable({ key, device: camera }),
 					quarantine: () => this.#quarantine(camera, key),
+					reservationOwner: () => this.arbiter.reservationOwnerOf(key),
 				},
+				routing,
+				hold,
 			})
 
 			session = current
-			this.#sessions.set(key, current)
+			routing.attach()
 			if (stopRequested) current.stop()
 
 			context.onCleanup(async () => {
 				await current.cleanup()
-				if (this.#sessions.get(key) === current) this.#sessions.delete(key)
+				routing.detach()
 			})
 
-			return current.run()
+			if (hold === undefined) return await current.run()
+
+			// The camera is acquired before anything else, so a camera someone else holds refuses the capture.
+			const opened = hold.open()
+			if (!opened.ok) return opened
+
+			// The camera lease must outlive the quiescence and BLOB drain of cleanup, exactly as the root lease of a
+			// capture that is not suspendable does, so the hold ends only after it.
+			try {
+				return await current.run()
+			} finally {
+				current.settleSuspension({ ok: false, reason: 'ended' })
+				await current.cleanup()
+				await hold.close()
+			}
 		})
 
 		// The session records its own expected cleanup failures, which the coordinator cannot see.
@@ -370,6 +493,11 @@ export class CameraCapturer implements DeviceHandler<Camera>, Disposable {
 			stop: () => {
 				stopRequested = true
 				session?.stop()
+			},
+			suspend: (reservation: ResourceReservation, signal: AbortSignal): Promise<CameraCaptureSuspendResult> => {
+				if (!suspendable) return Promise.resolve({ ok: false, reason: 'unsupported' })
+				if (session === undefined) return Promise.resolve({ ok: false, reason: 'ended' })
+				return session.suspend(reservation, signal, result)
 			},
 		})
 	}
@@ -472,6 +600,10 @@ class CameraCaptureSession {
 	#abortIdleObserved = false
 	// Expected cleanup failure folded into the session result instead of thrown.
 	#cleanupFailure?: FailedOperationResult
+	// Pending or effective pause request, absent when none was made or the last one ended.
+	#suspension?: SuspensionRequest
+	// Aborted by a pause request to end the running inter-frame delay, absent outside a delay.
+	#delayController?: AbortController
 
 	// Creates a session bound to one operation context and physical camera over a request it now owns.
 	constructor(
@@ -515,9 +647,18 @@ class CameraCaptureSession {
 			// surfaces here.
 			if (this.#failureResult !== undefined) return this.#finish(this.#failureResult)
 
+			// A pause takes effect here, at the boundary between two frames and before the next frame's gate.
+			const paused = await this.#checkpoint()
+			if (!paused.ok) return this.#finish(paused)
+			if (this.#stopController.signal.aborted) break
+
 			const gated = await this.#beforeFrame()
 			if (!gated.ok) return this.#finish(gated)
 			if (this.#stopController.signal.aborted) break
+
+			// A pause requested while the gate ran takes effect now; the gate runs again for the same frame after it,
+			// since whatever it waited for may no longer hold once the camera comes back.
+			if (this.#suspension !== undefined && !this.#suspension.effective) continue
 
 			const frame = await this.#captureFrame()
 			if (!frame.ok) return this.#finish(frame)
@@ -542,6 +683,59 @@ class CameraCaptureSession {
 	// Ends the session after the exposure in flight, interrupting a running delay. Idempotent.
 	stop() {
 		this.#stopController.abort()
+	}
+
+	// Records a request to pause at the next frame boundary and lend the camera to `reservation`, which takes the
+	// camera at once with this capture's root context as its guest (see `CameraCaptureHandle.suspend`). `ended` is
+	// the capture's result, handed to the suspension.
+	suspend(reservation: ResourceReservation, signal: AbortSignal, ended: Promise<OperationResult<CameraCaptureResult>>): Promise<CameraCaptureSuspendResult> {
+		if (this.#terminal) return Promise.resolve({ ok: false, reason: 'ended' })
+		if (this.#suspension !== undefined) return Promise.resolve({ ok: false, reason: 'busy', error: 'the capture already has a suspension request' })
+
+		const extended = reservation.extend([{ key: resourceKey(this.camera), device: this.camera, guest: this.operationContext }])
+
+		if (!extended.ok) {
+			const error = extended.conflicts.map((conflict) => `${conflict.key} is held by ${conflict.ownerKind} ${conflict.ownerId}`).join('; ')
+			return Promise.resolve({ ok: false, reason: 'busy', error })
+		}
+
+		const done = Promise.withResolvers<CameraCaptureSuspendResult>()
+		let settled = false
+
+		const onAbort = () => {
+			if (this.#suspension !== request || request.effective) return
+			this.#suspension = undefined
+			request.settle({ ok: false, reason: 'withdrawn' })
+		}
+
+		const request: SuspensionRequest = {
+			reservation,
+			resumed: Promise.withResolvers(),
+			effective: false,
+			resumeRequested: false,
+			settle: (refusal) => {
+				if (settled) return
+				settled = true
+				signal.removeEventListener('abort', onAbort)
+				done.resolve(refusal ?? { ok: true, suspension: this.#suspensionOf(request, ended) })
+			},
+		}
+
+		this.#suspension = request
+		this.#delayController?.abort()
+
+		if (signal.aborted) onAbort()
+		else signal.addEventListener('abort', onAbort, { once: true })
+
+		return done.promise
+	}
+
+	// Settles a pause request that never took effect, as the capture ends without reaching a boundary.
+	settleSuspension(result: CameraCaptureSuspendFailure) {
+		const request = this.#suspension
+		if (request === undefined || request.effective) return
+		this.#suspension = undefined
+		request.settle(result)
 	}
 
 	// Applies camera progress and terminal property updates to the current generation.
@@ -635,7 +829,8 @@ class CameraCaptureSession {
 		this.#terminal = true
 		if (this.#attempt !== undefined) this.#attempt.terminal = true
 
-		const canCommand = this.#deviceUnavailableReason === undefined && this.camera.connected
+		// A paused capture lent its camera, so the borrower, not this session, decides what the camera does.
+		const canCommand = this.#deviceUnavailableReason === undefined && this.camera.connected && (this.sessionContext.hold?.holding() ?? true)
 		const exposureMayBeActive = this.#attempt?.dispatched === true && this.#attempt.exposureState === undefined
 		let quiescent = true
 
@@ -699,6 +894,8 @@ class CameraCaptureSession {
 		if (this.operationContext.signal.aborted) return failedOperationResult(abortReason(this.operationContext.signal))
 		// Resolving the path is the last wait before dispatch, so a stop that arrived meanwhile takes no frame.
 		if (this.#stopController.signal.aborted) return successfulOperationResult(undefined)
+		// Last check before the camera is commanded: a suspendable capture only exposes while it holds its camera.
+		if (this.sessionContext.hold?.holding() === false) return failedOperationResult('unexpectedState', 'the capture does not hold its camera')
 
 		// The rendezvous exists before the frame is prepared, because the attempt has to be routable the moment the
 		// exposure is dispatched, which may deliver its updates synchronously.
@@ -813,6 +1010,98 @@ class CameraCaptureSession {
 
 		if (this.#failureResult !== undefined) return this.#failureResult
 		if (this.operationContext.signal.aborted) return failedOperationResult(abortReason(this.operationContext.signal))
+		return successfulOperationResult(undefined)
+	}
+
+	// Pauses the capture when a pause request is pending, which only happens at a frame boundary: the frame in
+	// flight was exposed, received and written, and the camera is idle or becomes so within the quiesce timeout.
+	// Hands the camera to the requesting reservation and waits for resume(), a stop (which ends the capture
+	// successfully), a cancellation or a device failure. Returns at once when nothing is pending; a request that
+	// cannot take effect is refused and the capture goes on.
+	async #checkpoint(): Promise<OperationResult<void>> {
+		const request = this.#suspension
+		const hold = this.sessionContext.hold
+		if (request === undefined || request.effective || hold === undefined) return successfulOperationResult(undefined)
+
+		if (this.camera.exposuring || this.camera.exposure.state === 'Busy') {
+			const quiescent = await this.#waitForQuiescence()
+
+			if (!quiescent) {
+				if (this.#suspension === request) this.#suspension = undefined
+				request.settle({ ok: false, reason: 'unexpectedState', error: 'the camera did not become idle at the frame boundary' })
+				return successfulOperationResult(undefined)
+			}
+		}
+
+		// Withdrawn while the camera was quiescing.
+		if (this.#suspension !== request) return successfulOperationResult(undefined)
+
+		if (this.sessionContext.availability.reservationOwner() !== request.reservation.token.owner) {
+			this.#suspension = undefined
+			request.settle({ ok: false, reason: 'withdrawn', error: 'the reservation no longer holds the camera' })
+			return successfulOperationResult(undefined)
+		}
+
+		request.effective = true
+		this.sessionContext.routing.detach()
+		this.#reporter.setState('paused')
+		await hold.close()
+		request.settle()
+
+		const signal = AbortSignal.any([this.operationContext.signal, this.#failureController.signal, this.#stopController.signal])
+
+		if (!signal.aborted) {
+			const aborted = Promise.withResolvers<void>()
+			const onAbort = () => aborted.resolve()
+			signal.addEventListener('abort', onAbort, { once: true })
+
+			try {
+				await Promise.race([request.resumed.promise, aborted.promise])
+			} finally {
+				signal.removeEventListener('abort', onAbort)
+			}
+		}
+
+		if (this.#suspension === request) this.#suspension = undefined
+		if (this.#failureResult !== undefined) return this.#failureResult
+		if (this.operationContext.signal.aborted) return failedOperationResult(abortReason(this.operationContext.signal))
+		return successfulOperationResult(undefined)
+	}
+
+	// Builds the public view of an effective pause. `ended` is the capture's result.
+	#suspensionOf(request: SuspensionRequest, ended: Promise<OperationResult<CameraCaptureResult>>): CameraCaptureSuspension {
+		return Object.freeze({
+			generation: this.#reporter.generation,
+			reclaim: () => this.#reclaim(),
+			resume: () => {
+				if (request.resumeRequested) return successfulOperationResult(undefined)
+				const reclaimed = this.#reclaim()
+				if (!reclaimed.ok) return reclaimed
+				request.resumeRequested = true
+				request.resumed.resolve()
+				return successfulOperationResult(undefined)
+			},
+			ended,
+		})
+	}
+
+	// Takes the lent camera back as the guest of the reservation, synchronously, and routes and snoops it again.
+	#reclaim(): OperationResult<void> {
+		const hold = this.sessionContext.hold
+		if (hold === undefined || this.#terminal) return failedOperationResult('unexpectedState', 'the capture has ended')
+		if (hold.holding()) return successfulOperationResult(undefined)
+
+		const opened = hold.open()
+		if (!opened.ok) return opened
+
+		this.sessionContext.routing.attach()
+
+		try {
+			this.#snoop()
+		} catch (error) {
+			return failedOperationResult('commandFailed', errorMessage(error))
+		}
+
 		return successfulOperationResult(undefined)
 	}
 
@@ -938,21 +1227,38 @@ class CameraCaptureSession {
 	// Waits between frames, stopping on cancellation, on a device failure, or on stop(), which ends the wait
 	// successfully so the capture finishes instead of starting the next frame. Delays of at least one second
 	// publish waiting progress every 250 ms; shorter ones are waited silently. Both advance the aggregate progress.
+	//
+	// A pause request ends the delay at once and counts it as waited, since the pause is a longer wait of its own.
 	async #delay(): Promise<OperationResult<void>> {
 		const waitingTime = this.#waitingTime
 		if (waitingTime <= 0 || this.#stopController.signal.aborted) return successfulOperationResult(undefined)
 
 		const progress = waitingTime >= MINIMUM_WAITING_TIME
-		const signal = AbortSignal.any([this.operationContext.signal, this.#failureController.signal, this.#stopController.signal])
+		const interrupted = new AbortController()
+		const signal = AbortSignal.any([this.operationContext.signal, this.#failureController.signal, this.#stopController.signal, interrupted.signal])
 		let remaining = waitingTime
 
-		while (remaining > 0) {
-			if (progress) this.#reporter.waiting(remaining, waitingTime - remaining, waitingTime)
+		this.#delayController = interrupted
+		if (this.#suspension !== undefined) interrupted.abort()
 
-			const step = progress ? Math.min(WAITING_PROGRESS_STEP, remaining) : remaining
-			const delayed = await abortableDelay(step / 1000, signal)
-			if (!delayed.ok) return this.#failureResult ?? (this.operationContext.signal.aborted ? delayed : successfulOperationResult(undefined))
-			remaining -= step
+		try {
+			while (remaining > 0) {
+				if (progress) this.#reporter.waiting(remaining, waitingTime - remaining, waitingTime)
+
+				const step = progress ? Math.min(WAITING_PROGRESS_STEP, remaining) : remaining
+				const delayed = await abortableDelay(step / 1000, signal)
+
+				if (!delayed.ok) {
+					if (this.#failureResult !== undefined) return this.#failureResult
+					if (this.operationContext.signal.aborted) return delayed
+					if (this.#stopController.signal.aborted) return successfulOperationResult(undefined)
+					break
+				}
+
+				remaining -= step
+			}
+		} finally {
+			this.#delayController = undefined
 		}
 
 		this.#reporter.completeDelay(waitingTime)
@@ -1009,6 +1315,36 @@ class CameraCaptureSession {
 		if (!result.ok) this.sessionContext.settleStarted(result)
 		this.#reporter.terminal(!result.ok)
 		return result.ok ? successfulOperationResult({ frames: this.#frames, frameCount: this.#frames.length }) : result
+	}
+}
+
+// Builds the physical camera hold of a suspendable capture whose root is `context`: each hold is a child scope
+// acquiring the camera (`key`) under the capture's root, so the arbiter sees the root as its owner, and it ends
+// only when closed, never on its own abort, because the camera lease must outlive the capture's cleanup.
+function cameraHold(context: OperationContext, key: ResourceKey, camera: Camera): CameraCaptureHold {
+	let current: { readonly end: VoidFunction; readonly result: Promise<OperationResult<void>> } | undefined
+
+	return {
+		holding: () => current !== undefined,
+		open: () => {
+			if (current !== undefined) return successfulOperationResult(undefined)
+
+			const ended = Promise.withResolvers<OperationResult<void>>()
+			const handle = context.start('cameraCaptureHold', [{ key, device: camera }], () => ended.promise)
+
+			// A start the arbiter or the tree refuses aborts its handle synchronously, before anything runs.
+			if (handle.signal.aborted) return failedOperationResult('busy', `camera ${camera.name} cannot be held now`)
+
+			current = { end: () => ended.resolve(successfulOperationResult(undefined)), result: handle.result }
+			return successfulOperationResult(undefined)
+		},
+		close: async () => {
+			const hold = current
+			if (hold === undefined) return
+			current = undefined
+			hold.end()
+			await hold.result
+		},
 	}
 }
 
