@@ -148,6 +148,18 @@ export const JUPITER_EQUATORIAL_RADIUS_AU = JUPITER_EQUATORIAL_RADIUS_KM / AU_KM
 // Jupiter's polar radius in AU (IAU WGCCRE 2015, 1 bar).
 export const JUPITER_POLAR_RADIUS_AU = JUPITER_POLAR_RADIUS_KM / AU_KM
 
+// Saturn's equatorial radius in km at the 1-bar level (IAU WGCCRE 2015).
+export const SATURN_EQUATORIAL_RADIUS_KM = 60268
+
+// Saturn's polar radius in km at the 1-bar level (IAU WGCCRE 2015).
+export const SATURN_POLAR_RADIUS_KM = 54364
+
+// Saturn's equatorial radius in AU (IAU WGCCRE 2015, 1 bar).
+export const SATURN_EQUATORIAL_RADIUS_AU = SATURN_EQUATORIAL_RADIUS_KM / AU_KM
+
+// Saturn's polar radius in AU (IAU WGCCRE 2015, 1 bar).
+export const SATURN_POLAR_RADIUS_AU = SATURN_POLAR_RADIUS_KM / AU_KM
+
 // Radians to degrees.
 export const RAD2DEG = 180 / PI
 

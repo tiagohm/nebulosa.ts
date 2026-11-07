@@ -1,10 +1,8 @@
-import { AU_KM, SPEED_OF_LIGHT_AU_DAY, SUN_RADIUS_AU } from '../../core/constants'
-import { type Vec3, vecAngle, vecDot, vecLength, vecMinus, vecMulScalar, vecNormalize, vecPlus, vecZero } from '../../math/linear-algebra/vec3'
+import { SPEED_OF_LIGHT_AU_DAY, SUN_RADIUS_AU } from '../../core/constants'
+import { type Vec3, vecAngle, vecDot, vecLength, vecMinus, vecMulScalar, vecNormalize, vecZero } from '../../math/linear-algebra/vec3'
 import { brentRoot } from '../../math/numerical/optimization'
-import type { PositionAndVelocityOverTime } from '../coordinates/astrometry'
 import { analyticalJovianEphemeris, GALILEAN_MOONS, GALILEAN_RADIUS_AU, type GalileanMoon, type JovianEphemeris } from '../ephemeris/jovian'
-import { dione, enceladus, iapetus, mimas, rhea, tethys, titan } from '../ephemeris/models/analytical/tass17'
-import { earth, saturn, sun } from '../ephemeris/models/analytical/vsop87e'
+import { analyticalSaturnianEphemeris, SATURNIAN_MOONS, SATURNIAN_RADIUS_AU, type SaturnianEphemeris, type SaturnianMoon } from '../ephemeris/saturnian'
 import { type Time, timeShift, timeSubtract } from '../time/time'
 import { searchExtrema, type TimeSearchOptions } from './search'
 
@@ -12,11 +10,12 @@ import { searchExtrema, type TimeSearchOptions } from './search'
 // another (passes in front of it as seen from Earth) or eclipses it (casts its shadow on it). This is the
 // detection layer only — the times, the pair, which body is in front or casting the shadow, the contacts,
 // and how central the event is — not the photometry: no light curve, obscured-area fraction or magnitude
-// drop. Jupiter's Galilean moons and Saturn's main moons (TASS 1.7) are supported.
+// drop. Jupiter's Galilean moons and Saturn's seven major moons are supported.
 //
 // Every body shares one barycentric ICRF frame. Galilean positions come from a JovianEphemeris, the
 // analytical VSOP87E + L1.2 one by default or a kernel-backed one, and a single search takes the Sun, the
-// Earth and every moon from that one source. Saturnian positions are TASS 1.7 added to VSOP87E Saturn.
+// Earth and every moon from that one source. Saturnian positions come likewise from a SaturnianEphemeris,
+// the analytical VSOP87E + TASS 1.7 one by default or a kernel-backed one.
 // Occultations are evaluated from the apparent geocentric directions of the two moons, each corrected for
 // its own light time; eclipses are evaluated from the heliocentric shadow geometry at the physical
 // instant, then reported at the light-time-delayed instant they are seen from Earth. The finder reuses
@@ -24,10 +23,7 @@ import { searchExtrema, type TimeSearchOptions } from './search'
 // contacts. All angles are radians.
 
 export type { GalileanMoon } from '../ephemeris/jovian'
-
-// A major Saturnian satellite covered by TASS 1.7 (Hyperion is omitted: its chaotic rotation makes it a
-// poor mutual-event target and its disk is tiny).
-export type SaturnianMoon = 'mimas' | 'enceladus' | 'tethys' | 'dione' | 'rhea' | 'titan' | 'iapetus'
+export type { SaturnianMoon } from '../ephemeris/saturnian'
 
 // Kind of mutual event: an occultation (one moon in front of the other) or an eclipse (one moon's shadow
 // on the other).
@@ -78,25 +74,16 @@ function jovianSystem(ephemeris: JovianEphemeris): MutualSystem<GalileanMoon> {
 	}
 }
 
-// Saturnicentric TASS 1.7 ephemeris (AU, J2000 equatorial) of each main Saturnian moon.
-const SATURNIAN_EPHEMERIS: Readonly<Record<SaturnianMoon, PositionAndVelocityOverTime>> = { mimas, enceladus, tethys, dione, rhea, titan, iapetus }
-
-// Saturn's main moons over VSOP87E and TASS 1.7. Radii are the IAU/JPL mean values (km): Mimas 198.2,
-// Enceladus 252.1, Tethys 531.1, Dione 561.4, Rhea 763.8, Titan 2575 (solid surface), Iapetus 734.5.
-const SATURN_SYSTEM: MutualSystem<SaturnianMoon> = {
-	earth: (time) => earth(time)[0],
-	sun: (time) => sun(time)[0],
-	moon: (moon, time) => vecPlus(saturn(time)[0], SATURNIAN_EPHEMERIS[moon](time)[0]),
-	order: ['mimas', 'enceladus', 'tethys', 'dione', 'rhea', 'titan', 'iapetus'],
-	radius: {
-		mimas: 198.2 / AU_KM,
-		enceladus: 252.1 / AU_KM,
-		tethys: 531.1 / AU_KM,
-		dione: 561.4 / AU_KM,
-		rhea: 763.8 / AU_KM,
-		titan: 2575 / AU_KM,
-		iapetus: 734.5 / AU_KM,
-	},
+// Saturn's seven major moons over a Saturnian ephemeris, with the SATURNIAN_RADIUS_AU mean radii. Every
+// position of one search comes from `ephemeris`, which throws when a kernel-backed state is unavailable.
+function saturnianSystem(ephemeris: SaturnianEphemeris): MutualSystem<SaturnianMoon> {
+	return {
+		earth: (time) => ephemeris.position('earth', time),
+		sun: (time) => ephemeris.position('sun', time),
+		moon: (moon, time) => ephemeris.position(moon, time),
+		radius: SATURNIAN_RADIUS_AU,
+		order: SATURNIAN_MOONS,
+	}
 }
 
 // Separation geometry of a moon pair for one event kind at one instant.
@@ -329,8 +316,17 @@ export function findGalileanMutualEvents(ephemeris: JovianEphemeris, start: Time
 // Finds every mutual occultation and eclipse among Saturn's main moons over a time window.
 //
 // Screens all twenty-one pairs of the seven moons for both event kinds, chronologically, with the same
-// light-time and window conventions as galileanMutualEvents. Saturn's mutual-event seasons fall around its
-// equinox (every ~15 years, most recently the 2025 ring-plane crossing), so most windows return nothing.
+// light-time and window conventions as galileanMutualEvents. Positions come from the analytical
+// VSOP87E + TASS 1.7 source. Saturn's mutual-event seasons fall around its equinox (every ~15 years, most
+// recently the 2025 ring-plane crossing), so most windows return nothing.
 export function saturnianMutualEvents(start: Time, stop: Time, options: TimeSearchOptions = {}): MutualEvent<SaturnianMoon>[] {
-	return mutualEvents(SATURN_SYSTEM, start, stop, options, clipToWindow)
+	return mutualEvents(saturnianSystem(analyticalSaturnianEphemeris), start, stop, options, clipToWindow)
+}
+
+// Finds the Saturnian mutual occultations and eclipses whose maximum lies in [start, stop), taking every
+// position (Sun, Earth and moons) from one Saturnian ephemeris, with the window and contact conventions of
+// findGalileanMutualEvents. A kernel-backed ephemeris propagates its SaturnianEphemerisMiss: the search is
+// abandoned, never completed with another source.
+export function findSaturnianMutualEvents(ephemeris: SaturnianEphemeris, start: Time, stop: Time, options: TimeSearchOptions = {}): MutualEvent<SaturnianMoon>[] {
+	return mutualEvents(saturnianSystem(ephemeris), start, stop, options, middleInWindow)
 }
