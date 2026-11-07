@@ -1,10 +1,11 @@
-import { AU_KM, J2000 } from '../../core/constants'
-import { type MutVec3, type Vec3, vecClone, vecPlus } from '../../math/linear-algebra/vec3'
-import { type Time, Timescale, tdb, timeShift } from '../time/time'
+import { AU_KM } from '../../core/constants'
+import { type Vec3, vecClone, vecPlus } from '../../math/linear-algebra/vec3'
+import type { Time } from '../time/time'
 import { Naif } from './kernels/naif'
 import type { SpkKernelSet, SpkMissReason } from './kernels/spk.kernelset'
 import { callisto, europa, ganymede, io } from './models/analytical/l12'
 import { earth, jupiter, sun } from './models/analytical/vsop87e'
+import { hasSatelliteTargets, interpolatedSatelliteEphemeris, type SatelliteEphemeris, SatelliteEphemerisMiss, type SatelliteSystem, type SpkSatelliteEphemeris, type SpkSatelliteSource, spkSatelliteEphemeris } from './satellites'
 
 // One coherent source of the barycentric positions needed to predict Jovian phenomena: the Sun, the
 // Earth, Jupiter's centre (NAIF 599, never its system barycenter 5) and the four Galilean satellites.
@@ -14,7 +15,8 @@ import { earth, jupiter, sun } from './models/analytical/vsop87e'
 // JovianEphemerisMiss when any state is unavailable, letting the caller abandon and rerun the whole
 // computation. Positions are AU in ICRF/J2000 axes with a barycentric origin; every call returns a
 // freshly allocated vector. Dense searches wrap a source in interpolatedJovianEphemeris, which caches
-// positions on a fixed grid and interpolates between them.
+// positions on a fixed grid and interpolates between them. The machinery is the generic satellite-system
+// ephemeris of satellites.ts instantiated with JOVIAN_SYSTEM.
 
 // A Galilean satellite of Jupiter.
 export type GalileanMoon = 'io' | 'europa' | 'ganymede' | 'callisto'
@@ -56,6 +58,32 @@ export const GALILEAN_RADIUS_AU: Readonly<Record<GalileanMoon, number>> = {
 	callisto: GALILEAN_RADIUS_KM.callisto / AU_KM,
 }
 
+// Node spacing in days of the interpolated Sun, Earth and Jupiter. Their sixth position derivatives
+// (the Earth's lunar wobble dominates) keep the six-point interpolation error at a few tens of metres.
+const PLANETARY_NODE_STEP = 1
+
+// Node spacing in days of the interpolated Galilean satellites: one hour. Io's sixth position derivative
+// (~8e8 km/day⁶) bounds the six-point interpolation error at a few tens of metres.
+const SATELLITE_NODE_STEP = 1 / 24
+
+// The Jovian satellite system: bodies, NAIF codes and interpolation node spacing.
+export const JOVIAN_SYSTEM: SatelliteSystem<JovianBody, GalileanMoon> = {
+	planet: 'jupiter',
+	bodies: JOVIAN_BODIES,
+	moons: GALILEAN_MOONS,
+	naif: JOVIAN_NAIF,
+	miss: (target, body, reason, time) => new JovianEphemerisMiss(target, body, reason, time),
+	nodeStep: {
+		sun: PLANETARY_NODE_STEP,
+		earth: PLANETARY_NODE_STEP,
+		jupiter: PLANETARY_NODE_STEP,
+		io: SATELLITE_NODE_STEP,
+		europa: SATELLITE_NODE_STEP,
+		ganymede: SATELLITE_NODE_STEP,
+		callisto: SATELLITE_NODE_STEP,
+	},
+}
+
 // The analytical theories behind the analytical source.
 export interface AnalyticalJovianSource {
 	readonly kind: 'analytical'
@@ -66,55 +94,23 @@ export interface AnalyticalJovianSource {
 }
 
 // The kernel set behind the SPK source.
-export interface SpkJovianSource {
-	readonly kind: 'spk'
-	// Identifiers of the files of the kernel set in load order, lowest precedence first.
-	readonly kernels: readonly string[]
-}
+export type SpkJovianSource = SpkSatelliteSource
 
 // Provenance of a Jovian ephemeris.
 export type JovianSource = AnalyticalJovianSource | SpkJovianSource
 
-// A coherent source of Jovian positions.
-export interface JovianEphemeris {
-	// Where the positions come from.
-	readonly source: JovianSource
-	// Barycentric position of `body` at `time` (any time scale), in AU and ICRF axes, freshly allocated.
-	// An SPK source throws a JovianEphemerisMiss when the state cannot be resolved.
-	readonly position: (body: JovianBody, time: Time) => Vec3
-	// Position of a moon relative to Jupiter's centre (AU, ICRF), freshly allocated, for a source whose
-	// satellite theory is jovicentric. Consistent with position: position(moon) = position('jupiter') +
-	// jovicentric(moon) at the same epoch. Absent when the source only gives barycentric states.
-	readonly jovicentric?: (moon: GalileanMoon, time: Time) => Vec3
-}
+// A coherent source of Jovian positions. The optional planetocentric offsets are jovicentric.
+export type JovianEphemeris = SatelliteEphemeris<JovianBody, GalileanMoon, JovianSource>
 
 // A Jovian ephemeris backed by a kernel set, which also records the files that supplied each body.
-export interface SpkJovianEphemeris extends JovianEphemeris {
-	readonly source: SpkJovianSource
-	// Identifiers of the files whose segments formed each body's chain in the states evaluated so far,
-	// accumulated as positions are requested. A body never evaluated is absent.
-	readonly kernelsByBody: ReadonlyMap<JovianBody, ReadonlySet<string>>
-}
+export type SpkJovianEphemeris = SpkSatelliteEphemeris<JovianBody, GalileanMoon>
 
-// Thrown by an SPK source when a body state cannot be resolved, so the caller can abandon the whole
+// Thrown by an SPK source when a Jovian body state cannot be resolved, so the caller can abandon the whole
 // computation instead of mixing sources.
-export class JovianEphemerisMiss extends Error {
-	// The Jovian body that was requested.
-	readonly target: JovianBody
-	// NAIF code of the body of the chain where resolution stopped: the target itself or one of its centers.
-	readonly body: number
-	// Why resolution stopped.
-	readonly reason: SpkMissReason
-	// The epoch that could not be resolved.
-	readonly time: Time
-
+export class JovianEphemerisMiss extends SatelliteEphemerisMiss<JovianBody> {
 	constructor(target: JovianBody, body: number, reason: SpkMissReason, time: Time) {
-		super(`the state of ${target} is unavailable from the SPK kernels (${reason} at NAIF ${body})`)
+		super(target, body, reason, time)
 		this.name = 'JovianEphemerisMiss'
-		this.target = target
-		this.body = body
-		this.reason = reason
-		this.time = time
 	}
 }
 
@@ -129,7 +125,7 @@ const ANALYTICAL_SOURCE: AnalyticalJovianSource = { kind: 'analytical', planetar
 export const analyticalJovianEphemeris: JovianEphemeris = {
 	source: ANALYTICAL_SOURCE,
 	position: analyticalPosition,
-	jovicentric: (moon, time) => vecClone(ANALYTICAL_SATELLITES[moon](time)[0]),
+	planetocentric: (moon, time) => vecClone(ANALYTICAL_SATELLITES[moon](time)[0]),
 }
 
 // Barycentric position of a Jovian body from VSOP87E and L1.2 (AU, ICRF), freshly allocated.
@@ -157,130 +153,20 @@ function analyticalPosition(body: JovianBody, time: Time): Vec3 {
 // JovianEphemerisMiss. The set must stay open while the ephemeris is used, so evaluate it synchronously
 // and do not keep it across an asynchronous yield that could close the kernel sources.
 export function spkJovianEphemeris(set: SpkKernelSet): SpkJovianEphemeris {
-	const kernelsByBody = new Map<JovianBody, Set<string>>()
-
-	function position(body: JovianBody, time: Time): Vec3 {
-		const result = set.stateAt(JOVIAN_NAIF[body], time)
-		if (!result.ok) throw new JovianEphemerisMiss(body, result.body, result.reason, time)
-
-		let kernels = kernelsByBody.get(body)
-
-		if (kernels === undefined) {
-			kernels = new Set()
-			kernelsByBody.set(body, kernels)
-		}
-
-		for (const kernel of result.kernels) kernels.add(kernel)
-
-		return vecClone(result.state[0])
-	}
-
-	return { source: { kind: 'spk', kernels: set.kernels }, position, kernelsByBody }
-}
-
-// J2000.0 in TDB, the origin of the interpolation nodes.
-const J2000_TDB: Time = { day: J2000, fraction: 0, scale: Timescale.TDB }
-
-// Node spacing in days of the interpolated Sun, Earth and Jupiter. Their sixth position derivatives
-// (the Earth's lunar wobble dominates) keep the six-point interpolation error at a few tens of metres.
-const PLANETARY_NODE_STEP = 1
-
-// Node spacing in days of the interpolated Galilean satellites: one hour. Io's sixth position derivative
-// (~8e8 km/day⁶) bounds the six-point interpolation error at a few tens of metres.
-const SATELLITE_NODE_STEP = 1 / 24
-
-// Number of nodes of the Lagrange interpolation, centred on the interval holding the epoch.
-const INTERPOLATION_NODES = 6
-
-// Node spacing of each Jovian body.
-const NODE_STEP: Readonly<Record<JovianBody, number>> = {
-	sun: PLANETARY_NODE_STEP,
-	earth: PLANETARY_NODE_STEP,
-	jupiter: PLANETARY_NODE_STEP,
-	io: SATELLITE_NODE_STEP,
-	europa: SATELLITE_NODE_STEP,
-	ganymede: SATELLITE_NODE_STEP,
-	callisto: SATELLITE_NODE_STEP,
+	return spkSatelliteEphemeris(JOVIAN_SYSTEM, set)
 }
 
 // Builds a Jovian ephemeris that interpolates `source` instead of evaluating it at every epoch, for
-// searches that sample thousands of nearby epochs. Positions are evaluated at nodes on a fixed TDB grid
-// (one day apart for the Sun, the Earth and Jupiter, one hour apart for the satellites, anchored at
-// J2000) and interpolated with a six-point Lagrange polynomial centred on the epoch's interval; the
-// error stays below 0.1 km (Io and the Earth's lunar wobble dominate), far below the precision of the
-// theories and a fraction of a second of contact time. When the source is jovicentric for the
-// satellites, the jovicentric offsets are interpolated and added to the interpolated Jupiter, so a node
-// costs one satellite-theory evaluation instead of a planetary one. The source provenance is
-// kept, and a node the source cannot evaluate propagates its error, so a kernel-backed source still
-// throws a JovianEphemerisMiss, possibly for a node up to three node steps beyond the epoch. Evaluated
-// nodes are cached for the lifetime of the returned ephemeris, so create one per computation; the cache
-// grows with the span evaluated, about 100 nodes per day.
+// searches that sample thousands of nearby epochs. Nodes are one day apart for the Sun, the Earth and
+// Jupiter and one hour apart for the satellites; the error stays below 0.1 km (Io and the Earth's lunar
+// wobble dominate), far below the precision of the theories and a fraction of a second of contact time.
+// See interpolatedSatelliteEphemeris for the caching, provenance and miss behavior.
 export function interpolatedJovianEphemeris<E extends JovianEphemeris>(source: E): JovianEphemeris & Pick<E, 'source'> {
-	const nodes = new Map<JovianBody, Map<number, Vec3>>()
-	for (const body of JOVIAN_BODIES) nodes.set(body, new Map())
-
-	const jovicentric = source.jovicentric
-
-	// Node position of a body: barycentric, or jovicentric for a satellite of a jovicentric source.
-	function node(body: JovianBody, index: number): Vec3 {
-		const cache = nodes.get(body)!
-		let position = cache.get(index)
-
-		if (position === undefined) {
-			const time = timeShift(J2000_TDB, index * NODE_STEP[body])
-			position = jovicentric !== undefined && body !== 'sun' && body !== 'earth' && body !== 'jupiter' ? jovicentric(body, time) : source.position(body, time)
-			cache.set(index, position)
-		}
-
-		return position
-	}
-
-	// Interpolated node position of a body at a time, in the frame of its nodes.
-	function interpolate(body: JovianBody, time: Time): MutVec3 {
-		const t = tdb(time)
-		const step = NODE_STEP[body]
-		const x = (t.day - J2000 + t.fraction) / step
-		const base = Math.floor(x)
-		const u = x - base
-		const first = base - INTERPOLATION_NODES / 2 + 1
-		const out: MutVec3 = [0, 0, 0]
-
-		for (let j = 0; j < INTERPOLATION_NODES; j++) {
-			// Lagrange weight of node j over the nodes first..first+5, at the offset u of the epoch from node base.
-			const nj = j - INTERPOLATION_NODES / 2 + 1
-			let weight = 1
-
-			for (let k = 0; k < INTERPOLATION_NODES; k++) {
-				if (k === j) continue
-				const nk = k - INTERPOLATION_NODES / 2 + 1
-				weight *= (u - nk) / (nj - nk)
-			}
-
-			const p = node(body, first + j)
-			out[0] += weight * p[0]
-			out[1] += weight * p[1]
-			out[2] += weight * p[2]
-		}
-
-		return out
-	}
-
-	function position(body: JovianBody, time: Time): Vec3 {
-		const out = interpolate(body, time)
-		if (jovicentric === undefined || body === 'sun' || body === 'earth' || body === 'jupiter') return out
-		const planet = interpolate('jupiter', time)
-		out[0] += planet[0]
-		out[1] += planet[1]
-		out[2] += planet[2]
-		return out
-	}
-
-	return { source: source.source, position }
+	return interpolatedSatelliteEphemeris(JOVIAN_SYSTEM, source)
 }
 
 // Whether a kernel set has a segment for every Jovian body. This is a necessary condition only: the
 // centers, coverage and segment support are resolved per epoch by stateAt.
 export function hasJovianTargets(set: SpkKernelSet): boolean {
-	for (const body of JOVIAN_BODIES) if (!set.bodies.has(JOVIAN_NAIF[body])) return false
-	return true
+	return hasSatelliteTargets(JOVIAN_SYSTEM, set)
 }
