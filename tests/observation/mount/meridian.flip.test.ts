@@ -421,3 +421,38 @@ test('a completed cycle reports a flip only when one was started', () => {
 	expectDecision(evaluateMeridianFlip(policy, snapshotAt(deg(3), { pierSide: 'WEST' }), found.state), 'COMPLETED', 'COMPLETE', 'ALREADY_ON_POST_FLIP_SIDE')
 	expectDecision(evaluateMeridianFlip(policy, snapshotAt(deg(3), { pierSide: 'WEST' }), { phase: 'COMPLETED', attempts: 1, preparationCompleted: true }), 'COMPLETED', 'COMPLETE', 'FLIP_COMPLETED')
 })
+
+test('pier-side confirmation records a verified flip that survives later failures and is cleared by reset', () => {
+	const policy = basePolicy()
+	const verifying: MeridianFlipState = { phase: 'VERIFYING_PIER_SIDE', attempts: 1, preparationCompleted: true }
+	const confirmed = transitionMeridianFlip(policy, verifying, { type: 'PIER_SIDE_CONFIRMED' })
+
+	expect(confirmed).toEqual({ phase: 'RECENTERING', attempts: 1, preparationCompleted: true, verification: 'verified' })
+
+	const failed = transitionMeridianFlip(policy, confirmed, { type: 'FAILED' })
+	expect(failed).toEqual({ phase: 'FAILED', attempts: 1, preparationCompleted: true, failure: 'EXECUTION_FAILED', verification: 'verified' })
+	expect(transitionMeridianFlip(policy, failed, { type: 'RESET' })).toEqual({ phase: 'WAITING', attempts: 0, preparationCompleted: false })
+})
+
+test('an inferred flip is accepted only when the policy allows an unknown pier side', () => {
+	const verifying: MeridianFlipState = { phase: 'VERIFYING_PIER_SIDE', attempts: 1, preparationCompleted: true }
+
+	expect(() => transitionMeridianFlip(basePolicy(), verifying, { type: 'FLIP_INFERRED' })).toThrow(RangeError)
+
+	const policy = basePolicy({ allowUnknownPierSide: true, afterFlipPierSide: 'EAST', beforeFlipPierSide: 'WEST' })
+	const decision = evaluateMeridianFlip(policy, snapshotAt(deg(2), { pierSide: 'NEITHER' }), verifying)
+	expectDecision(decision, 'VERIFYING_PIER_SIDE', 'VERIFY_PIER_SIDE', 'PIER_SIDE_NEITHER')
+
+	const inferred = transitionMeridianFlip(policy, verifying, { type: 'FLIP_INFERRED' })
+	expect(inferred).toEqual({ phase: 'RECENTERING', attempts: 1, preparationCompleted: true, verification: 'inferred' })
+	expect(transitionMeridianFlip(policy, transitionMeridianFlip(policy, inferred, { type: 'RECENTER_COMPLETED' }), { type: 'GUIDING_SETTLED' })).toMatchObject({ phase: 'COMPLETED', verification: 'inferred' })
+	expect(() => transitionMeridianFlip(policy, { phase: 'FLIPPING', attempts: 1, preparationCompleted: true }, { type: 'FLIP_INFERRED' })).toThrow(RangeError)
+})
+
+test('a cycle that never flips completes without a verification', () => {
+	const policy = basePolicy({ afterFlipPierSide: 'EAST' })
+	const decision = evaluateMeridianFlip(policy, snapshotAt(deg(2), { pierSide: 'EAST' }), createMeridianFlipState())
+
+	expectDecision(decision, 'COMPLETED', 'COMPLETE', 'ALREADY_ON_POST_FLIP_SIDE')
+	expect(decision.state.verification).toBeUndefined()
+})

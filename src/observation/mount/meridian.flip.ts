@@ -118,7 +118,16 @@ export interface MeridianFlipState {
 
 	// Failure diagnostic present only while phase is FAILED.
 	failure?: MeridianFlipReason
+
+	// How the completed flip was verified, set once verification passed: `verified` by a pier side the driver
+	// reported changing (PIER_SIDE_CONFIRMED), `inferred` from evidence other than a pier side (FLIP_INFERRED). It
+	// is kept through the later phases, a later failure included, and absent before verification and when the
+	// cycle completed without a flip.
+	verification?: MeridianFlipVerification
 }
+
+// Strength of the evidence a flip was verified with (see `MeridianFlipState.verification`).
+export type MeridianFlipVerification = 'verified' | 'inferred'
 
 // Complete decision returned by one pure evaluation.
 export interface MeridianFlipDecision {
@@ -150,8 +159,10 @@ export interface MeridianFlipDecision {
 	state: MeridianFlipState
 }
 
-// External lifecycle event emitted by the application after it verifies an operation.
-export type MeridianFlipEvent = { type: 'RESET' } | { type: 'PREPARED' } | { type: 'FLIP_STARTED' } | { type: 'FLIP_COMPLETED' } | { type: 'PIER_SIDE_CONFIRMED' } | { type: 'RECENTER_COMPLETED' } | { type: 'GUIDING_SETTLED' } | { type: 'FAILED'; reason?: MeridianFlipReason }
+// External lifecycle event emitted by the application after it verifies an operation. FLIP_INFERRED stands in
+// for PIER_SIDE_CONFIRMED when the mount publishes no usable pier side and the application established the flip
+// from other evidence; it is accepted only under `allowUnknownPierSide`, so nothing confirms an unknown side.
+export type MeridianFlipEvent = { type: 'RESET' } | { type: 'PREPARED' } | { type: 'FLIP_STARTED' } | { type: 'FLIP_COMPLETED' } | { type: 'PIER_SIDE_CONFIRMED' } | { type: 'FLIP_INFERRED' } | { type: 'RECENTER_COMPLETED' } | { type: 'GUIDING_SETTLED' } | { type: 'FAILED'; reason?: MeridianFlipReason }
 
 // Policy with defaults resolved without mutating the caller-provided policy object.
 interface ResolvedMeridianFlipPolicy extends MeridianFlipPolicy {
@@ -199,7 +210,10 @@ const REASONS = new Set<MeridianFlipReason>([
 ])
 
 // Event types accepted by the pure lifecycle transition function.
-const EVENT_TYPES = new Set<MeridianFlipEvent['type']>(['RESET', 'PREPARED', 'FLIP_STARTED', 'FLIP_COMPLETED', 'PIER_SIDE_CONFIRMED', 'RECENTER_COMPLETED', 'GUIDING_SETTLED', 'FAILED'])
+const EVENT_TYPES = new Set<MeridianFlipEvent['type']>(['RESET', 'PREPARED', 'FLIP_STARTED', 'FLIP_COMPLETED', 'PIER_SIDE_CONFIRMED', 'FLIP_INFERRED', 'RECENTER_COMPLETED', 'GUIDING_SETTLED', 'FAILED'])
+
+// Verification strengths accepted in persisted state.
+const VERIFICATIONS = new Set<MeridianFlipVerification>(['verified', 'inferred'])
 
 // Angular comparison tolerance for threshold boundaries after cyclic normalization.
 const ANGULAR_THRESHOLD_EPSILON = 1e-14
@@ -272,7 +286,8 @@ export function transitionMeridianFlip(policy: MeridianFlipPolicy, state: Meridi
 	validateState(state)
 	validateEvent(event)
 
-	if (event.type === 'RESET') return updateState(state, 'WAITING', 0, false)
+	// A reset starts a new cycle, which has verified nothing yet.
+	if (event.type === 'RESET') return state.verification === undefined ? updateState(state, 'WAITING', 0, false) : { phase: 'WAITING', attempts: 0, preparationCompleted: false }
 
 	// PREPARED confirms the guiding pause requested by the READY-phase PAUSE_GUIDING action,
 	// not the advisory PREPARE action emitted during PREPARING; it is only valid once READY.
@@ -294,7 +309,12 @@ export function transitionMeridianFlip(policy: MeridianFlipPolicy, state: Meridi
 
 	if (event.type === 'PIER_SIDE_CONFIRMED') {
 		if (state.phase !== 'VERIFYING_PIER_SIDE') throwInvalidTransition()
-		return updateState(state, phaseAfterPierSideConfirmed(resolved), state.attempts, state.preparationCompleted)
+		return updateState(state, phaseAfterPierSideConfirmed(resolved), state.attempts, state.preparationCompleted, undefined, 'verified')
+	}
+
+	if (event.type === 'FLIP_INFERRED') {
+		if (state.phase !== 'VERIFYING_PIER_SIDE' || !resolved.allowUnknownPierSide) throwInvalidTransition()
+		return updateState(state, phaseAfterPierSideConfirmed(resolved), state.attempts, state.preparationCompleted, undefined, 'inferred')
 	}
 
 	if (event.type === 'RECENTER_COMPLETED') {
@@ -365,6 +385,7 @@ function validateState(state: MeridianFlipState) {
 	if (typeof state.preparationCompleted !== 'boolean') throw new RangeError('state.preparationCompleted must be boolean')
 	if (state.failure !== undefined && !REASONS.has(state.failure)) throw new RangeError('state.failure is invalid')
 	if (state.phase !== 'FAILED' && state.failure !== undefined) throw new RangeError('state.failure is only valid when phase is FAILED')
+	if (state.verification !== undefined && !VERIFICATIONS.has(state.verification)) throw new RangeError('state.verification is invalid')
 }
 
 // Validates one external lifecycle event.
@@ -488,14 +509,13 @@ function decision(phase: MeridianFlipPhase, action: MeridianFlipAction, reason: 
 }
 
 // Returns the prior state when no persisted field changes, otherwise returns a new state.
-function updateState(state: MeridianFlipState, phase: MeridianFlipStatePhase, attempts: number, preparationCompleted: boolean, failure?: MeridianFlipReason): MeridianFlipState {
-	if (state.phase === phase && state.attempts === attempts && state.preparationCompleted === preparationCompleted && state.failure === failure) return state
+function updateState(state: MeridianFlipState, phase: MeridianFlipStatePhase, attempts: number, preparationCompleted: boolean, failure?: MeridianFlipReason, verification: MeridianFlipVerification | undefined = state.verification): MeridianFlipState {
+	if (state.phase === phase && state.attempts === attempts && state.preparationCompleted === preparationCompleted && state.failure === failure && state.verification === verification) return state
 
-	if (failure === undefined) {
-		return { phase, attempts, preparationCompleted }
-	}
-
-	return { phase, attempts, preparationCompleted, failure }
+	const next: MeridianFlipState = { phase, attempts, preparationCompleted }
+	if (failure !== undefined) next.failure = failure
+	if (verification !== undefined) next.verification = verification
+	return next
 }
 
 // Throws a consistent error for invalid lifecycle event ordering.

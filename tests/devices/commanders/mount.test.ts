@@ -1,8 +1,8 @@
-import { afterAll, afterEach, beforeEach, expect, spyOn, test } from 'bun:test'
+import { afterAll, afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test'
 import { timeYMDHMS } from '../../../src/astronomy/time/time'
-import { MountCommander } from '../../../src/devices/commanders/mount'
+import { meridianFlipStrategies, MountCommander, pierSideProvenance } from '../../../src/devices/commanders/mount'
 import { IndiClientHandlerSet } from '../../../src/devices/indi/client'
-import type { Mount, MountTargetCoordinate } from '../../../src/devices/indi/device'
+import { DEFAULT_MOUNT, type Mount, type MountTargetCoordinate } from '../../../src/devices/indi/device'
 import { MountManager, mountTargetEquatorial } from '../../../src/devices/indi/manager/mount'
 import { ClientSimulator } from '../../../src/devices/indi/simulator/client'
 import { MountSimulator } from '../../../src/devices/indi/simulator/mount'
@@ -10,7 +10,7 @@ import type { PropertyState, SetSwitchVector } from '../../../src/devices/indi/t
 import { DeviceLifecycle } from '../../../src/devices/orchestration/device.lifecycle'
 import { OperationCoordinator, failedOperationResult, successfulOperationResult } from '../../../src/devices/orchestration/operation'
 import { ResourceArbiter, resourceKey } from '../../../src/devices/orchestration/resource'
-import { deg, hour, toDeg, toHour } from '../../../src/math/units/angle'
+import { deg, hour, normalizeAngle, toDeg, toHour } from '../../../src/math/units/angle'
 import { meter } from '../../../src/math/units/distance'
 import { waitUntil } from '../../util'
 
@@ -699,4 +699,193 @@ test('stops observing the manager once disposed', () => {
 	} finally {
 		removeHandler.mockRestore()
 	}
+})
+
+describe('meridian flip execution', () => {
+	// A paused simulator driven by hand, so a mount can track across the meridian in a few milliseconds.
+	function rig(id: string) {
+		const manager = new MountManager()
+		const commander = new MountCommander(manager)
+		const coordinator = new OperationCoordinator(new ResourceArbiter())
+		const flipClient = new ClientSimulator(id, new IndiClientHandlerSet([manager]))
+		const flipSimulator = new MountSimulator('Mount Simulator', flipClient)
+		const mount = manager.get(flipClient, flipSimulator.name)!
+		flipSimulator.connect()
+		flipSimulator.pauseAutomaticTicking()
+		flipSimulator.setSlewRate('SPEED_7')
+
+		// Advances simulated time until the command settles.
+		async function drive<T>(promise: Promise<T>, step: number = 0.25) {
+			const state = { done: false }
+			void promise.finally(() => (state.done = true))
+			while (!state.done) {
+				flipSimulator.advance(step)
+				await Bun.sleep(1)
+			}
+			return await promise
+		}
+
+		// Places the mount `hourAngle` radians from the meridian, tracking, and returns that coordinate.
+		function placeAt(hourAngle: number, declination: number = deg(20)): MountTargetCoordinate<number> {
+			const lst = flipSimulator.siderealTimeAt(flipSimulator.utcTime)
+			flipSimulator.syncTo(normalizeAngle(lst - hourAngle), declination)
+			flipSimulator.setTrackingEnabled(true)
+			return { type: 'JNOW', JNOW: { x: flipSimulator.rightAscension, y: flipSimulator.declination } }
+		}
+
+		const dispose = () => {
+			commander.dispose()
+			flipSimulator.dispose()
+		}
+
+		return { manager, commander, coordinator, mount, simulator: flipSimulator, drive, placeAt, dispose }
+	}
+
+	test('sends a forced GoTo to the coordinate the mount already holds and reports the side change', async () => {
+		const flip = rig('flip.forced')
+
+		try {
+			// Before the meridian on the west side, then tracked past it without changing sides.
+			const target = flip.placeAt(-deg(0.5))
+			expect(flip.mount.pierSide).toBe('WEST')
+			flip.simulator.advance(240)
+			expect(flip.mount.pierSide).toBe('WEST')
+
+			const result = await flip.drive(flip.commander.executeMeridianFlip(flip.coordinator, flip.mount, target, { strategy: 'forcedGoto' }))
+
+			expect(result).toMatchObject({ ok: true, value: { strategy: 'forcedGoto', outcome: 'moved', movementObserved: true, pierSideChanged: true, pierSideProvenance: 'simulated', initial: { pierSide: 'WEST' }, final: { pierSide: 'EAST' }, trackingAfter: true } })
+			if (result.ok) expect(result.value.arrivalSeparation).toBeLessThan(deg(0.1))
+		} finally {
+			flip.dispose()
+		}
+	})
+
+	test('executes a native flip before the meridian', async () => {
+		const flip = rig('flip.native')
+
+		try {
+			const target = flip.placeAt(-hour(1))
+			const result = await flip.drive(flip.commander.executeMeridianFlip(flip.coordinator, flip.mount, target, { strategy: 'nativeFlip' }))
+
+			expect(result).toMatchObject({ ok: true, value: { strategy: 'nativeFlip', outcome: 'moved', pierSideChanged: true, initial: { pierSide: 'WEST' }, final: { pierSide: 'EAST' } } })
+		} finally {
+			flip.dispose()
+		}
+	})
+
+	test('stops a mount that neither moves nor changes sides and reports no flip evidence', async () => {
+		const flip = rig('flip.none')
+		const goTo = spyOn(flip.manager, 'goTo').mockImplementation(() => {})
+		const stop = spyOn(flip.manager, 'stop')
+
+		try {
+			const target = flip.placeAt(deg(1))
+			const result = await flip.drive(flip.commander.executeMeridianFlip(flip.coordinator, flip.mount, target, { strategy: 'forcedGoto', motionStartTimeout: 200 }))
+
+			expect(result).toMatchObject({ ok: true, value: { outcome: 'noFlipEvidence', movementObserved: false, pierSideChanged: false } })
+			expect(goTo).toHaveBeenCalledTimes(1)
+			expect(stop).toHaveBeenCalled()
+		} finally {
+			goTo.mockRestore()
+			stop.mockRestore()
+			flip.dispose()
+		}
+	})
+
+	test('waits for a pier side the driver reports after the motion ended', async () => {
+		const flip = rig('flip.late')
+		const target = flip.placeAt(deg(1))
+		const initial = flip.mount.pierSide
+
+		const goTo = spyOn(flip.manager, 'goTo').mockImplementation((mount) => {
+			mount.slewing = true
+			flip.commander.updated(mount, 'slewing', 'Busy')
+			setTimeout(() => {
+				mount.slewing = false
+				flip.commander.updated(mount, 'slewing', 'Ok')
+			}, 20)
+			setTimeout(() => {
+				mount.pierSide = initial === 'WEST' ? 'EAST' : 'WEST'
+				flip.commander.updated(mount, 'pierSide', 'Ok')
+			}, 150)
+		})
+
+		try {
+			const result = await flip.commander.executeMeridianFlip(flip.coordinator, flip.mount, target, { strategy: 'forcedGoto', pierSideSettleTime: 2000 })
+			expect(result).toMatchObject({ ok: true, value: { outcome: 'moved', pierSideChanged: true } })
+		} finally {
+			goTo.mockRestore()
+			flip.dispose()
+		}
+	})
+
+	test('reports an unchanged side as a motion without a side change', async () => {
+		const flip = rig('flip.same')
+		const target = flip.placeAt(deg(1))
+
+		const goTo = spyOn(flip.manager, 'goTo').mockImplementation((mount) => {
+			mount.slewing = true
+			flip.commander.updated(mount, 'slewing', 'Busy')
+			setTimeout(() => {
+				mount.slewing = false
+				flip.commander.updated(mount, 'slewing', 'Ok')
+			}, 20)
+		})
+
+		try {
+			const result = await flip.commander.executeMeridianFlip(flip.coordinator, flip.mount, target, { strategy: 'forcedGoto', pierSideSettleTime: 100 })
+			expect(result).toMatchObject({ ok: true, value: { outcome: 'moved', movementObserved: true, pierSideChanged: false } })
+		} finally {
+			goTo.mockRestore()
+			flip.dispose()
+		}
+	})
+
+	test('fails and stops the mount on an Alert of the commanded motion', async () => {
+		const flip = rig('flip.alert')
+		const target = flip.placeAt(deg(1))
+		const goTo = spyOn(flip.manager, 'goTo').mockImplementation((mount) => {
+			setTimeout(() => flip.commander.updated(mount, 'equatorialCoordinate', 'Alert'), 10)
+		})
+		const stop = spyOn(flip.manager, 'stop')
+
+		try {
+			expect(await flip.commander.executeMeridianFlip(flip.coordinator, flip.mount, target, { strategy: 'forcedGoto' })).toMatchObject({ ok: false, reason: 'alert' })
+			expect(stop).toHaveBeenCalled()
+		} finally {
+			goTo.mockRestore()
+			stop.mockRestore()
+			flip.dispose()
+		}
+	})
+
+	test('refuses an unsupported strategy, a parked mount, and a mount already moving', async () => {
+		const flip = rig('flip.refused')
+		const target = flip.placeAt(deg(1))
+
+		try {
+			flip.mount.canFlip = false
+			expect(await flip.commander.executeMeridianFlip(flip.coordinator, flip.mount, target, { strategy: 'nativeFlip' })).toMatchObject({ ok: false, reason: 'unexpectedState', error: 'mount Mount Simulator cannot flip' })
+			expect(meridianFlipStrategies(flip.mount)).toEqual(['forcedGoto'])
+
+			flip.mount.slewing = true
+			expect(await flip.commander.executeMeridianFlip(flip.coordinator, flip.mount, target, { strategy: 'forcedGoto' })).toMatchObject({ ok: false, reason: 'unexpectedState', error: 'mount Mount Simulator is already moving' })
+			flip.mount.slewing = false
+
+			flip.mount.parked = true
+			expect(await flip.commander.executeMeridianFlip(flip.coordinator, flip.mount, target, { strategy: 'forcedGoto' })).toMatchObject({ ok: false, reason: 'unexpectedState', error: 'mount Mount Simulator is parked' })
+		} finally {
+			flip.dispose()
+		}
+	})
+
+	test('classifies where a pier side comes from', () => {
+		const mount = { ...structuredClone(DEFAULT_MOUNT), hasPierSide: true, client: { type: 'INDI', id: 'indi' } } as Mount
+
+		expect(pierSideProvenance(mount)).toBe('driverReported')
+		expect(pierSideProvenance({ ...mount, client: { type: 'SIMULATOR', id: 'sim' } })).toBe('simulated')
+		expect(pierSideProvenance({ ...mount, hasPierSide: false })).toBe('unavailable')
+		expect(meridianFlipStrategies({ ...mount, canFlip: true, canGoTo: true })).toEqual(['nativeFlip', 'forcedGoto'])
+		expect(meridianFlipStrategies({ ...mount, canFlip: false, canGoTo: false })).toEqual([])
+	})
 })

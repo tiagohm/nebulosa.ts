@@ -64,6 +64,60 @@ export interface MountFlipResult extends MountSlewResult {
 	readonly pierSideVerified: boolean
 }
 
+// How a meridian flip is commanded: the driver's own flip (ON_COORD_SET FLIP), or a GoTo to the same target that
+// is always sent, even to a target the mount already holds, so a driver that picks the pier side for the hour
+// angle of the target flips the mount.
+export type MountFlipStrategy = 'nativeFlip' | 'forcedGoto'
+
+// Where the pier side a mount publishes comes from: a driver report, which may itself be computed from the axes or
+// the hour angle and is not an independent measurement; a simulator, which proves nothing physical; or nothing.
+export type PierSideProvenance = 'driverReported' | 'simulated' | 'unavailable'
+
+// Options of `MountCommander.executeMeridianFlip`; every duration is in milliseconds. `tolerance` is ignored,
+// since the command is always sent, and `timeout` bounds the whole motion once it started.
+export interface MountFlipExecutionOptions extends MountCommandOptions {
+	// How the flip is commanded; the mount must support it.
+	readonly strategy: MountFlipStrategy
+	// Time after the command for the mount to report slewing or a pier side change; without either the mount is
+	// stopped and the outcome is `noFlipEvidence`. Default 15000.
+	readonly motionStartTimeout?: number
+	// Time after the motion ended for a pier side change the driver reports late; running out is not a failure.
+	// Default 5000.
+	readonly pierSideSettleTime?: number
+}
+
+// Evidence of one executed meridian flip. It says what was commanded and observed, never whether the flip is
+// accepted: a pier side change is evidence only together with a settled arrival, and its provenance matters.
+export interface MountFlipExecution {
+	// How the flip was commanded.
+	readonly strategy: MountFlipStrategy
+	// `moved` when the mount was observed slewing or changing sides after the command; `noFlipEvidence` when it
+	// was observed doing neither, and was stopped. Nothing is retried in either case.
+	readonly outcome: 'moved' | 'noFlipEvidence'
+	// Target commanded, in radians, in the equinox of date.
+	readonly target: { readonly rightAscension: Angle; readonly declination: Angle }
+	// Position and pier side observed immediately before the command.
+	readonly initial: MountSlewResult
+	// Position and pier side observed after the motion ended and the late pier side window passed.
+	readonly final: MountSlewResult
+	// Where the reported pier side comes from.
+	readonly pierSideProvenance: PierSideProvenance
+	// Whether the pier side was EAST or WEST both before and after and changed.
+	readonly pierSideChanged: boolean
+	// Whether the mount was observed slewing or changing sides after the command.
+	readonly movementObserved: boolean
+	// Angular distance between the final position and the target, in radians.
+	readonly arrivalSeparation: Angle
+	// Whether the mount tracks after the flip.
+	readonly trackingAfter: boolean
+	// Unix time the command was sent, in milliseconds.
+	readonly dispatchedAt: number
+	// Unix time movement was first observed, in milliseconds; absent without movement.
+	readonly motionStartedAt?: number
+	// Unix time the motion was observed ended, in milliseconds; absent without movement.
+	readonly motionEndedAt?: number
+}
+
 // Live manual motion. The operation scope, and therefore the mount lease, stays open until every axis has
 // been stopped, so no other operation can take the mount while it is still moving.
 export interface ManualMoveHandle {
@@ -106,6 +160,12 @@ interface ManualMove {
 
 // Default milliseconds a slew, a flip, or a homing move has to complete.
 const DEFAULT_SLEW_TIMEOUT = 600000
+
+// Default milliseconds a meridian flip command has to show movement or a pier side change.
+const DEFAULT_MOTION_START_TIMEOUT = 15000
+
+// Default milliseconds a pier side change may lag the end of a flip motion.
+const DEFAULT_PIER_SIDE_SETTLE_TIME = 5000
 
 // Default milliseconds a switch echo, such as tracking, has to be observed.
 const DEFAULT_SWITCH_TIMEOUT = 10000
@@ -224,6 +284,103 @@ export class MountCommander implements DeviceHandler<Mount>, Disposable {
 			const pierSideVerified = mount.hasPierSide && initialPierSide !== 'NEITHER' && mount.pierSide !== 'NEITHER' && mount.pierSide !== initialPierSide
 
 			return successfulOperationResult({ ...slewResult(mount), initialPierSide, pierSideVerified })
+		}).result
+	}
+
+	// Executes a meridian flip toward `target` with the given strategy and reports the evidence it left. The
+	// command is always sent, and nothing it does is retried. The mount must show movement or a pier side change
+	// within `motionStartTimeout`, else it is stopped and the outcome is `noFlipEvidence`; once it moved, the
+	// motion must end within `timeout` (600 s), a pier side change reported up to `pierSideSettleTime` later is
+	// still seen, and the final position must lie within `arrivalTolerance` (1°) of the target, else the flip
+	// fails as `unexpectedState`. A failure after the command, an Alert, a disconnect or a cancellation stops the
+	// mount first, as every motion of this commander does. The target goes to the driver as converted, with no
+	// pointing model correction.
+	async executeMeridianFlip(scope: OperationScope, mount: Mount, target: MountTargetCoordinate<string | Angle>, options: MountFlipExecutionOptions): Promise<OperationResult<MountFlipExecution>> {
+		const { strategy } = options
+
+		return await scope.start<MountFlipExecution>('mountFlip', [{ key: resourceKey(mount), device: mount }], async (context) => {
+			if (!mount.connected) return failedOperationResult('disconnected')
+			if (strategy === 'nativeFlip' ? !mount.canFlip : !mount.canGoTo) return unsupported(mount, strategy === 'nativeFlip' ? 'flip' : 'go to a target')
+			if (mount.parked) return failedOperationResult('unexpectedState', `mount ${mount.name} is parked`)
+			if (mount.slewing) return failedOperationResult('unexpectedState', `mount ${mount.name} is already moving`)
+
+			const [rightAscension, declination] = resolveTarget(mount, target, options.time)
+			const initial = slewResult(mount)
+			const changed = () => isKnownPierSide(initial.pierSide) && isKnownPierSide(mount.pierSide) && mount.pierSide !== initial.pierSide
+			const dispatchedAt = Date.now()
+
+			const evidence = (outcome: MountFlipExecution['outcome'], motionStartedAt?: number, motionEndedAt?: number): MountFlipExecution => ({
+				strategy,
+				outcome,
+				target: { rightAscension, declination },
+				initial,
+				final: slewResult(mount),
+				pierSideProvenance: pierSideProvenance(mount),
+				pierSideChanged: changed(),
+				movementObserved: outcome === 'moved',
+				arrivalSeparation: separation(mount, rightAscension, declination),
+				trackingAfter: mount.tracking,
+				dispatchedAt,
+				motionStartedAt,
+				motionEndedAt,
+			})
+
+			// Movement or a side change is what proves the command did something; a driver that acknowledges and
+			// stays put, as one may for a target it already holds, gives neither.
+			const started = await waitForDeviceState<MountUpdate>({
+				signal: context.signal,
+				timeout: options.motionStartTimeout ?? DEFAULT_MOTION_START_TIMEOUT,
+				subscribe: (listener) => this.#subscribe(mount, listener),
+				current: () => ({ mount }),
+				evaluate: (update) => {
+					if (!mount.connected) return 'disconnected'
+					if (update.state === 'Alert' && update.property !== undefined && SLEW_PROPERTIES.has(update.property)) return 'alert'
+					return mount.slewing || changed() ? 'success' : 'pending'
+				},
+				command: () => {
+					if (strategy === 'nativeFlip') this.mountManager.flipTo(mount, rightAscension, declination)
+					else this.mountManager.goTo(mount, rightAscension, declination)
+				},
+				abort: () => this.#abortMotion(mount, options),
+			})
+
+			// The wait already stopped the mount, so a slew queued late in the driver cannot outlive the lease. A stop
+			// that failed is reported with the timeout and stays a failure: the mount may be moving.
+			if (!started.ok && started.reason === 'timeout' && started.error === undefined && !context.signal.aborted) return successfulOperationResult(evidence('noFlipEvidence'))
+			if (!started.ok) return started
+
+			const motionStartedAt = Date.now()
+
+			const stopped = await waitForDeviceState<MountUpdate>({
+				signal: context.signal,
+				timeout: options.timeout ?? DEFAULT_SLEW_TIMEOUT,
+				subscribe: (listener) => this.#subscribe(mount, listener),
+				current: () => ({ mount }),
+				evaluate: (update) => {
+					if (!mount.connected) return 'disconnected'
+					if (update.state === 'Alert' && update.property !== undefined && SLEW_PROPERTIES.has(update.property)) return 'alert'
+					return mount.slewing ? 'pending' : 'success'
+				},
+				command: () => {},
+				abort: () => this.#abortMotion(mount, options),
+			})
+
+			if (!stopped.ok) return stopped
+
+			const motionEndedAt = Date.now()
+
+			// Some drivers publish the new pier side only after the slew flag dropped.
+			if (isKnownPierSide(initial.pierSide) && !changed()) {
+				await this.#observe(mount, context.signal, options.pierSideSettleTime ?? DEFAULT_PIER_SIDE_SETTLE_TIME, changed)
+				if (context.signal.aborted) return failedOperationResult(abortReason(context.signal))
+			}
+
+			const separated = separation(mount, rightAscension, declination)
+			const arrivalTolerance = options.arrivalTolerance ?? DEFAULT_ARRIVAL_TOLERANCE
+
+			if (separated > arrivalTolerance) return failedOperationResult('unexpectedState', `mount ${mount.name} stopped ${(separated / DEG2RAD).toFixed(3)}° short of the target`)
+
+			return successfulOperationResult(evidence('moved', motionStartedAt, motionEndedAt))
 		}).result
 	}
 
@@ -804,6 +961,29 @@ export class MountCommander implements DeviceHandler<Mount>, Disposable {
 		else this.mountManager.moveEast(mount, enabled)
 	}
 
+	// Waits up to `timeout` milliseconds for `predicate` to hold on an update of `mount`, without commanding or
+	// stopping anything. Resolves whether it held; an abort of `signal` ends the wait as false.
+	async #observe(mount: Mount, signal: AbortSignal, timeout: number, predicate: () => boolean) {
+		if (predicate()) return true
+		if (signal.aborted) return false
+
+		const observed = Promise.withResolvers<boolean>()
+		const unsubscribe = this.#subscribe(mount, () => {
+			if (predicate()) observed.resolve(true)
+		})
+		const onAbort = () => observed.resolve(false)
+		const timer = setTimeout(() => observed.resolve(false), Math.max(0, timeout))
+		signal.addEventListener('abort', onAbort, { once: true })
+
+		try {
+			return await observed.promise
+		} finally {
+			clearTimeout(timer)
+			unsubscribe()
+			signal.removeEventListener('abort', onAbort)
+		}
+	}
+
 	// Registers a waiter for one device and returns its idempotent unsubscriber.
 	#subscribe(mount: Mount, listener: (update: MountUpdate) => void) {
 		let listeners = this.#listeners.get(mount)
@@ -847,6 +1027,26 @@ function separation(mount: Mount, rightAscension: Angle, declination: Angle) {
 function slewResult(mount: Mount): MountSlewResult {
 	const { rightAscension, declination } = mount.equatorialCoordinate
 	return { rightAscension, declination, pierSide: mount.pierSide }
+}
+
+// Strategies a mount supports for `MountCommander.executeMeridianFlip`, the driver's own flip first.
+export function meridianFlipStrategies(mount: Mount): readonly MountFlipStrategy[] {
+	const strategies: MountFlipStrategy[] = []
+	if (mount.canFlip) strategies.push('nativeFlip')
+	if (mount.canGoTo) strategies.push('forcedGoto')
+	return strategies
+}
+
+// Where the pier side of `mount` comes from. Only Nebulosa's own simulator client is recognized as simulated:
+// an INDI or Alpaca simulator driver publishes its side like any driver and is reported as `driverReported`.
+export function pierSideProvenance(mount: Mount): PierSideProvenance {
+	if (!mount.hasPierSide) return 'unavailable'
+	return mount.client.type === 'SIMULATOR' ? 'simulated' : 'driverReported'
+}
+
+// Whether a pier side names a side of the pier.
+function isKnownPierSide(pierSide: PierSide) {
+	return pierSide === 'EAST' || pierSide === 'WEST'
 }
 
 // Whether the driver defines the motion vector of the axis a direction moves along.
