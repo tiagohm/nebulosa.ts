@@ -393,11 +393,12 @@ export async function elements(input: string | ObserverWithOsculatingElements | 
 }
 
 // Requests an SPK binary kernel for the small body designation `id` over [startTime, endTime].
-export async function spkFile(id: number, startTime: Temporal | Time, endTime: Temporal | Time, signal?: AbortSignal) {
+// `options.headers` are sent with the request, such as the User-Agent JPL asks of automated clients.
+export async function spkFile(id: number, startTime: Temporal | Time, endTime: Temporal | Time, signal?: AbortSignal, options: Pick<ObserverVectorElementsOptions, 'headers'> = {}) {
 	const parameters = structuredClone(DEFAULT_SPK_PARAMETERS) as HorizonsQueryParameters
 	parameters.COMMAND = `DES=${id};`
 	makeParametersFromStartAndStopTime(parameters, startTime, endTime)
-	const response = await makeRequestAndGetResponse(parameters, 'json', signal)
+	const response = await makeRequestAndGetResponse(parameters, 'json', signal, options.headers)
 	return (await response.json()) as SpkFile
 }
 

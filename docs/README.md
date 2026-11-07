@@ -870,7 +870,7 @@ console.log(constellation(hour(5.5), deg(-5), false)) // ORI
 
 DAF (Double precision Array File) is the NAIF binary container underneath SPK ephemeris kernels and binary PCK orientation kernels. A file is a sequence of 1024-byte records holding a header, a chain of segment summaries, and the numeric data, as 64-bit floats in either byte order. Each summary describes one segment: a trimmed name, a few doubles (for SPK and PCK these are the start and end epochs, in TDB seconds past J2000), and integers (ids, data type, and the first and last data word).
 
-`readDaf(source)` parses the header and the summary chain from a seekable byte source and returns a `Daf` without reading the data. It handles big- and little-endian files, and throws an `Error` for an unsupported format, a damaged file, or a truncated one. `daf.summaries` lists the segments. `daf.read(start, end)` returns the inclusive, 1-based range of double-words as a `Float64Array`, either a promise or an array depending on the source. `daf.readSync` does the same synchronously and requires a source that supports synchronous reads; kernel frames use it because `rotationAt` cannot await. The container only exposes bytes: interpret the segments with [Binary PCK Rotation](#binary-pck-rotation) or [SPK State Kernels](#spk-state-kernels).
+`readDaf(source)` parses the header and the summary chain from a seekable byte source and returns a `Daf` without reading the data. It handles big- and little-endian files, and throws an `Error` for an unsupported format, a damaged file, a truncated one, a summary layout outside the DAF limits, or a summary record chain that loops or declares more summaries than a record holds. `daf.format` is the identification word of the file, such as `'DAF/SPK'` or the legacy `'NAIF/DAF'`. `daf.summaries` lists the segments. `daf.read(start, end)` returns the inclusive, 1-based range of double-words as a `Float64Array`, either a promise or an array depending on the source. `daf.readSync` does the same synchronously and requires a source that supports synchronous reads; kernel frames use it because `rotationAt` cannot await. The container only exposes bytes: interpret the segments with [Binary PCK Rotation](#binary-pck-rotation) or [SPK State Kernels](#spk-state-kernels).
 
 ```ts
 import fs from 'fs/promises'
@@ -6228,6 +6228,39 @@ console.log(await spk.segment(7, 9)) // undefined — no segment for that pair
 // NAIF codes for asteroid 65803 (Didymos).
 console.log(extendedPermanentAsteroidNumber(65803)) // 20065803
 console.log(extendedPrimaryBodyOfPermanentAsteroidNumber(65803)) // 920065803 — the system, equal to Naif.DIDYMOS
+```
+
+`readSpk` throws for a file with any segment of an unsupported data type, and merges segments of one pair only when they share a frame. To catalog files of unknown origin, `inspectSpk(daf, byteLength)` (`kernels/spk.inspect.ts`) lists every segment descriptor instead (index, name, target, center, frame, data type, coverage in TDB seconds past J2000, data addresses) without creating readers, and marks each one `supported` or not with a `reason` of `'dataType'` or `'frame'`. It returns `{ ok: false, error }` when the DAF is another kind (such as `DAF/PCK`), when the summaries are not the SPK layout, when a coverage bound is not finite or the end precedes the start, or when a data range lies outside the `byteLength` bytes of the file.
+
+`prepareSpkKernelSet(entries)` (`kernels/spk.kernelset.ts`) combines several inspected files into one immutable `SpkKernelSet`. The entries are in load order, lowest precedence first, as the NAIF toolkit gives precedence to the file loaded last. `set.stateAt(body, time)` returns the barycentric state of a NAIF body by following, for the body and then each of its centers down to the solar-system barycenter, the covering segment latest in load order (later files first, and later segments first within a file), whatever its center. The result is `{ ok: true, state, kernels }`, with `[position (AU), velocity (AU/day)]` in J2000 axes owned by the caller and the ids of the files used, or `{ ok: false, reason, body }` naming the body of the chain where it stopped: `'missing'` when no file has a segment for it, `'coverage'` for an epoch outside every segment or in a gap (coverage is never extrapolated), `'dataType'` or `'frame'` when the selected segment cannot be evaluated (it does not fall back to a lower-precedence segment), and `'cycle'` for a center chain that does not end. A system barycenter is never taken for its planet: DE440s has no Jupiter center (599), so `stateAt(599, time)` reports it missing. Preparation reads the segment headers asynchronously; evaluation is synchronous and reads coefficient records on demand, so the sources stay open, and owned by the caller, while the set is used. `spkSeconds(time)` converts a time to the TDB seconds past J2000 of segment coverage.
+
+```ts
+import fs from 'fs/promises'
+import { readDaf } from 'nebulosa/src/astronomy/ephemeris/kernels/daf'
+import { Naif } from 'nebulosa/src/astronomy/ephemeris/kernels/naif'
+import { inspectSpk } from 'nebulosa/src/astronomy/ephemeris/kernels/spk.inspect'
+import { prepareSpkKernelSet } from 'nebulosa/src/astronomy/ephemeris/kernels/spk.kernelset'
+import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { fileHandleSource } from 'nebulosa/src/io/file'
+
+const entries = []
+
+for (const [id, path] of [
+	['de440s', 'data/de440s.bsp'],
+	['didymos', 'data/65803_Didymos.bsp'],
+]) {
+	const daf = await readDaf(fileHandleSource(await fs.open(path)))
+	const inspection = inspectSpk(daf, (await fs.stat(path)).size)
+	if (inspection.ok) entries.push({ id, daf, segments: inspection.segments })
+}
+
+const set = await prepareSpkKernelSet(entries)
+const time = timeYMDHMS(2022, 12, 8, 20, 7, 15, Timescale.TDB)
+
+const didymos = set.stateAt(Naif.DIDYMOS_BARYCENTER, time)
+if (didymos.ok) console.log(didymos.kernels) // ['didymos', 'de440s'] — Sun -> Didymos, then barycenter -> Sun
+
+console.log(set.stateAt(Naif.JUPITER, time)) // { ok: false, reason: 'missing', body: 599 }
 ```
 
 ### Starlight Deflection
@@ -20846,7 +20879,7 @@ await elements({ epoch: 2461000.5, ec: 0.1, tpqr: { ma: deg(10), n: deg(0.9) }, 
 
 ### JPL Horizons SPK Downloads
 
-`spkFile(id, startTime, endTime, signal?)` (`src/adapters/ephemeris/horizons.ts`) requests from the JPL Horizons API an SPK binary kernel (the SPICE ephemeris format) of the small body with the SPK id `id` for the interval `[startTime, endTime]` (Unix milliseconds or library `Time` values, sent as Julian days in TDB with the scale named). It sends `COMMAND='DES=<id>;'` with `EPHEM_TYPE=SPK` and expects the JSON answer of the service, which it returns as `{ spk?, error? }`: `spk` is the content of the kernel encoded in Base64 and `error` is the message of Horizons when it could not build the file, so a caller checks which one is present. Only the JSON answer is read: nothing is validated or decoded, so the caller decodes the Base64 (for example with `Buffer.from(spk, 'base64')`) and writes or parses the kernel. The id is the SPK id of the body. A new request is made for each call, and `signal` aborts the request.
+`spkFile(id, startTime, endTime, signal?, options?)` (`src/adapters/ephemeris/horizons.ts`) requests from the JPL Horizons API an SPK binary kernel (the SPICE ephemeris format) of the small body with the SPK id `id` for the interval `[startTime, endTime]` (Unix milliseconds or library `Time` values, sent as Julian days in TDB with the scale named). It sends `COMMAND='DES=<id>;'` with `EPHEM_TYPE=SPK` and expects the JSON answer of the service, which it returns as `{ spk?, error? }`: `spk` is the content of the kernel encoded in Base64 and `error` is the message of Horizons when it could not build the file, so a caller checks which one is present. Only the JSON answer is read: nothing is validated or decoded, so the caller decodes the Base64 (for example with `Buffer.from(spk, 'base64')`) and writes or parses the kernel. The id is the SPK id of the body. A new request is made for each call, `signal` aborts the request, and `options.headers` are sent with it, such as the User-Agent JPL asks of automated clients.
 
 ```ts
 import { spkFile } from 'nebulosa/src/adapters/ephemeris/horizons'

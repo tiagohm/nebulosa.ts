@@ -120,8 +120,9 @@ function buildSpkSegmentMap(groups: ReadonlyMap<number, ReadonlyMap<number, read
 	return segmentByTarget
 }
 
-// Converts an arbitrary input instant to SPK ephemeris seconds past J2000.
-function spkSeconds(time: Time) {
+// Converts an arbitrary input instant to SPK ephemeris seconds past J2000 (TDB), the epoch scale of
+// segment descriptors and coverage bounds.
+export function spkSeconds(time: Time) {
 	const { day, fraction } = tdb(time)
 	return (day - J2000 + fraction) * DAYSEC
 }
@@ -148,6 +149,15 @@ function lowerBoundEpoch(epochs: Float64Array, seconds: number, begin: number, e
 
 // Instantiates the concrete segment reader for a supported SPK data type.
 function makeSegment(summary: Summary, daf: Daf): SpkSegment {
+	const segment = makeSpkSegment(summary, daf)
+	if (segment) return segment
+	throw new Error('only binary SPK data types 2, 3, 9 and 21 are supported')
+}
+
+// Instantiates the uninitialized segment reader of one SPK summary over `daf`, or undefined when the
+// summary's data type is not one of the supported binary types 2, 3, 9, and 21. Nothing is read
+// until the segment's `initialize` runs.
+export function makeSpkSegment(summary: Summary, daf: Daf): SpkSegment | undefined {
 	const [start, end] = summary.doubles
 	const [target, center, frame, type, startIndex, endIndex] = summary.ints
 
@@ -161,7 +171,7 @@ function makeSegment(summary: Summary, daf: Daf): SpkSegment {
 			return new Type21Segment(daf, start, end, center, target, frame, startIndex, endIndex)
 	}
 
-	throw new Error('only binary SPK data types 2, 3, 9 and 21 are supported')
+	return undefined
 }
 
 // More info about spk types: https://spiceypy.readthedocs.io/en/latest/spk.html

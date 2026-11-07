@@ -151,6 +151,41 @@ test('DAF from an async-only seekable source rejects', async () => {
 	expect(() => daf.readSync(641, 645)).toThrowError('AsyncSeekableSource does not support synchronous read')
 })
 
+// Builds a three-record little-endian DAF/SPK from the DE421 file record, whose summary record points
+// to `next` and declares `count` summaries.
+async function syntheticDaf(next: number, count: number, nd = 2, ni = 6) {
+	const buffer = Buffer.alloc(3 * 1024)
+	const header = await fs.readFile('data/de421.bsp')
+	header.copy(buffer, 0, 0, 1024)
+	buffer.writeUInt32LE(nd, 8)
+	buffer.writeUInt32LE(ni, 12)
+	buffer.writeUInt32LE(2, 76)
+	buffer.writeUInt32LE(2, 80)
+	buffer.writeDoubleLE(next, 1024)
+	buffer.writeDoubleLE(count, 1024 + 16)
+	return bufferSource(buffer)
+}
+
+test('summary record chain that loops is rejected', async () => {
+	await expect(readDaf(await syntheticDaf(2, 0))).rejects.toThrow('invalid DAF summary record chain at record 2')
+})
+
+test('summary count larger than a record holds is rejected', async () => {
+	await expect(readDaf(await syntheticDaf(0, 1000))).rejects.toThrow('invalid DAF summary count 1000 in record 2')
+	await expect(readDaf(await syntheticDaf(0, -1))).rejects.toThrow('invalid DAF summary count -1 in record 2')
+})
+
+test('summary layout outside the DAF limits is rejected', async () => {
+	await expect(readDaf(await syntheticDaf(0, 0, 200, 6))).rejects.toThrow('invalid DAF summary layout: ND=200, NI=6')
+	await expect(readDaf(await syntheticDaf(0, 0, 2, 0))).rejects.toThrow('invalid DAF summary layout: ND=2, NI=0')
+})
+
+test('summary record without summaries yields an empty DAF', async () => {
+	const daf = await readDaf(await syntheticDaf(0, 0))
+	expect(daf.format).toBe('DAF/SPK')
+	expect(daf.summaries).toHaveLength(0)
+})
+
 class AsyncSeekableSource implements Source, Seekable {
 	position = 0
 

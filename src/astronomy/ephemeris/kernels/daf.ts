@@ -19,6 +19,9 @@ export interface Summary {
 
 // A parsed DAF file: its segment summaries plus a random-access float64 reader.
 export interface Daf {
+	// Identification word of the file record, such as 'DAF/SPK', 'DAF/PCK', or the legacy 'NAIF/DAF';
+	// absent for DAFs that were not parsed from a file.
+	readonly format?: string
 	// All array summaries found in the summary record chain.
 	readonly summaries: readonly Summary[]
 	// Reads the inclusive 1-based double-word range [start, end] from the file.
@@ -52,6 +55,11 @@ const RECORD_SIZE = 1024
 const FLOAT64_BYTES = 8
 // Size of a 32-bit integer word, in bytes.
 const INT32_BYTES = 4
+// Largest summary size, in double-precision words, that fits a summary record after its three
+// control words (DAF Required Reading: ND + (NI + 1) / 2 <= 125).
+const MAXIMUM_SUMMARY_WORDS = 125
+// Byte offset of the first summary in a summary record, after the NEXT, PREV, and NSUM control words.
+const SUMMARY_RECORD_HEADER = 24
 // Whether the host CPU is little-endian; selects the zero-copy read fast path.
 const HOST_LITTLE_ENDIAN = new Uint8Array(new Uint16Array([1]).buffer)[0] === 1
 
@@ -68,13 +76,13 @@ export async function readDaf(source: Source & Seekable): Promise<Daf> {
 	if (format === 'NAIF/DAF') {
 		const record = readNaifDafRecord(buffer)
 		const summaries = await readSummaries(source, record)
-		return makeDaf(source, record, summaries)
+		return makeDaf(source, format, record, summaries)
 	} else if (format.startsWith('DAF/')) {
 		if (hasFtpValidationString(buffer)) {
 			const be = buffer.toString('ascii', 88, 96).toUpperCase() !== 'LTL-IEEE'
 			const record = readNaifDafRecord(buffer, be)
 			const summaries = await readSummaries(source, record)
-			return makeDaf(source, record, summaries)
+			return makeDaf(source, format.trimEnd(), record, summaries)
 		} else {
 			throw new Error('file has been damaged')
 		}
@@ -84,8 +92,8 @@ export async function readDaf(source: Source & Seekable): Promise<Daf> {
 }
 
 // Builds a DAF reader over `source`.
-function makeDaf(source: Source & Seekable, record: DafRecord, summaries: readonly Summary[]): Daf {
-	return { summaries, read: (start, end) => readFloat64Array(source, start, end, record.be), readSync: (start, end) => readFloat64ArraySync(source, start, end, record.be) }
+function makeDaf(source: Source & Seekable, format: string, record: DafRecord, summaries: readonly Summary[]): Daf {
+	return { format, summaries, read: (start, end) => readFloat64Array(source, start, end, record.be), readSync: (start, end) => readFloat64ArraySync(source, start, end, record.be) }
 }
 
 // Reads a contiguous DAF float64 range.
@@ -191,21 +199,30 @@ function readNaifDafRecord(buffer: Buffer, be?: boolean): DafRecord {
 	// The record number of the final summary record in the file.
 	const bward = be ? buffer.readUInt32BE(80) : buffer.readUInt32LE(80)
 
+	// A layout outside the DAF limits would allocate huge descriptor arrays or read past the summary record.
+	if (!(nd >= 1 && ni >= 2 && nd + ((ni + 1) >> 1) <= MAXIMUM_SUMMARY_WORDS)) throw new Error(`invalid DAF summary layout: ND=${nd}, NI=${ni}`)
+
 	return { be, nd, ni, fward, bward }
 }
 
-// Reads all summary records and their names.
+// Reads all summary records and their names. Rejects a chain that revisits a record, which would
+// otherwise loop forever, and a summary count larger than one record can hold.
 async function readSummaries(source: Source & Seekable, record: DafRecord): Promise<Summary[]> {
 	const buffer = Buffer.allocUnsafe(RECORD_SIZE)
 	const names = Buffer.allocUnsafe(RECORD_SIZE)
 	const summaries: Summary[] = []
+	const visited = new Set<number>()
 
 	let recordNumber = record.fward
 	const stepSize = FLOAT64_BYTES * (record.nd + ((record.ni + 1) >> 1))
+	const capacity = Math.trunc((RECORD_SIZE - SUMMARY_RECORD_HEADER) / stepSize)
 
 	while (recordNumber !== 0) {
+		if (!(recordNumber >= 2) || visited.has(recordNumber)) throw new Error(`invalid DAF summary record chain at record ${recordNumber}`)
+		visited.add(recordNumber)
 		await readRecord(source, recordNumber, buffer)
 		const count = readSummaryControlInt(buffer, 16, record.be)
+		if (!(count >= 0 && count <= capacity)) throw new Error(`invalid DAF summary count ${count} in record ${recordNumber}`)
 		await readRecordSummaries(record, recordNumber, count, source, buffer, names, stepSize, summaries)
 		recordNumber = readSummaryControlInt(buffer, 0, record.be)
 	}
@@ -218,7 +235,7 @@ async function readRecordSummaries(record: DafRecord, index: number, count: numb
 	await readRecord(source, index + 1, names)
 
 	for (let i = 0, offset = 0; i < count; i++, offset += stepSize) {
-		summaries.push(readSummary(data, names, 24 + offset, offset, stepSize, record))
+		summaries.push(readSummary(data, names, SUMMARY_RECORD_HEADER + offset, offset, stepSize, record))
 	}
 }
 
