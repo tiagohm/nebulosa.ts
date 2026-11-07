@@ -2,8 +2,8 @@ import { expect, test } from 'bun:test'
 import { eraC2s, eraS2c, eraS2p } from '../../../src/astronomy/coordinates/erfa/erfa'
 import { arcmin, deg, hour } from '../../../src/math/units/angle'
 // oxfmt-ignore
-import { intersectLineAndSphere, intersectSegmentEllipsoid, midPoint, rectIntersection, type SphericalMountBasis, type SphericalTangentBasis, sphericalCoordinateBasis, sphericalDestination, sphericalDirectionVector, sphericalGreatCirclePole, sphericalInterpolate, sphericalMountBasis, sphericalMountDeclinationAxisVector, sphericalMountPolarAxisVector, sphericalOffsetVector, sphericalPoleVector, sphericalPolygonArea, sphericalPositionAngle, sphericalProjectTangentPlane, sphericalSeparation, sphericalTangentBasis, sphericalTriangleAngles, sphericalTriangleArea, sphericalUnprojectTangentPlane } from '../../../src/math/numerical/geometry'
-import { PI, PIOVERTWO } from '../../../src/core/constants'
+import { intersectLineAndSphere, intersectSegmentEllipsoid, midPoint, rectIntersection, signedDistanceToEllipse, type SphericalMountBasis, type SphericalTangentBasis, sphericalCoordinateBasis, sphericalDestination, sphericalDirectionVector, sphericalGreatCirclePole, sphericalInterpolate, sphericalMountBasis, sphericalMountDeclinationAxisVector, sphericalMountPolarAxisVector, sphericalOffsetVector, sphericalPoleVector, sphericalPolygonArea, sphericalPositionAngle, sphericalProjectTangentPlane, sphericalSeparation, sphericalTangentBasis, sphericalTriangleAngles, sphericalTriangleArea, sphericalUnprojectTangentPlane } from '../../../src/math/numerical/geometry'
+import { PI, PIOVERTWO, TAU } from '../../../src/core/constants'
 import { type Vec3, vecCross, vecDot, vecLength, vecNormalize, vecX, vecY, vecZ, vecZero } from '../../../src/math/linear-algebra/vec3'
 
 // Checks a vector with one tolerance per component.
@@ -409,4 +409,45 @@ test('spherical triangle angles are zero for a degenerate triangle', () => {
 	expect(a).toBe(0)
 	expect(b).toBe(0)
 	expect(c).toBe(0)
+})
+
+// Brute-force nearest distance over a dense parametric sampling of the ellipse.
+function bruteForce(x: number, y: number, a: number, b: number) {
+	let best = Infinity
+	for (let i = 0; i < 200000; i++) {
+		const t = (i / 200000) * TAU
+		best = Math.min(best, Math.hypot(a * Math.cos(t) - x, b * Math.sin(t) - y))
+	}
+	return (x / a) ** 2 + (y / b) ** 2 < 1 ? -best : best
+}
+
+test('signed distance to a circle', () => {
+	expect(signedDistanceToEllipse(3, 4, 2, 2)).toBeCloseTo(3, 14)
+	expect(signedDistanceToEllipse(0.6, 0.8, 2, 2)).toBeCloseTo(-1, 14)
+})
+
+test('signed distance to an ellipse on its axes and at its centre', () => {
+	expect(signedDistanceToEllipse(0, 0, 1, 0.9)).toBeCloseTo(-0.9, 14)
+	expect(signedDistanceToEllipse(2, 0, 1, 0.9)).toBeCloseTo(1, 14)
+	expect(signedDistanceToEllipse(0, -2, 1, 0.9)).toBeCloseTo(1.1, 14)
+	expect(signedDistanceToEllipse(-1, 0, 1, 0.9)).toBeCloseTo(0, 14)
+	// Inside, near the centre on the major axis, the nearest point is off the axis (the evolute case).
+	expect(signedDistanceToEllipse(0.1, 0, 1, 0.5)).toBeCloseTo(bruteForce(0.1, 0, 1, 0.5), 8)
+})
+
+test('signed distance to an ellipse matches a brute-force search', () => {
+	const points = [
+		[1.3, 0.4],
+		[0.2, 0.3],
+		[-0.7, 0.85],
+		[0.99, -0.05],
+		[-3, -2],
+		[0.01, 0.9],
+	] as const
+
+	for (const [x, y] of points) expect(signedDistanceToEllipse(x, y, 1, 0.935)).toBeCloseTo(bruteForce(x, y, 1, 0.935), 8)
+})
+
+test('signed distance to an ellipse is zero on the curve', () => {
+	expect(signedDistanceToEllipse(Math.cos(0.7), 0.935 * Math.sin(0.7), 1, 0.935)).toBeCloseTo(0, 14)
 })

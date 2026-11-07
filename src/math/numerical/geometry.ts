@@ -126,6 +126,87 @@ export function intersectSegmentEllipsoid(observer: Vec3, target: Vec3, equatori
 	return { intersects: false, tangent: false }
 }
 
+// Bisection steps bounding the root solve of signedDistanceToEllipse. Each halves the bracket of the
+// Lagrange parameter, so 160 steps exhaust any float64 bracket long before the cap.
+const ELLIPSE_DISTANCE_MAX_ITERATIONS = 160
+
+// Signed Euclidean distance from the point (x, y) to the axis-aligned ellipse x²/a² + y²/b² = 1, with
+// `semiMajor` (a) along x and `semiMinor` (b) along y, a ≥ b > 0: negative inside, zero on the curve,
+// positive outside. Coordinates and radii share one unit. The nearest-point problem is solved robustly by
+// bisection on the Lagrange parameter (D. Eberly, "Distance from a Point to an Ellipse, an Ellipsoid, or a
+// Hyperellipsoid", 2013), including the axis cases where the nearest point jumps between symmetric
+// branches; the result is continuous everywhere and smooth outside the ellipse. For a circle (a = b) it
+// is the radial distance minus the radius.
+export function signedDistanceToEllipse(x: number, y: number, semiMajor: number, semiMinor: number): number {
+	const y0 = Math.abs(x)
+	const y1 = Math.abs(y)
+	const e0 = semiMajor
+	const e1 = semiMinor
+	let distance: number
+
+	if (y1 > 0) {
+		if (y0 > 0) {
+			const z0 = y0 / e0
+			const z1 = y1 / e1
+			const g = z0 * z0 + z1 * z1 - 1
+
+			if (g !== 0) {
+				const r0 = (e0 / e1) * (e0 / e1)
+				const u = ellipseDistanceRoot(r0, z0, z1, g)
+				const x0 = (r0 * y0) / (u + r0 - 1)
+				const x1 = y1 / u
+				distance = Math.hypot(x0 - y0, x1 - y1)
+			} else {
+				distance = 0
+			}
+		} else {
+			distance = Math.abs(y1 - e1)
+		}
+	} else {
+		const numerator = e0 * y0
+		const denominator = e0 * e0 - e1 * e1
+
+		if (numerator < denominator) {
+			const ratio = numerator / denominator
+			const x0 = e0 * ratio
+			const x1 = e1 * Math.sqrt(1 - ratio * ratio)
+			distance = Math.hypot(x0 - y0, x1)
+		} else {
+			distance = Math.abs(y0 - e0)
+		}
+	}
+
+	const inside = (y0 / e0) * (y0 / e0) + (y1 / e1) * (y1 / e1) < 1
+	return inside ? -distance : distance
+}
+
+// Root of Eberly's ellipse distance equation for a point in the first quadrant off both axes, in the
+// shifted Lagrange parameter u = s + 1: (r0·z0/(u + r0 − 1))² + (z1/u)² = 1, with r0 = (a/b)², z the point
+// over the semi-axes and g the implicit ellipse value of the point. Bisects u in [z1, 1] inside the
+// ellipse or [z1, |(r0·z0, z1)|] outside until the midpoint stops moving, at most
+// ELLIPSE_DISTANCE_MAX_ITERATIONS times. Solving for u rather than s keeps full relative precision when
+// u is tiny, which happens for points very close to the centre, where s + 1 would cancel.
+function ellipseDistanceRoot(r0: number, z0: number, z1: number, g: number): number {
+	const n0 = r0 * z0
+	const shift = r0 - 1
+	let u0 = z1
+	let u1 = g < 0 ? 1 : Math.hypot(n0, z1)
+	let u = u0
+
+	for (let i = 0; i < ELLIPSE_DISTANCE_MAX_ITERATIONS; i++) {
+		u = (u0 + u1) / 2
+		if (u === u0 || u === u1) break
+		const ratio0 = n0 / (u + shift)
+		const ratio1 = z1 / u
+		const value = ratio0 * ratio0 + ratio1 * ratio1 - 1
+		if (value > 0) u0 = u
+		else if (value < 0) u1 = u
+		else break
+	}
+
+	return u
+}
+
 // Canonical celestial pole direction (+z), the default mount polar axis.
 const SPHERICAL_POLE_AXIS: Vec3 = vecZ()
 

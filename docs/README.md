@@ -2387,6 +2387,33 @@ try {
 }
 ```
 
+### Jovian Satellite Geometry
+
+Seen from the Earth, Jupiter is a flattened disk about 40″ to 50″ across, with the four Galilean satellites strung along its equator. A satellite can pass in front of the disk (a transit), cast its shadow on the planet (a shadow transit), pass behind the disk (an occultation) or enter Jupiter's shadow (an eclipse). `jovianView(ephemeris, time)` (`events/jupiter.geometry.ts`) computes the apparent geometry at an observed geocentric instant from one [Jovian ephemeris source](#jovian-ephemeris-sources):
+
+- the disk: geocentric `distance` (AU), apparent `equatorialRadius` and `polarRadius` of the outline (radians), the position angle of the projected north pole `poleAngle` (from the true celestial north toward the east), the planetocentric `subEarthLatitude` and `subSolarLatitude`, the `phaseAngle`, and the west-positive `centralMeridian` in Systems I, II and III;
+- each moon: its sky offset `east` and `north` from Jupiter's apparent centre and its `depth` in front of the centre (positive toward the Earth), all in Jupiter equatorial radii, its apparent `radius`, its `disk` state (`'clear'`, `'transit'` or `'occulted'`, set as soon as the disks overlap), its `eclipse` state (`'none'`, `'penumbra'` or `'umbra'`, set as soon as the shadow touches the moon), and, when the shadow axis meets the planet, the `shadow` centre's sky offset and whether it lies on the hemisphere facing the Earth.
+
+Jupiter is an oblate spheroid with the IAU 1-bar radii, and its limb is never treated as a circle: seen along any direction its outline is an ellipse whose minor axis follows the projected pole, and a point is compared with it by its exact signed distance (`signedDistanceToEllipse` in `nebulosa/src/math/numerical/geometry`). The moons are spheres of their mean radii. Jupiter and each moon are light-time retarded separately. A moon's shadow is cast along the axis from the Sun through the moon, so away from opposition it lies well off the moon's own position. It is evaluated when Jupiter emits the light seen at the observed instant, from the moon one moon-to-Jupiter light time earlier. Jupiter's shadow on a moon is evaluated when the moon emits the light seen at the observed instant. The shadows are cones of the finite Sun. Jupiter's shadow cross-section is its Sun-view outline scaled by the cone ratio, which is exact for a sphere and a close approximation for the oblate planet. Times are observed geocentric instants, not topocentric ones; aberration is neglected.
+
+`projectJovianSurfacePoint(view, longitude, latitude)` places a cloud-top feature given by its System II west longitude and planetographic latitude, such as the Great Red Spot, on the apparent disk, with a flag telling whether it faces the Earth. The scanning primitives are exported too: `jovianSystemState(ephemeris, time)` gives the state shared by the moons, and `jovianMoonMargins(ephemeris, state, moon)` gives the signed distances of a moon from the limb, of its shadow axis from the disk, and of the moon from Jupiter's umbra and penumbra. `jovianView` also evaluates the precession-nutation matrix for its sky axes, so it is meant for display rather than for dense sampling.
+
+```ts
+import { analyticalJovianEphemeris } from 'nebulosa/src/astronomy/ephemeris/jovian'
+import { jovianView, projectJovianSurfacePoint } from 'nebulosa/src/astronomy/events/jupiter.geometry'
+import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { deg, toDeg } from 'nebulosa/src/math/units/angle'
+
+const view = jovianView(analyticalJovianEphemeris, timeYMDHMS(2026, 6, 29, 0, 0, 0, Timescale.UTC))
+console.log(toDeg(view.centralMeridian.II), toDeg(view.poleAngle), toDeg(view.equatorialRadius) * 3600) // ~328.28 ~24.8 ~15.9″, the planet near conjunction
+
+for (const moon of view.moons) console.log(moon.moon, moon.east.toFixed(2), moon.north.toFixed(2), moon.disk, moon.eclipse, moon.shadow)
+
+// A spot at System II 50° W and 22° S, drawn on the apparent disk only when it faces the Earth.
+const spot = projectJovianSurfacePoint(view, deg(50), deg(-22))
+console.log(spot.visible, spot.east, spot.north)
+```
+
 ### Jupiter Central Meridian
 
 The central meridian of Jupiter is the line of longitude that crosses the middle of the disk as the observer sees it, and its longitude tells you which part of the planet faces you. Because Jupiter is a gas giant, there are three conventional rotation systems. System I covers the equatorial jet and System II the temperate latitudes, where the Great Red Spot lies; System III is the magnetic or radio system tied to the interior. Longitudes in Systems I and II are the ones almanacs and observers quote for features on the disk, and they are measured positive to the west.
