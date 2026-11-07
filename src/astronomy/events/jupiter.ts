@@ -3,15 +3,16 @@ import type { Vec3 } from '../../math/linear-algebra/vec3'
 import { type Angle, normalizeAngle } from '../../math/units/angle'
 import { JUPITER_ROTATION, JUPITER_SYSTEM_I, JUPITER_SYSTEM_II, type RotationElements, subObserverPoint } from '../bodies/orientation'
 import type { PositionOverTime } from '../coordinates/astrometry'
-import type { Time } from '../time/time'
+import { type Time, timeSubtract } from '../time/time'
 import { searchRoots, type TimeSearchOptions } from './search'
 
 // Jupiter central-meridian longitude and Great Red Spot transit prediction, layered on the IAU
 // body-orientation model and the time-domain event scanner. The central meridian is the sub-observer
 // point projected into one of Jupiter's three conventional rotation systems (I equatorial, II temperate,
 // III magnetic); the Great Red Spot sits at a slowly drifting System II longitude and transits the
-// central meridian whenever the System II central-meridian longitude sweeps past it. All angles are
-// radians.
+// central meridian whenever the System II central-meridian longitude sweeps past it. The spot's
+// longitude is either one fixed value or a GreatRedSpotModel with a reference epoch and a linear drift.
+// All angles are radians.
 
 // Jupiter's rotation system for central-meridian longitude: 'I' (equatorial jet), 'II' (temperate
 // latitudes, the Great Red Spot frame) or 'III' (magnetic/radio, the IAU System III).
@@ -52,4 +53,37 @@ export function greatRedSpotTransits(grsLongitude: Angle, jupiterToObserverAt: P
 	const crossings = searchRoots((time) => Math.sin(jupiterCentralMeridian('II', time, jupiterToObserverAt(time)) - grsLongitude), start, stop, options)
 	// Keep the transits (spot facing the observer); drop the anti-transits on the far side.
 	return crossings.filter((time) => Math.cos(jupiterCentralMeridian('II', time, jupiterToObserverAt(time)) - grsLongitude) > 0)
+}
+
+// A Great Red Spot longitude model: the spot's System II longitude at a reference epoch and its linear
+// drift. The longitude is an observed quantity (e.g. from the ALPO or JUPOS bulletins) and the drift is
+// measured over recent months; an old reference extrapolates the drift and loses accuracy.
+export interface GreatRedSpotModel {
+	// System II west longitude of the spot at the epoch (radians).
+	readonly longitude: Angle
+	// Reference epoch of the longitude, in any time scale.
+	readonly epoch: Time
+	// Drift of the System II west longitude (radians per day): positive when the spot moves toward
+	// increasing west longitude, which is the spot's usual slow drift.
+	readonly drift: number
+}
+
+// System II west longitude of the Great Red Spot at a time, from the model's reference longitude plus
+// the drift times the elapsed days (negative before the epoch), normalized to [0, TAU).
+export function greatRedSpotLongitude(model: GreatRedSpotModel, time: Time): Angle {
+	return normalizeAngle(model.longitude + model.drift * timeSubtract(time, model.epoch))
+}
+
+// Predicts the instants the Great Red Spot transits Jupiter's central meridian over a time window, with
+// the spot's System II longitude following a GreatRedSpotModel.
+//
+// A transit is a root of sin(centralMeridian(t) − longitude(t)) with the spot on the near side
+// (cos > 0), as in greatRedSpotTransits; the drift (a fraction of a degree per day) is negligible
+// against the ~870°/day rotation, so the roots stay one System II rotation apart. `jupiterToObserverAt`
+// returns the Jupiter-to-observer vector (AU, ICRF); passing the light-time retarded Jupiter gives the
+// apparent geometry. The times keep the scale of `start`; `options.step` defaults to one hour.
+export function greatRedSpotTransitsWithDrift(model: GreatRedSpotModel, jupiterToObserverAt: PositionOverTime, start: Time, stop: Time, options?: TimeSearchOptions): Time[] {
+	const offset = (time: Time) => jupiterCentralMeridian('II', time, jupiterToObserverAt(time)) - greatRedSpotLongitude(model, time)
+	const crossings = searchRoots((time) => Math.sin(offset(time)), start, stop, options)
+	return crossings.filter((time) => Math.cos(offset(time)) > 0)
 }

@@ -1832,6 +1832,34 @@ const far = galactocentricFrame({ ...GALACTOCENTRIC_DEFAULTS, galcenDistance: 8.
 console.log(affineFromBase([0, 0, 0], far, time)[0] / ONE_KILOPARSEC) // -8.19997 — kpc
 ```
 
+### Galilean Satellite Phenomena
+
+Every few days each Galilean satellite crosses in front of Jupiter (a **transit**), casts its shadow on the cloud tops (a **shadow transit**), passes behind the planet (an **occultation**) and enters Jupiter's shadow (an **eclipse**). Callisto can miss the disk and the shadow entirely in the years when the Earth and the Sun stand a few degrees from Jupiter's equatorial plane. `jovianPhenomena(ephemeris, start, stop, options?)` (`events/jupiter.phenomena.ts`) finds these phenomena with the geometry of [Jovian Satellite Geometry](#jovian-satellite-geometry), taking every position from one [Jovian ephemeris source](#jovian-ephemeris-sources). Wrap the source in `interpolatedJovianEphemeris` for speed.
+
+Each `JovianPhenomenon` has its `kind` (`'satelliteTransit'`, `'shadowTransit'`, `'satelliteOccultation'` or `'satelliteEclipse'`), the `moon`, the `maximum` (the conjunction: the minimum of the moon's elliptic radius in Jupiter's outline, or of its shadow axis for a shadow transit), the `depth` (the deepest external margin in Jupiter radii, negative), and the contacts that are actually reached:
+
+- transit and occultation: `external1`/`external2` when the disks touch from outside, `internal1`/`internal2` when the moon is wholly on or behind the disk, and `center1`/`center2` when its centre crosses the limb;
+- shadow transit: the same three pairs for the moon's penumbra as seen from the Sun (external: the penumbra touches the disk, internal: the whole penumbra on it, centre: the shadow axis on the limb), plus `visibleStart`/`visibleEnd` when the shadow centre is on the hemisphere facing the Earth, which near quadrature can start or end on the far side of the limb;
+- eclipse: `external1`/`external2` when the moon touches Jupiter's penumbra, `center1`/`center2` when its centre crosses the umbra's boundary (the almanac disappearance and reappearance), and `internal1`/`internal2` when it is wholly inside the umbra.
+
+A phenomenon without internal contacts is partial; nothing is reported as total unless it is reached. A tangency whose deepest margin is within a few metres of zero is reported as a zero-duration `grazing` phenomenon with equal external contacts. The instants are geocentric observed times, in TDB, with Jupiter, each moon and both kinds of shadow light-time corrected (see [Jovian Satellite Geometry](#jovian-satellite-geometry)); they are not topocentric. A phenomenon is returned when its `maximum` lies in `[start, stop)`, with its contacts computed in full even outside the window, so consecutive windows concatenate without duplicates. The search samples one shared grid every `options.step` days (default 15 minutes) and refines each contact to `options.tolerance` days (default 1e-6); `options.moons` and `options.kinds` restrict it. With the analytical source the contacts agree with JPL Horizons (JUP365) to within about 15 s for Io, Europa and Ganymede and about a minute for Callisto, whose high paths are where Horizons' spherical Jupiter differs most from the oblate one used here.
+
+```ts
+import { analyticalJovianEphemeris, interpolatedJovianEphemeris } from 'nebulosa/src/astronomy/ephemeris/jovian'
+import { jovianPhenomena } from 'nebulosa/src/astronomy/events/jupiter.phenomena'
+import { type Time, Timescale, timeToDate, timeYMDHMS, utc } from 'nebulosa/src/astronomy/time/time'
+
+const format = (time?: Time) => (time ? timeToDate(utc(time)).slice(3, 6).join(':') : '—')
+const ephemeris = interpolatedJovianEphemeris(analyticalJovianEphemeris)
+
+for (const p of jovianPhenomena(ephemeris, timeYMDHMS(2026, 12, 1, 6, 0, 0, Timescale.UTC), timeYMDHMS(2026, 12, 1, 10, 0, 0, Timescale.UTC))) {
+	console.log(p.moon, p.kind, format(p.external1), format(p.maximum), format(p.external2))
+}
+// io shadowTransit 6:32:56 7:43:49 8:54:43 — before opposition the shadow leads the moon
+// europa satelliteTransit 6:7:34 7:36:14 9:4:55
+// io satelliteTransit 7:46:26 8:56:54 10:7:23
+```
+
 ### Galilean Satellite Theory (L1.2)
 
 L1.2 (Lainey, Vienne, and Duriez) is the IMCCE analytical theory of the four Galilean satellites. For each body, trigonometric series give equinoctial elements (semi-major axis, mean longitude, and the eccentricity and inclination vectors), degree-8 Chebyshev polynomials add the official long-period corrections, and Kepler's equation is solved for the position. The result is rotated into the J2000 equatorial frame.
@@ -2029,16 +2057,18 @@ console.log(diagnostics.warnings) // []
 
 ### Great Red Spot Transits
 
-The Great Red Spot is a long-lived storm at a drifting System II longitude. It is best seen when it crosses Jupiter's central meridian, which happens once per System II rotation, about every 9 h 56 m. Its position is an observed quantity, so you give the current System II longitude, from an observer bulletin such as ALPO or JUPOS. It drifts by under a degree per month, so one value is adequate for a prediction window of a few weeks.
+The Great Red Spot is a long-lived storm at a drifting System II longitude. It is best seen when it crosses Jupiter's central meridian, which happens once per System II rotation, about every 9 h 56 m. Its position is an observed quantity, so you give the current System II longitude, from an observer bulletin such as ALPO or JUPOS. It drifts by under a degree per month, so one value is adequate for a prediction window of a few weeks; a longer window, or a reference measured some time ago, needs the drift.
 
 `greatRedSpotTransits(grsLongitude, jupiterToObserverAt, start, stop, options?)` returns the transit instants in the window as `Time`s in chronological order. `grsLongitude` is the System II longitude, positive west, in radians. `jupiterToObserverAt` returns the Jupiter-to-observer vector (AU, ICRF) at a time, as for `jupiterCentralMeridian` (see [Jupiter Central Meridian](#jupiter-central-meridian)). A transit is where the System II central meridian equals the spot's longitude with the spot on the near side; the anti-transits half a rotation later are discarded. `options.step` and `options.tolerance` are in days; the step must stay well under half a rotation, and its default of one hour is ample. The times keep the scale of `start`.
 
+A `GreatRedSpotModel` gives the spot's System II west `longitude` at a reference `epoch` and its linear `drift` in radians per day, positive toward increasing west longitude. `greatRedSpotLongitude(model, time)` evaluates it, normalized to `[0, 2π)` and extrapolated backward before the epoch, and `greatRedSpotTransitsWithDrift(model, jupiterToObserverAt, start, stop, options?)` finds the transits of the drifting spot with the same near-side rule.
+
 ```ts
 import { earth, jupiter } from 'nebulosa/src/astronomy/ephemeris/models/analytical/vsop87e'
-import { greatRedSpotTransits } from 'nebulosa/src/astronomy/events/jupiter'
+import { greatRedSpotLongitude, greatRedSpotTransits, greatRedSpotTransitsWithDrift } from 'nebulosa/src/astronomy/events/jupiter'
 import { type Time, Timescale, timeSubtract, timeToDate, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
 import { vecMinus } from 'nebulosa/src/math/linear-algebra/vec3'
-import { deg } from 'nebulosa/src/math/units/angle'
+import { deg, toDeg } from 'nebulosa/src/math/units/angle'
 
 const jupiterToEarth = (time: Time) => vecMinus(earth(time)[0], jupiter(time)[0])
 
@@ -2052,6 +2082,11 @@ for (const time of greatRedSpotTransits(deg(50), jupiterToEarth, start, stop)) c
 // [2026, 6, 29, 22, 6, 56] 22.1158
 // [2026, 6, 30, 8, 2, 47] 32.0465
 // [2026, 6, 30, 17, 58, 38] 41.9773 — five transits in 48 hours, about 9.93 hours apart
+
+// A spot measured at 48.5° on 2026-06-01 and drifting 0.05°/day stands at 49.9° on 2026-06-29.
+const model = { longitude: deg(48.5), epoch: timeYMDHMS(2026, 6, 1, 0, 0, 0, Timescale.UTC), drift: deg(0.05) }
+console.log(toDeg(greatRedSpotLongitude(model, start))) // 49.9
+console.log(greatRedSpotTransitsWithDrift(model, jupiterToEarth, start, stop).length) // 5
 ```
 
 ### Greatest Solar Eclipse Circumstances
@@ -2361,6 +2396,8 @@ Predicting a phenomenon of Jupiter's system needs the positions of the Sun, the 
 - `analyticalJovianEphemeris` uses VSOP87E for the Sun, the Earth and Jupiter, and adds the L1.2 jovicentric offsets (see [Galilean Satellite Theory (L1.2)](#galilean-satellite-theory-l12)) to the VSOP87E Jupiter for the satellites. It never fails.
 - `spkJovianEphemeris(set)` resolves each body through a prepared SPK kernel set with the NAIF precedence rules (see [SPK State Kernels](#spk-state-kernels)). Jupiter is NAIF 599, the planet's centre, never the system barycenter 5. A body that cannot be resolved throws a `JovianEphemerisMiss` carrying the requested `target`, the NAIF `body` of the chain where resolution stopped, the `reason` (`'missing'`, `'coverage'`, `'cycle'`, `'dataType'` or `'frame'`) and the `time`. Throwing lets the caller abandon the whole computation and rerun it with another source instead of mixing sources. `kernelsByBody` accumulates the files that supplied each evaluated body.
 
+`interpolatedJovianEphemeris(source)` wraps a source for dense searches: it evaluates the source on a fixed TDB grid (daily for the Sun, the Earth and Jupiter, hourly for the satellites, or for their jovicentric offsets when the source is jovicentric) and interpolates with a six-point Lagrange polynomial. The error stays below 0.1 km and the cost drops by orders of magnitude. It keeps the source's provenance and errors, possibly for a node up to three steps beyond the requested epoch, and caches its nodes, so create one per computation.
+
 `hasJovianTargets(set)` tells whether a set has a segment for each of the seven bodies (NAIF 10, 399, 599 and 501-504). It is a necessary condition only; centers, coverage and segment support are checked per epoch. A planetary kernel such as DE440s has the Jovian barycenter but not Jupiter's centre or its satellites, so it is not a Jovian source on its own. `GALILEAN_RADIUS_KM` and `GALILEAN_RADIUS_AU` hold the mean radii of the satellites, and `JUPITER_EQUATORIAL_RADIUS_KM` (71492) and `JUPITER_POLAR_RADIUS_KM` (66854) in `nebulosa/src/core/constants` the IAU 1-bar radii of Jupiter.
 
 ```ts
@@ -2396,7 +2433,7 @@ Seen from the Earth, Jupiter is a flattened disk about 40″ to 50″ across, wi
 
 Jupiter is an oblate spheroid with the IAU 1-bar radii, and its limb is never treated as a circle: seen along any direction its outline is an ellipse whose minor axis follows the projected pole, and a point is compared with it by its exact signed distance (`signedDistanceToEllipse` in `nebulosa/src/math/numerical/geometry`). The moons are spheres of their mean radii. Jupiter and each moon are light-time retarded separately. A moon's shadow is cast along the axis from the Sun through the moon, so away from opposition it lies well off the moon's own position. It is evaluated when Jupiter emits the light seen at the observed instant, from the moon one moon-to-Jupiter light time earlier. Jupiter's shadow on a moon is evaluated when the moon emits the light seen at the observed instant. The shadows are cones of the finite Sun. Jupiter's shadow cross-section is its Sun-view outline scaled by the cone ratio, which is exact for a sphere and a close approximation for the oblate planet. Times are observed geocentric instants, not topocentric ones; aberration is neglected.
 
-`projectJovianSurfacePoint(view, longitude, latitude)` places a cloud-top feature given by its System II west longitude and planetographic latitude, such as the Great Red Spot, on the apparent disk, with a flag telling whether it faces the Earth. The scanning primitives are exported too: `jovianSystemState(ephemeris, time)` gives the state shared by the moons, and `jovianMoonMargins(ephemeris, state, moon)` gives the signed distances of a moon from the limb, of its shadow axis from the disk, and of the moon from Jupiter's umbra and penumbra. `jovianView` also evaluates the precession-nutation matrix for its sky axes, so it is meant for display rather than for dense sampling.
+`projectJovianSurfacePoint(view, longitude, latitude)` places a cloud-top feature given by its System II west longitude and planetographic latitude, such as the Great Red Spot, on the apparent disk, with a flag telling whether it faces the Earth. The scanning primitives behind [Galilean Satellite Phenomena](#galilean-satellite-phenomena) are exported too: `jovianSystemState(ephemeris, time)` gives the state shared by the moons, and `jovianMoonMargins(ephemeris, state, moon)` gives the signed distances of a moon from the limb, of its shadow axis from the disk, and of the moon from Jupiter's umbra and penumbra. `jovianView` also evaluates the precession-nutation matrix for its sky axes, so it is meant for display rather than for dense sampling.
 
 ```ts
 import { analyticalJovianEphemeris } from 'nebulosa/src/astronomy/ephemeris/jovian'

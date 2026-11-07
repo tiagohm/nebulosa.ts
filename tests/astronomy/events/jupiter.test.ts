@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import { earth, jupiter } from '../../../src/astronomy/ephemeris/models/analytical/vsop87e'
-import { greatRedSpotTransits, jupiterCentralMeridian } from '../../../src/astronomy/events/jupiter'
-import { type Time, Timescale, timeSubtract, timeYMDHMS } from '../../../src/astronomy/time/time'
+import { greatRedSpotLongitude, greatRedSpotTransits, greatRedSpotTransitsWithDrift, jupiterCentralMeridian } from '../../../src/astronomy/events/jupiter'
+import { type Time, Timescale, timeShift, timeSubtract, timeYMDHMS } from '../../../src/astronomy/time/time'
 import { type Vec3, vecMinus } from '../../../src/math/linear-algebra/vec3'
 import { deg, toDeg } from '../../../src/math/units/angle'
 
@@ -55,5 +55,43 @@ test('Great Red Spot transits match PyEphem', () => {
 	for (let i = 1; i < transits.length; i++) {
 		const gap = timeSubtract(transits[i], transits[i - 1], Timescale.UTC) * 24
 		expect(gap).toBeCloseTo(9.93, 1)
+	}
+})
+
+test('a drifting Great Red Spot model with zero drift reproduces the fixed longitude', () => {
+	const stop = timeYMDHMS(2026, 7, 1, 0, 0, 0, Timescale.UTC)
+	const fixed = greatRedSpotTransits(deg(50), jupiterToEarth, T0, stop)
+	// The epoch lies outside the window, which must not matter without drift.
+	const drifting = greatRedSpotTransitsWithDrift({ longitude: deg(50), epoch: timeYMDHMS(2026, 1, 1, 0, 0, 0, Timescale.UTC), drift: 0 }, jupiterToEarth, T0, stop)
+	expect(drifting.length).toBe(fixed.length)
+	for (let i = 0; i < fixed.length; i++) expect(Math.abs(timeSubtract(drifting[i], fixed[i])) * 86400).toBeLessThan(0.01)
+})
+
+test('the Great Red Spot longitude drifts linearly and wraps at 360 degrees', () => {
+	const epoch = timeYMDHMS(2026, 6, 1, 0, 0, 0, Timescale.UTC)
+	const model = { longitude: deg(359.5), epoch, drift: deg(0.05) }
+	expect(toDeg(greatRedSpotLongitude(model, epoch))).toBeCloseTo(359.5, 9)
+	// Twenty days later: 359.5 + 1.0 wraps to 0.5.
+	expect(toDeg(greatRedSpotLongitude(model, timeShift(epoch, 20)))).toBeCloseTo(0.5, 9)
+	// Before the epoch the drift runs backward.
+	expect(toDeg(greatRedSpotLongitude(model, timeShift(epoch, -10)))).toBeCloseTo(359, 9)
+	// A negative drift moves the spot toward decreasing west longitude.
+	expect(toDeg(greatRedSpotLongitude({ ...model, longitude: deg(0.2), drift: deg(-0.05) }, timeShift(epoch, 10)))).toBeCloseTo(359.7, 9)
+})
+
+test('a drifting Great Red Spot transits where the central meridian meets its current longitude', () => {
+	const model = { longitude: deg(50), epoch: T0, drift: deg(1) }
+	const stop = timeYMDHMS(2026, 7, 1, 0, 0, 0, Timescale.UTC)
+	const transits = greatRedSpotTransitsWithDrift(model, jupiterToEarth, T0, stop)
+	const fixed = greatRedSpotTransits(deg(50), jupiterToEarth, T0, stop)
+	expect(transits.length).toBe(5)
+
+	for (let i = 0; i < transits.length; i++) {
+		const cm = toDeg(jupiterCentralMeridian('II', transits[i], jupiterToEarth(transits[i])))
+		expect(cm).toBeCloseTo(toDeg(greatRedSpotLongitude(model, transits[i])), 3)
+		// A westward drift delays each transit by drift / (rotation rate - drift): ~1°/day over ~870°/day.
+		const delay = timeSubtract(transits[i], fixed[i]) * 86400
+		const elapsed = timeSubtract(transits[i], T0)
+		expect(delay).toBeCloseTo((elapsed * 86400) / 870.27, -1)
 	}
 })

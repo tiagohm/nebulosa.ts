@@ -5,7 +5,7 @@ import { intersectSegmentEllipsoid, signedDistanceToEllipse } from '../../math/n
 import type { Angle } from '../../math/units/angle'
 import { bodyFixedMatrix, JUPITER_ROTATION, JUPITER_SYSTEM_II, orientation } from '../bodies/orientation'
 import { GALILEAN_MOONS, GALILEAN_RADIUS_AU, type GalileanMoon, type JovianBody, type JovianEphemeris } from '../ephemeris/jovian'
-import { precessionNutationMatrix, type Time, timeShift } from '../time/time'
+import { precessionNutationMatrix, type Time, tdb, timeShift } from '../time/time'
 import { jupiterCentralMeridian } from './jupiter'
 
 // Apparent geometry of Jupiter and its Galilean satellites for a geocentric observer: the oblate
@@ -96,7 +96,7 @@ function jupiterPole(time: Time): Vec3 {
 
 // The state shared by every moon at one observed instant.
 export interface JovianSystemState {
-	// Observed instant at the geocentre.
+	// Observed instant at the geocentre, in TDB; the derived epochs keep that scale.
 	readonly time: Time
 	// Barycentric position of the Earth at the observed instant (AU, ICRF).
 	readonly earth: Vec3
@@ -119,6 +119,8 @@ export interface JovianSystemState {
 // Computes the state shared by every moon at an observed instant: the Earth, the retarded Jupiter, its
 // pole and outline, and the Sun that lights it.
 export function jovianSystemState(ephemeris: JovianEphemeris, time: Time): JovianSystemState {
+	// Every derived epoch is a shift of this one, so converting once keeps the later conversions free.
+	time = tdb(time)
 	const earth = ephemeris.position('earth', time)
 	const { position: jupiter, emissionTime } = retard(ephemeris, 'jupiter', earth, time)
 	const toJupiter = vecMinus(jupiter, earth)
