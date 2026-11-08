@@ -232,9 +232,12 @@ test('Venus dichotomies and greatest brightness agree with DE421 geometry', () =
 	expectEpoch(dichotomies[1].time, 224.867131809)
 	for (const event of dichotomies) expect(toDeg(event.phaseAngle)).toBeCloseTo(90, 6)
 
-	// The two minima at phase angles below 163.7 degrees are the greatest brilliancies; any other
-	// minimum comes from the forward-scattering branch of the model near inferior conjunction.
-	const brightest = planetaryBrightnessMaxima('venus', VENUS, SUN, EPOCH, STOP, OPTIONS).filter((event) => event.phaseAngle < deg(163.7))
+	// The two minima on the crescent branch (phase angles 90 to 163.7 degrees) are the greatest
+	// brilliancies; the forward-scattering branch adds two faint minima around inferior conjunction,
+	// and the low-phase polynomial shallow ones near superior conjunction (none in this window).
+	const minima = planetaryBrightnessMaxima('venus', VENUS, SUN, EPOCH, STOP, OPTIONS)
+	expect(minima.filter((event) => event.phaseAngle > deg(163.7))).toHaveLength(2)
+	const brightest = minima.filter((event) => event.phaseAngle > deg(90) && event.phaseAngle < deg(163.7))
 	expect(brightest).toHaveLength(2)
 	for (const [i, days, magnitude, phase] of [
 		[0, 122.363410816, -4.753237705, 121.731900706],

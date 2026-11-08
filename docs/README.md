@@ -4595,7 +4595,7 @@ for (const appulse of planetaryAppulses(jupiterAt, saturnAt, start, stop, { step
 
 A planet's apparent magnitude changes with its distance and phase. Venus is brightest not at inferior conjunction, where it is nearest but almost unlit, but about a month before and after it, at its greatest brilliancy near a 120° phase angle.
 
-`planetaryBrightnessMaxima(planet, targetAt, sunAt, start, stop, options?, magnitude?)` returns the local minima of the magnitude from [Planetary Apparent Magnitudes (Mallama and Hilton)](#planetary-apparent-magnitudes-mallama-and-hilton) as chronological `{ time, magnitude, phaseAngle }`, with `phaseAngle` the Sun-planet-observer angle in radians. `targetAt` and `sunAt` return observer-relative vectors (AU) with the same axes and correction stage, and the Sun-planet vector is their difference; `magnitude` passes the model options (`year`, `rings`). Every minimum of the model is reported, so for Venus the forward-scattering branch beyond a 163.7° phase angle adds two faint minima around inferior conjunction; filter on `phaseAngle` to keep the greatest brilliancies. Where the model is undefined (`NaN`), no extremum is reported. A brightness maximum is flat, so its instant is far less precise than its magnitude.
+`planetaryBrightnessMaxima(planet, targetAt, sunAt, start, stop, options?, magnitude?)` returns the local minima of the magnitude from [Planetary Apparent Magnitudes (Mallama and Hilton)](#planetary-apparent-magnitudes-mallama-and-hilton) as chronological `{ time, magnitude, phaseAngle }`, with `phaseAngle` the Sun-planet-observer angle in radians. `targetAt` and `sunAt` return observer-relative vectors (AU) with the same axes and correction stage, and the Sun-planet vector is their difference; `magnitude` passes the model options (`year`, `rings`). Every minimum of the model is reported: for Venus the forward-scattering branch beyond a 163.7° phase angle adds two faint minima around inferior conjunction, and the low-phase polynomial with the distance adds shallow minima of about −3.9 near superior conjunction, so keep the crescent phases between 90° and 163.7° to find the greatest brilliancies. Where the model is undefined (`NaN`), no extremum is reported. A brightness maximum is flat, so its instant is far less precise than its magnitude.
 
 ```ts
 import { earth, sun, venus } from 'nebulosa/src/astronomy/ephemeris/models/analytical/vsop87e'
@@ -4610,7 +4610,7 @@ const stop = timeShift(start, 366)
 const venusAt = (time: Time) => vecMinus(venus(time)[0], earth(time)[0])
 const sunAt = (time: Time) => vecMinus(sun(time)[0], earth(time)[0])
 
-const brilliancies = planetaryBrightnessMaxima('venus', venusAt, sunAt, start, stop, { step: 2 }).filter((event) => event.phaseAngle < deg(163.7))
+const brilliancies = planetaryBrightnessMaxima('venus', venusAt, sunAt, start, stop, { step: 2 }).filter((event) => event.phaseAngle > deg(90) && event.phaseAngle < deg(163.7))
 
 for (const event of brilliancies) console.log(timeToDate(event.time).slice(0, 3), event.magnitude, toDeg(event.phaseAngle))
 // [2020, 5, 2] -4.753 121.7 — magnitude and degrees, evening star, TT

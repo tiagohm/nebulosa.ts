@@ -341,8 +341,9 @@ export function planetaryIlluminationCrossings(targetAt: PositionOverTime, sunAt
 }
 
 // Finds the local minima of the modelled apparent visual magnitude of planet (planetMagnitude, Mallama
-// and Hilton 2018) in start/stop: every brightness maximum of the model, including any the photometric
-// polynomials produce near a conjunction, which the caller may exclude by phase angle. targetAt and
+// and Hilton 2018) in start/stop: every brightness maximum of the model, including those the photometric
+// polynomials produce near a conjunction (for Venus, beyond a 163.7-degree phase angle around inferior
+// conjunction and at small phase angles near superior conjunction), which the caller may exclude by phase angle. targetAt and
 // sunAt return observer-relative vectors in AU (geometric or light-time, used consistently), from which
 // the Sun-planet vector is their difference. Where the model is undefined (NaN) no coarse triple
 // brackets an extremum, and a refinement that ends on an undefined value is dropped, so NaN never
