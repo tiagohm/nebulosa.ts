@@ -235,10 +235,37 @@ export const MU_KM3_S2_TO_AU3_D2 = (DAYSEC * DAYSEC) / AU_KM / AU_KM / AU_KM
 // Conversion factor for a gravitational parameter from AU³/day² to km³/s².
 export const MU_AU3_D2_TO_KM3_S2 = (AU_KM * AU_KM * AU_KM) / (DAYSEC * DAYSEC)
 
-// Earth gravitational parameter (GM_Earth) in km³/s², from JPL DE440.
+// Earth gravitational parameter (GM_Earth) in km³/s², the 398600.435436 of JPL DE430/DE431 (BODY399_GM of
+// NAIF gm_de431.tpc), 7e-5 km³/s² below the DE440 value GM_EARTH_DE440_KM3_S2.
 export const GM_EARTH_KM3_S2 = 398600.435436
-// Earth gravitational parameter (GM_Earth) in AU³/day², from JPL DE440.
+// Earth gravitational parameter (GM_Earth) in AU³/day², from GM_EARTH_KM3_S2.
 export const GM_EARTH = GM_EARTH_KM3_S2 * MU_KM3_S2_TO_AU3_D2
+
+// Gravitational parameters (km³/s²) of JPL DE440, copied from NAIF gm_de440.tpc ("ASTRO-VALUES" of the
+// DE440 NAVIO file). A "system" value is the GM of a planet and its satellites, the mass that acts at the
+// planetary barycenter; Mercury and Venus have no satellites, so their system and body values are equal.
+// Solar gravitational parameter (BODY10_GM), slightly different from GM_SUN_PITJEVA_2005_KM3_S2.
+export const GM_SUN_DE440_KM3_S2 = 1.3271244004127942e11
+// Earth (BODY399_GM).
+export const GM_EARTH_DE440_KM3_S2 = 3.9860043550702266e5
+// Mercury (BODY199_GM = BODY1_GM).
+export const GM_MERCURY_KM3_S2 = 2.2031868551400003e4
+// Venus (BODY299_GM = BODY2_GM).
+export const GM_VENUS_KM3_S2 = 3.24858592e5
+// Moon (BODY301_GM).
+export const GM_MOON_KM3_S2 = 4.9028001184575496e3
+// Mars system, at the Mars barycenter (BODY4_GM).
+export const GM_MARS_SYSTEM_KM3_S2 = 4.2828375815756102e4
+// Jupiter system, at the Jupiter barycenter (BODY5_GM).
+export const GM_JUPITER_SYSTEM_KM3_S2 = 1.2671276409999998e8
+// Saturn system, at the Saturn barycenter (BODY6_GM).
+export const GM_SATURN_SYSTEM_KM3_S2 = 3.7940584841799997e7
+// Uranus system, at the Uranus barycenter (BODY7_GM).
+export const GM_URANUS_SYSTEM_KM3_S2 = 5.7945563999999985e6
+// Neptune system, at the Neptune barycenter (BODY8_GM).
+export const GM_NEPTUNE_SYSTEM_KM3_S2 = 6.8365271005803989e6
+// Pluto system, at the Pluto barycenter (BODY9_GM).
+export const GM_PLUTO_SYSTEM_KM3_S2 = 9.755e2
 
 // Heliocentric gravitational constant in meters^3 / second^2, from DE-405.
 export const GS = 1.32712440017987e20
