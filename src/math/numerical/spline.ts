@@ -1,3 +1,4 @@
+import type { MutVec3, Vec3 } from '../linear-algebra/vec3'
 import type { NumberArray } from './math'
 
 // Polynomial and piecewise interpolating splines: a single-interval polynomial spline (with derivative
@@ -149,6 +150,24 @@ export function splineGivenEnds(x0: number, y0: number, slope0: number, x1: numb
 	const a2 = 3 * dy - 2 * s0 - s1
 	const a3 = s0 + s1 - 2 * dy
 	return spline(x0, x1, [a3, a2, s0, y0])
+}
+
+// Cubic Hermite interpolation of a 3-vector through `y0` with derivative `slope0` at the start of an interval
+// and `y1` with derivative `slope1` at its end, evaluated at the normalized parameter `s` (0 at the start, 1
+// at the end; values outside extrapolate). `width` is the interval length in the unit the slopes are
+// derivatives by (a state's position and velocity in AU/day take the width in days). Writes into `out` and
+// returns it; allocates a fresh vector when it is omitted.
+export function hermiteVec3(y0: Vec3, slope0: Vec3, y1: Vec3, slope1: Vec3, width: number, s: number, out: MutVec3 = [0, 0, 0]): MutVec3 {
+	const s2 = s * s
+	const s3 = s2 * s
+	const h00 = 2 * s3 - 3 * s2 + 1
+	const h10 = (s3 - 2 * s2 + s) * width
+	const h01 = 3 * s2 - 2 * s3
+	const h11 = (s3 - s2) * width
+	out[0] = h00 * y0[0] + h10 * slope0[0] + h01 * y1[0] + h11 * slope1[0]
+	out[1] = h00 * y0[1] + h10 * slope0[1] + h01 * y1[1] + h11 * slope1[1]
+	out[2] = h00 * y0[2] + h10 * slope0[2] + h01 * y1[2] + h11 * slope1[2]
+	return out
 }
 
 function pchipOutOfRange(options?: PchipOptions | boolean) {

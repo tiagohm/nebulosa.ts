@@ -7281,6 +7281,63 @@ console.log(hyperbolic.at(time(2460787 + 100, 0, Timescale.TDB))[0]) // [-2.2033
 console.log(stumpff(0.5)) // [0.76024, 0.91873, 0.47951, 0.16255]
 ```
 
+### Two-Body Orbit Mechanics
+
+A two-body orbit is fully reproducible from a center's gravitational parameter, an epoch, and either six classical elements or a Cartesian state. The elements need a reference plane, the axes do not: an ellipse is given by its semi-major axis and mean anomaly, while a parabola has no semi-major axis, period, or periodic mean anomaly and is given, like a hyperbola, by its periapsis distance and time of periapsis passage. This layer over [Two-Body Kepler Propagation](#two-body-kepler-propagation) normalizes every definition into one model in J2000 equatorial (ICRF-aligned) axes, so an ecliptic definition is rotated once and a Cartesian state never.
+
+`orbitOf(definition)` takes an `elliptic` (`semiMajorAxis`, `eccentricity` below 1, `meanAnomaly`, `epoch`), `parabolic` (`periapsisDistance`, `periapsisTime`), `hyperbolic` (`periapsisDistance`, `eccentricity` above 1, `periapsisTime`), or `cartesian` (`position` AU and `velocity` AU/day in equatorial axes, `epoch`) definition, each with `mu` in AU³/day²; the conic ones also take `plane` (`'equator'` or `'ecliptic'`), `inclination`, `node`, and `argumentOfPeriapsis` in radians. It returns `{ ok: true, orbit }`, a `KeplerOrbit` with an identity output rotation, or `{ ok: false, reason: 'degenerate' }` for a rectilinear state. `orbitStateAt(orbit, time)` returns the exact geometric state relative to the center, or `outOfRange`/`solverFailed` instead of throwing or returning `NaN`; offsets are measured in TT, so instants must stay within about 10⁷ days of J2000. `orbitalElements(time, position, velocity, mu, plane)` gives the osculating elements referred to a plane, with `conic` (`circular` below an eccentricity of 1e-10, `parabolic` within 1e-10 of 1) deciding which apply, while `eccentricity` stays as computed. Angles that a geometry leaves undefined are `{ defined: false, reason }`: the node, argument of periapsis, and argument of latitude of an equatorial orbit (sine of the inclination below 1e-10), whose longitudes are then measured from +X in the direction of motion, and the periapsis directions and anomalies of a circular one. `semiMajorAxis` is negative for a hyperbola, and `period`, `apoapsisDistance`, and `semiMinorAxis` exist only for a bound orbit. `orbitDiagnostics(position, velocity, mu)` gives the radius, speed, radial and transverse speeds, escape speed, specific energy, angular momentum, eccentricity vector, and plane normal. `stateResidual(model, modelVelocity, reference, referenceVelocity)` gives model − reference and its components on the RTN frame of the reference (R radial, T along-track, N normal), absent when that frame is undefined. `ORBIT_CENTERS` and `orbitCenter(code)` list the centers with DE440 gravitational parameters, by NAIF ID: the Sun, Mercury, Venus, the Earth, the Moon, and the Mars to Pluto system barycenters, each with an equatorial radius.
+
+`sampleConic(orbit, options?)` draws the curve by true anomaly, halving every chord whose sagitta exceeds `tolerance` (default 1e-4) of its distance, so points crowd near periapsis: the whole ellipse with its last point repeating the first, or an open arc out to `maxRadius` (default 20 periapsis distances) and strictly inside the asymptotes, with the periapsis, apoapsis, and nodes on `plane` as `markers`. `sampleStates(orbit, start, end, options?)` tabulates exact states in increasing time, keeping both ends and any `markers` inside, halving every interval where the cubic Hermite through its end states misses the exact middle by more than `tolerance` (default 1e-6) of the distance; a bound orbit starts with at least 16 intervals per period. Both stop at `maxPoints` or `maxSamples` (default 2048) and set `truncated`, and a failed evaluation fails the whole table. Interpolate between two samples with `hermiteVec3` (see [Splines and Interpolation](#splines-and-interpolation)).
+
+```ts
+import { orbitalElements, orbitCenter, orbitDiagnostics, orbitOf, orbitStateAt, stateResidual } from 'nebulosa/src/astronomy/orbits/mechanics'
+import { sampleConic, sampleStates } from 'nebulosa/src/astronomy/orbits/sampling'
+import { Timescale, time } from 'nebulosa/src/astronomy/time/time'
+import { deg, toDeg } from 'nebulosa/src/math/units/angle'
+
+const sun = orbitCenter(10)!
+const epoch = time(2460787, 0, Timescale.TDB)
+
+// Elements on the J2000 ecliptic; the model's states are in equatorial axes.
+const model = orbitOf({ kind: 'elliptic', mu: sun.mu, plane: 'ecliptic', semiMajorAxis: 2.7, eccentricity: 0.3, inclination: deg(12), node: deg(80), argumentOfPeriapsis: deg(70), meanAnomaly: deg(40), epoch })
+if (!model.ok) throw new Error(model.reason)
+
+const state = orbitStateAt(model.orbit, time(2460787 + 100, 0, Timescale.TDB))
+if (!state.ok) throw new Error(state.reason)
+
+console.log(state.position) // [-0.99291, -2.1971, -0.82024] — AU, heliocentric equatorial J2000
+
+const elements = orbitalElements(state.time, state.position, state.velocity, sun.mu, 'ecliptic')
+
+console.log(elements.conic, elements.period) // elliptic 1620.5 — days
+console.log(toDeg(elements.meanAnomaly!)) // 62.216 — degrees, 100 days after 40°
+console.log(orbitDiagnostics(state.position, state.velocity, sun.mu).specificEnergy) // -5.4799e-5 — AU²/day², −mu/2a
+
+// A circular equatorial orbit has neither a node nor a periapsis.
+const flat = orbitOf({ kind: 'elliptic', mu: sun.mu, plane: 'equator', semiMajorAxis: 1, eccentricity: 0, inclination: 0, node: 0, argumentOfPeriapsis: 0, meanAnomaly: 0, epoch })
+if (!flat.ok) throw new Error(flat.reason)
+const circular = orbitalElements(epoch, flat.orbit.position, flat.orbit.velocity, sun.mu, 'equator')
+
+console.log(circular.node, circular.argumentOfPeriapsis) // { defined: false, reason: 'equatorial' } { defined: false, reason: 'circular' }
+
+// Radial motion is not a conic.
+console.log(orbitOf({ kind: 'cartesian', mu: sun.mu, position: [1, 0, 0], velocity: [0.01, 0, 0], epoch })) // { ok: false, reason: 'degenerate' }
+
+const conic = sampleConic(model.orbit, { plane: 'ecliptic' })
+
+console.log(
+	conic.points.length,
+	conic.markers.map((e) => e.kind),
+) // 301 ['periapsis', 'apoapsis', 'ascendingNode', 'descendingNode']
+
+const table = sampleStates(model.orbit, epoch, time(2460787 + 365, 0, Timescale.TDB))
+if (table.ok) console.log(table.samples.length) // 33
+
+// The same orbit 0.01 day later, against the state now: ahead along-track (T > 0), not out of plane.
+const later = orbitStateAt(model.orbit, time(2460787 + 100.01, 0, Timescale.TDB))
+if (later.ok) console.log(stateResidual(later.position, later.velocity, state.position, state.velocity).rtnPosition) // [3.2693e-5, 0.00010588, 1.6e-16] — AU
+```
+
 ### Uranian Satellite Theory (GUST86)
 
 GUST86 (Laskar and Jacobson) is the analytical theory of the five major Uranian satellites. Each body builds equinoctial elements from shared fundamental arguments (mean longitude, eccentricity and inclination phasors), converts them to rectangular coordinates, and rotates the result into the J2000 equatorial frame.
@@ -24696,7 +24753,7 @@ console.log(
 
 ### Splines and Interpolation
 
-Two kinds of interpolators live here. `spline(lower, upper, coefficients)` is a single polynomial over one interval `[lower, upper]`, evaluated in the normalized parameter `t = (x - lower) / (upper - lower)` with coefficients in descending power order, and it exposes `compute(x)`, `derivative()` (the spline of dy/dx, in the original x units) and `integral(constant?)` (the antiderivative, with value `constant` at `lower`, default 0). `splineGivenEnds(x0, y0, slope0, x1, y1, slope1)` builds the cubic Hermite polynomial that matches the values and slopes at both ends. The piecewise builders take ordered control points `x` (strictly increasing) and `y` and return an object with `compute(x)`, `reset()`, the knots `x` and `y`, and (for the cubic family) the nodal `slopes`: `linearSpline` joins the points with straight segments; `cubicHermiteSpline` and `pchip` use shape-preserving slopes that never overshoot monotone data (PCHIP additionally exposes `knots`, `values`, `derivatives`, `widths` and `secants`); `akimaSpline` weights the local secants so that outliers disturb the curve little; `catmullRomSpline` takes centered finite-difference slopes; and `naturalCubicSpline` is the C² cubic with zero second derivative at both ends. All of them interpolate, so the curve passes through every control point. Outside `[x[0], x[last]]` a query is clamped to the end value unless the `extrapolate` option (or a `true` third argument) continues the end segment; `pchip` also accepts `outOfRange: 'clamp' | 'extrapolate' | 'throw'`. Evaluation caches the last segment to be fast for monotonic query streams, so call `reset()` before jumping around, and the control-point arrays are kept by reference and must not be changed afterwards. `cubicHermiteSplineLUT`, `akimaSplineLUT`, `catmullRomSplineLUT` and `naturalCubicSplineLUT` sample the whole x-range at `size` (at least 2) evenly spaced positions into a `Float32Array`, which is handy for tone curves and look-up tables.
+Two kinds of interpolators live here. `spline(lower, upper, coefficients)` is a single polynomial over one interval `[lower, upper]`, evaluated in the normalized parameter `t = (x - lower) / (upper - lower)` with coefficients in descending power order, and it exposes `compute(x)`, `derivative()` (the spline of dy/dx, in the original x units) and `integral(constant?)` (the antiderivative, with value `constant` at `lower`, default 0). `splineGivenEnds(x0, y0, slope0, x1, y1, slope1)` builds the cubic Hermite polynomial that matches the values and slopes at both ends, and `hermiteVec3(y0, slope0, y1, slope1, width, s, out?)` evaluates that Hermite for 3-vectors at the normalized `s` (0 to 1) of an interval of `width`, the unit the slopes are derivatives by, such as a position and velocity in AU/day over days. The piecewise builders take ordered control points `x` (strictly increasing) and `y` and return an object with `compute(x)`, `reset()`, the knots `x` and `y`, and (for the cubic family) the nodal `slopes`: `linearSpline` joins the points with straight segments; `cubicHermiteSpline` and `pchip` use shape-preserving slopes that never overshoot monotone data (PCHIP additionally exposes `knots`, `values`, `derivatives`, `widths` and `secants`); `akimaSpline` weights the local secants so that outliers disturb the curve little; `catmullRomSpline` takes centered finite-difference slopes; and `naturalCubicSpline` is the C² cubic with zero second derivative at both ends. All of them interpolate, so the curve passes through every control point. Outside `[x[0], x[last]]` a query is clamped to the end value unless the `extrapolate` option (or a `true` third argument) continues the end segment; `pchip` also accepts `outOfRange: 'clamp' | 'extrapolate' | 'throw'`. Evaluation caches the last segment to be fast for monotonic query streams, so call `reset()` before jumping around, and the control-point arrays are kept by reference and must not be changed afterwards. `cubicHermiteSplineLUT`, `akimaSplineLUT`, `catmullRomSplineLUT` and `naturalCubicSplineLUT` sample the whole x-range at `size` (at least 2) evenly spaced positions into a `Float32Array`, which is handy for tone curves and look-up tables.
 
 ```ts
 import { akimaSpline, akimaSplineLUT, catmullRomSpline, catmullRomSplineLUT, cubicHermiteSpline, cubicHermiteSplineLUT, linearSpline, naturalCubicSpline, naturalCubicSplineLUT, pchip, spline, splineGivenEnds } from 'nebulosa/src/math/numerical/spline'

@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { akimaSpline, akimaSplineLUT, catmullRomSpline, catmullRomSplineLUT, cubicHermiteSpline, cubicHermiteSplineLUT, linearSpline, naturalCubicSpline, naturalCubicSplineLUT, pchip, spline, splineGivenEnds, type Spline } from '../../../src/math/numerical/spline'
+import { akimaSpline, akimaSplineLUT, catmullRomSpline, catmullRomSplineLUT, cubicHermiteSpline, cubicHermiteSplineLUT, hermiteVec3, linearSpline, naturalCubicSpline, naturalCubicSplineLUT, pchip, spline, splineGivenEnds, type Spline } from '../../../src/math/numerical/spline'
 
 function expectPchipLocallyBounded(s: Pick<Spline, 'compute'>, x: readonly number[], y: readonly number[], samples = 16) {
 	for (let i = 0; i < x.length - 1; i++) {
@@ -343,4 +343,18 @@ test('invalid input', () => {
 	expect(() => naturalCubicSpline([0, 1], [0])).toThrow('spline x and y arrays must have the same length')
 	expect(() => naturalCubicSpline([0, 0, 1], [0, 0.5, 1])).toThrow('spline x coordinates must be strictly increasing')
 	expect(() => naturalCubicSplineLUT([0, 1], [0, 1], 1)).toThrow('spline LUT size must be at least two')
+})
+
+test('hermiteVec3 reproduces a cubic from its end values and derivatives', () => {
+	// f(t) = (t³ − 2t + 1, 2t² + t, −t³ + 4) on [1, 3], derivatives (3t² − 2, 4t + 1, −3t²).
+	const f = (t: number) => [t ** 3 - 2 * t + 1, 2 * t * t + t, -(t ** 3) + 4] as const
+	const df = (t: number) => [3 * t * t - 2, 4 * t + 1, -3 * t * t] as const
+	const out: [number, number, number] = [0, 0, 0]
+
+	for (const s of [0, 0.25, 0.5, 0.8, 1]) {
+		const value = hermiteVec3(f(1), df(1), f(3), df(3), 2, s, out)
+		expect(value).toBe(out)
+		const expected = f(1 + 2 * s)
+		for (let i = 0; i < 3; i++) expect(value[i]).toBeCloseTo(expected[i], 12)
+	}
 })
