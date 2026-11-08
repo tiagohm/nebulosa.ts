@@ -1,711 +1,328 @@
-import { fitSimilarityTransform, matchStars, type SimilarityTransform, type StarMatchingConfig, type StarMatchingResult } from '../../astrometry/matching/star.matching'
-import type { PlateSolution } from '../../astrometry/solvers/platesolver'
-import { tanProject, tanUnproject } from '../../astrometry/wcs/fits.wcs'
-import { cirsToObserved, DEFAULT_REFRACTION_PARAMETERS, type RefractionParameters } from '../../astronomy/coordinates/astrometry'
-import { angularDistance } from '../../astronomy/coordinates/coordinate'
-import { eraC2s, eraS2c } from '../../astronomy/coordinates/erfa/erfa'
-import type { GeographicPosition } from '../../astronomy/observer/location'
-import { cirsRotationMatrix, type Time } from '../../astronomy/time/time'
-import { ASEC2RAD } from '../../core/constants'
-import type { DetectedStar } from '../../imaging/stars/detector'
-import { matMulVec } from '../../math/linear-algebra/mat3'
-import { type Vec3, vecAngle, vecDot, vecMinus, vecMulScalar } from '../../math/linear-algebra/vec3'
-import { euclideanDistance, type Point } from '../../math/numerical/geometry'
-import { type Angle, normalizePI } from '../../math/units/angle'
-import { celestialPoleVector } from './polaralignment'
+import type { Parity, PlateSolution } from '../../astrometry/solvers/platesolver'
+import { eraS2c } from '../../astronomy/coordinates/erfa/erfa'
+import { type Time, Timescale, timeSubtract } from '../../astronomy/time/time'
+import { DAYSEC } from '../../core/constants'
+import { matMulVec, matToVec3, matTranspose } from '../../math/linear-algebra/mat3'
+import { fitRotation, type RotationFit } from '../../math/linear-algebra/rotation.fit'
+import { type Vec3, vecAngle, vecDot, vecLength } from '../../math/linear-algebra/vec3'
+import { type Angle, arcsec, deg } from '../../math/units/angle'
+import { type IPolarError, ipolarEarthFixedRays, ipolarError, ipolarFrameContext, type IPolarObserver, ipolarProject, type IPolarProjection, ipolarTargetPole } from './ipolar.geometry'
 
-// iPolar-style camera-based polar alignment driven by plate solutions. The user captures two frames
-// separated by an RA-only rotation; the mount's rotation axis is recovered as the image-space fixed
-// point of the WCS transform between the frames (refined with optional star matching), converted to an
-// inertial J2000 direction, and compared to the true celestial pole. The engine is a finite-state
-// machine that, on each new frame, reports the residual polar error split into altitude/azimuth
-// components plus on-screen guidance arrows. All angles are radians; pixel points use the image
-// convention of the supplied plate solution.
+// Camera-based (iPolar) polar alignment from plate solutions, modelled as one rigid rotation of the
+// camera about the mechanical RA axis in the Earth-fixed frame. Calibration takes two solved frames
+// of a camera rigid with the RA axis, separated by an RA-only rotation; each frame's sample rays
+// are taken to ITRS at its own mid-exposure instant (see ipolar.geometry), and the proper rotation
+// fitted between them gives the mechanical axis and the rotation actually achieved, so the frames
+// need not overlap and the axis need not fall inside the image. The axis is stored in the sensor
+// frame of the first frame, so every later frame of the same sensor geometry yields the current
+// axis from its own attitude alone: adjusting the mount base moves it, rotating in RA does not.
+// Hard quality gates reject frames rather than report a doubtful error; the convergence streak is
+// reversible. Two poses cannot prove the motion was pure RA: a small mixed RA/DEC motion tilts the
+// axis undetected. Angles are radians, times are `Time` instants with intervals in seconds, and
+// pixels are FITS 1-based. Results are fresh immutable values.
 
-// Lifecycle stage of the alignment session.
-export type IPolarPolarAlignmentStage = 'WAITING_FOR_POSITION_1' | 'WAITING_FOR_POSITION_2' | 'INITIAL_AXIS_ESTIMATION' | 'REFINEMENT' | 'COMPLETE' | 'FAILED'
-
-// Machine-friendly next action recommended to the operator or automation.
-export type IPolarPolarAlignmentAction = 'WAIT_FOR_POSITION_1' | 'ROTATE_RA_TO_POSITION_2' | 'ADJUST_ALTITUDE_POSITIVE' | 'ADJUST_ALTITUDE_NEGATIVE' | 'ADJUST_AZIMUTH_POSITIVE' | 'ADJUST_AZIMUTH_NEGATIVE' | 'ALIGNMENT_COMPLETE' | 'INVALID_FRAME'
-
-// Which method produced the axis fixed-point estimate, recorded for diagnostics.
-export type IPolarPolarAlignmentSolverMethod = 'gauss-newton' | 'coordinate-search' | 'similarity-only'
-
-// Observing site and refraction model used to locate the true celestial pole.
-export interface IPolarPolarAlignmentObserverContext {
-	// Geodetic observing-site position.
-	readonly location: GeographicPosition
-	// Refraction parameters, or false to disable refraction in pole placement.
-	readonly refraction?: RefractionParameters | false
-}
-
-// Tunable thresholds controlling acquisition, convergence, and validation.
-export interface IPolarPolarAlignmentConfig {
-	// Minimum RA rotation between the two calibration frames to trust the axis estimate (radians).
-	readonly minimumAcceptedRaRotation?: Angle
-	// Preferred RA-rotation window; values outside it produce a warning (radians).
-	readonly preferredRaRotationRange?: readonly [Angle, Angle]
-	// Minimum detected stars required for star-matching validation.
-	readonly minimumStars?: number
-	// Total-error threshold below which alignment is considered complete (radians).
-	readonly completionThreshold?: Angle
-	// Acceptable fixed-point solver residual, in pixels.
-	readonly fixedPointTolerance?: number
-	// Maximum residual accepted by star matching, in pixels.
-	readonly maxStarMatchResidual?: number
-	// Refraction parameters, or false to disable refraction.
-	readonly refraction?: RefractionParameters | false
-	// Whether per-frame pole placement compensates for Earth rotation over time.
-	readonly compensateEarthRotation?: boolean
-	// Whether to cross-check the axis estimate with star matching when stars are available.
-	readonly useStarMatchingValidation?: boolean
-	// Extra configuration forwarded to the star-matching routine.
-	readonly starMatchingConfig?: StarMatchingConfig
-}
-
-// One solved frame fed to the engine.
-export interface IPolarPolarAlignmentFrameInput {
-	// Capture time of the frame.
-	readonly time: Time
-	// Plate solution providing WCS and frame geometry.
-	readonly solution: PlateSolution
-	// Optional detected stars enabling star-matching validation.
-	readonly stars?: readonly DetectedStar[]
-}
-
-// A guidance marker in image space plus its on-screen-clamped position and direction arrow.
-export interface IPolarPolarAlignmentGuidePoint extends Readonly<Point> {
-	// Whether the unclamped point lies within the (margin-inset) frame.
-	readonly onScreen: boolean
-	// Point clamped to the frame border for drawing when off-screen.
-	readonly clamped: Readonly<Point>
-	// Unit direction from frame center toward the point (zero when on-screen).
-	readonly arrow: Readonly<Point>
-	// Original, unclamped point.
-	readonly unclamped: Readonly<Point>
-}
-
-// The residual polar error split into its angular components (radians).
-export interface IPolarPolarAlignmentErrorMetrics {
-	// Total angular separation between the mount axis and the true pole (radians).
-	readonly totalError: Angle
-	// Altitude-direction component of the error (radians).
-	readonly altitudeError: Angle
-	// Azimuth-direction component of the error (radians).
-	readonly azimuthError: Angle
-}
-
-// Diagnostic detail about the most recent calibration/measurement.
-export interface IPolarPolarAlignmentDiagnostics {
-	// Solver method that produced the axis fixed point.
-	readonly solver?: IPolarPolarAlignmentSolverMethod
-	// Iterations the solver took.
-	readonly solverIterations?: number
-	// Final solver residual, in pixels.
-	readonly residual?: number
-	// RA rotation accepted between calibration frames (radians).
-	readonly acceptedRaRotation?: Angle
-	// Configured preferred RA-rotation window (radians).
-	readonly preferredRaRotationRange: readonly [Angle, Angle]
-	// Star-matching result when validation ran.
-	readonly starMatch?: StarMatchingResult
-	// Whether refraction was applied.
-	readonly refractionEnabled: boolean
-	// Whether Earth-rotation compensation is enabled.
-	readonly earthRotationCompensated: boolean
-	// Accumulated non-fatal warnings.
-	readonly warnings: readonly string[]
-}
-
-// Full per-frame result returned by the engine, including error metrics and drawing guidance.
-export interface IPolarPolarAlignmentResult extends IPolarPolarAlignmentErrorMetrics {
-	// Lifecycle stage after processing the frame.
-	readonly stage: IPolarPolarAlignmentStage
-	// Marker for the mount rotation axis in this frame.
-	readonly currentPoint: IPolarPolarAlignmentGuidePoint
-	// Marker for the true celestial pole in this frame.
-	readonly targetPoint: IPolarPolarAlignmentGuidePoint
-	// Whether the axis marker is on-screen.
-	readonly onScreenCurrent: boolean
-	// Whether the pole marker is on-screen.
-	readonly onScreenTarget: boolean
-	// Recommended next action.
-	readonly action: IPolarPolarAlignmentAction
-	// Whether the error is below the completion threshold.
-	readonly convergence: boolean
-	// Diagnostics for this frame.
-	readonly diagnostics: IPolarPolarAlignmentDiagnostics
-}
-
-// Immutable snapshot of the engine's internal state.
-export interface IPolarPolarAlignmentState {
-	// Current lifecycle stage.
-	readonly stage: IPolarPolarAlignmentStage
-	// Fully resolved configuration in effect.
-	readonly config: Readonly<Required<IPolarPolarAlignmentConfig>>
-	// Observer context.
-	readonly observer: IPolarPolarAlignmentObserverContext
-	// First (reference) calibration frame.
-	readonly referenceFrame?: IPolarPolarAlignmentFrameInput
-	// Second calibration frame.
-	readonly secondFrame?: IPolarPolarAlignmentFrameInput
-	// Calibrated mount-axis pixel location.
-	readonly axisPixel?: Readonly<Point>
-	// Mount-axis direction as an inertial unit vector.
-	readonly axisVector?: Vec3
-	// True celestial pole as an inertial unit vector.
-	readonly targetVector?: Vec3
-	// Most recent result.
-	readonly latestResult?: IPolarPolarAlignmentResult
-	// Most recent diagnostics.
-	readonly latestDiagnostics?: IPolarPolarAlignmentDiagnostics
-}
-
-// A fixed-point solver candidate: the trial point, its mapped image, and the residual distance.
-interface FixedPointCandidate extends Readonly<Point> {
-	// Distance in pixels between the point and its mapped image.
-	readonly residual: number
-	// Image of the point under the inter-frame WCS transform.
-	readonly mapped: Readonly<Point>
-}
-
-// A converged fixed-point solution with solver provenance.
-interface FixedPointSolution {
+// Sensor geometry a frame was read out with; two frames are comparable only when equal.
+export interface IPolarSensorGeometry {
+	// Image width, in pixels of the frame.
+	readonly width: number
+	// Image height, in pixels of the frame.
+	readonly height: number
+	// Horizontal binning factor.
+	readonly binX: number
+	// Vertical binning factor.
+	readonly binY: number
+	// Left edge of the subframe, in unbinned sensor pixels.
 	readonly x: number
+	// Top edge of the subframe, in unbinned sensor pixels.
 	readonly y: number
-	// Final residual, in pixels.
-	readonly residual: number
-	// Iteration count.
-	readonly iterations: number
-	// Solver that produced this solution.
-	readonly solver: IPolarPolarAlignmentSolverMethod
 }
 
-// Closed-form similarity-transform fixed point with the linear-system determinant for stability checks.
-interface SimilarityFixedPoint extends Readonly<Point> {
-	// Determinant of the solved 2×2 system; near zero indicates degenerate geometry.
-	readonly determinant: number
+// One solved exposure of the calibrated camera.
+export interface IPolarFrame {
+	// Mid-exposure instant; its scale may be any the toolkit converts.
+	readonly time: Time
+	// Plate solution of exactly this exposure, with its image dimensions.
+	readonly solution: PlateSolution
+	// Sensor geometry the exposure was read out with.
+	readonly sensor: IPolarSensorGeometry
 }
 
-// Internal mutable mirror of IPolarPolarAlignmentState used by the engine.
-interface PolarAlignmentMutableState {
-	stage: IPolarPolarAlignmentStage
-	config: Required<IPolarPolarAlignmentConfig>
-	observer?: IPolarPolarAlignmentObserverContext
-	referenceFrame?: IPolarPolarAlignmentFrameInput
-	secondFrame?: IPolarPolarAlignmentFrameInput
-	axisPixel?: Readonly<Point>
-	axisVector?: Vec3
-	targetVector?: Vec3
-	latestResult?: IPolarPolarAlignmentResult
-	latestDiagnostics?: IPolarPolarAlignmentDiagnostics
+// Quality gates of the calibration and the measurements; all are hard rejections.
+export interface IPolarLimits {
+	// Smallest fitted RA rotation accepted between the calibration frames, in radians.
+	readonly minimumRotation: Angle
+	// Largest fitted RA rotation accepted between the calibration frames, in radians, below π.
+	readonly maximumRotation: Angle
+	// Fitted rotations reported as preferred in the quality, in radians: [minimum, maximum].
+	readonly preferredRotation: readonly [Angle, Angle]
+	// Largest angle between the mechanical axis and the target pole, in radians: the rough
+	// alignment envelope beyond which the axis is a wrong rotation, not a large polar error.
+	readonly maximumAxisOffset: Angle
+	// Largest angle between a fitted and an observed sample ray, in pixels of the plate scale.
+	readonly maximumResidual: number
+	// Smallest half-diagonal field radius of a usable plate solution, in radians.
+	readonly minimumFieldRadius: Angle
+	// Smallest conditioning of a rotation fit (see RotationFit), in [0, 1].
+	readonly minimumConditioning: number
+	// Longest interval between the calibration frames, in seconds.
+	readonly maximumCalibrationInterval: number
+	// Largest change of the mechanical axis between consecutive measurements, in radians; more is a
+	// DEC, rotator or camera motion, not an adjustment of the base.
+	readonly maximumAxisJump: Angle
+	// Largest change of the field center between consecutive measurements, in radians; more is a
+	// slew of the mount.
+	readonly maximumShift: Angle
 }
 
-// Default tuning: ~10′ minimum / 30′–2° preferred RA rotation, 6-star minimum, 30″ completion.
-const DEFAULT_POLAR_ALIGNMENT_CONFIG: Readonly<Required<IPolarPolarAlignmentConfig>> = {
-	minimumAcceptedRaRotation: 600 * ASEC2RAD,
-	preferredRaRotationRange: [1800 * ASEC2RAD, 7200 * ASEC2RAD],
-	minimumStars: 6,
-	completionThreshold: 30 * ASEC2RAD,
-	fixedPointTolerance: 1.5,
-	maxStarMatchResidual: 2,
-	refraction: DEFAULT_REFRACTION_PARAMETERS,
-	compensateEarthRotation: true,
-	useStarMatchingValidation: true,
-	starMatchingConfig: {},
+// Default quality gates. The preferred rotation of 20° to 40° and the 10° minimum keep the axis
+// conditioned against ordinary plate-solution noise (its error grows as 1/sin(θ/2)); 60° bounds the
+// travel a camera usually clears. A 5° envelope covers a rough alignment by eye, and 2 px of fit
+// residual allows for ordinary SIP differences between two solutions of one optical train.
+export const DEFAULT_IPOLAR_LIMITS: Readonly<IPolarLimits> = {
+	minimumRotation: deg(10),
+	maximumRotation: deg(60),
+	preferredRotation: [deg(20), deg(40)],
+	maximumAxisOffset: deg(5),
+	maximumResidual: 2,
+	minimumFieldRadius: deg(0.1),
+	minimumConditioning: 1e-9,
+	maximumCalibrationInterval: 3600,
+	maximumAxisJump: deg(3),
+	maximumShift: deg(5),
 }
 
-// Maximum movement of a fixed-point solver iteration before the candidate is considered positionally converged (pixels).
-const FIXED_POINT_STEP_TOLERANCE = 0.1
+// Why a calibration or a measurement was rejected:
+// - inconsistentSensor: the calibration frames differ in sensor geometry, dimensions or parity;
+// - badTime: an instant is not after the previous one, or the calibration took too long;
+// - badWcs: a sample pixel of a solution cannot be mapped to a finite direction;
+// - poorConditioning: the field is too small or the fit leaves the rotation undetermined;
+// - unstableFit: the frames are not related by a rigid rotation within the residual limit;
+// - insufficientRotation, excessiveRotation: the fitted rotation is out of the limits;
+// - wrongAxis: the axis lies outside the rough alignment envelope of the target pole;
+// - geometryMismatch: the sensor geometry, parity, or the axis itself changed after calibration;
+// - fieldJump: the field moved like a slew between measurements;
+// - singularGeometry: the error has no altitude direction (a pole at the zenith).
+export type IPolarRejection = 'inconsistentSensor' | 'badTime' | 'badWcs' | 'poorConditioning' | 'unstableFit' | 'insufficientRotation' | 'excessiveRotation' | 'wrongAxis' | 'geometryMismatch' | 'fieldJump' | 'singularGeometry'
 
-// Solves the fixed point of a similarity transform when the geometry is non-singular.
-export function solveSimilarityFixedPoint(transform: SimilarityTransform): SimilarityFixedPoint | false {
-	if (transform.mirrored) {
-		const m00 = 1 - transform.a
-		const m01 = -transform.b
-		const m10 = -transform.b
-		const m11 = 1 + transform.a
-		const det = m00 * m11 - m01 * m10
-
-		if (Math.abs(det) <= 1e-12) return false
-		else return { x: (m11 * transform.tx - m01 * transform.ty) / det, y: (-m10 * transform.tx + m00 * transform.ty) / det, determinant: det }
-	}
-
-	const m00 = 1 - transform.a
-	const m01 = transform.b
-	const m10 = -transform.b
-	const m11 = 1 - transform.a
-	const det = m00 * m11 - m01 * m10
-
-	if (Math.abs(det) <= 1e-12) return false
-	else return { x: (m11 * transform.tx - m01 * transform.ty) / det, y: (-m10 * transform.tx + m00 * transform.ty) / det, determinant: det }
+// Factual diagnostics of a calibration attempt; a field is absent when not reached.
+export interface IPolarCalibrationQuality {
+	// Fitted rotation between the frames, in radians, [0, π].
+	readonly rotation?: Angle
+	// Root-mean-square angular residual of the fit, in radians.
+	readonly residual?: Angle
+	// Largest angular residual of the fit, in radians.
+	readonly maximumResidual?: Angle
+	// Conditioning of the fit, in [0, 1].
+	readonly conditioning?: number
+	// Angle between the mechanical axis and the target pole, in radians.
+	readonly axisOffset?: Angle
+	// Interval between the frames, in seconds.
+	readonly interval?: number
+	// Whether the rotation lies in the preferred range.
+	readonly preferred?: boolean
 }
 
-// Projects a drawing point to the image border when the physical point is off-screen.
-export function projectGuidePoint(point: Point, width: number, height: number, margin: number = 0): IPolarPolarAlignmentGuidePoint {
-	const left = margin
-	const top = margin
-	const right = width - margin
-	const bottom = height - margin
-	const onScreen = point.x >= left && point.x <= right && point.y >= top && point.y <= bottom
+// An accepted calibration: the mechanical axis in the sensor frame of its first frame.
+export interface IPolarCalibration {
+	// Earth-fixed sample rays of the first frame, which define the sensor frame (ITRS at that
+	// instant), in sample-grid order.
+	readonly reference: readonly Vec3[]
+	// Unit mechanical RA axis in the sensor frame, oriented towards the target pole.
+	readonly axis: Vec3
+	// Sensor geometry every later frame must match.
+	readonly sensor: IPolarSensorGeometry
+	// Image parity every later frame must match.
+	readonly parity: Parity
+	// Site and atmosphere of the calibration, used by every measurement.
+	readonly observer: IPolarObserver
+	// Mid-exposure instant of the first frame.
+	readonly time: Time
+	// Diagnostics of the accepted fit; every field is present.
+	readonly quality: Required<IPolarCalibrationQuality>
+}
 
-	if (onScreen) return { ...point, onScreen: true, clamped: { ...point }, arrow: { x: 0, y: 0 }, unclamped: { ...point } }
+// Outcome of a calibration attempt.
+export type IPolarCalibrationResult = { readonly accepted: true; readonly calibration: IPolarCalibration } | { readonly accepted: false; readonly reason: IPolarRejection; readonly quality: IPolarCalibrationQuality }
 
-	const cx = width / 2
-	const cy = height / 2
-	const dx = point.x - cx
-	const dy = point.y - cy
-	let scale = Number.POSITIVE_INFINITY
+// A measurement of the polar error on one frame.
+export interface IPolarAcceptedMeasurement {
+	readonly valid: true
+	// Mid-exposure instant of the frame.
+	readonly time: Time
+	// Signed error from the target pole to the mechanical axis.
+	readonly error: IPolarError
+	// Unit mechanical RA axis, in ITRS.
+	readonly axis: Vec3
+	// Unit target pole, in ITRS.
+	readonly target: Vec3
+	// Largest angular residual of the frame's attitude fit, in radians.
+	readonly residual: Angle
+	// The mechanical axis in the frame's pixels.
+	readonly axisPoint: IPolarProjection
+	// The target pole in the frame's pixels.
+	readonly polePoint: IPolarProjection
+	// ICRS unit direction of the field center, used to detect slews.
+	readonly center: Vec3
+}
 
-	if (dx > 0) scale = Math.min(scale, (right - cx) / dx)
-	else if (dx < 0) scale = Math.min(scale, (left - cx) / dx)
+// A frame that gave no measurement; when `invalidatesCalibration`, the camera geometry no longer
+// matches the calibration and only a new calibration can measure again.
+export interface IPolarRejectedMeasurement {
+	readonly valid: false
+	// Mid-exposure instant of the frame.
+	readonly time: Time
+	// Why the frame was rejected.
+	readonly reason: IPolarRejection
+	// Whether the calibration can no longer be used.
+	readonly invalidatesCalibration: boolean
+}
 
-	if (dy > 0) scale = Math.min(scale, (bottom - cy) / dy)
-	else if (dy < 0) scale = Math.min(scale, (top - cy) / dy)
+// Outcome of measuring one frame.
+export type IPolarMeasurement = IPolarAcceptedMeasurement | IPolarRejectedMeasurement
 
-	const clampedX = cx + dx * scale
-	const clampedY = cy + dy * scale
-	const length = Math.hypot(dx, dy)
-	const invLength = length > 0 ? 1 / length : 0
+// Settings of the convergence streak.
+export interface IPolarConvergenceOptions {
+	// Largest total error of a converging measurement, in radians: a requested target, not a
+	// statement of measurement accuracy.
+	readonly threshold: Angle
+	// Consecutive converging measurements that make the alignment converged, at least 1.
+	readonly count: number
+	// Longest interval between consecutive measurements of a streak, in seconds.
+	readonly maximumInterval: number
+}
+
+// Default convergence: three consecutive fresh measurements within 30″, at most 5 min apart.
+export const DEFAULT_IPOLAR_CONVERGENCE: Readonly<IPolarConvergenceOptions> = {
+	threshold: arcsec(30),
+	count: 3,
+	maximumInterval: 300,
+}
+
+// State of the convergence streak.
+export interface IPolarConvergence {
+	// Consecutive accepted measurements within the threshold, ending with the latest one.
+	readonly streak: number
+	// Whether the streak reached the required count.
+	readonly converged: boolean
+	// Instant of the latest accepted measurement, absent after a rejection.
+	readonly last?: Time
+}
+
+// Convergence before any measurement.
+export const IPOLAR_CONVERGENCE_START: IPolarConvergence = { streak: 0, converged: false }
+
+// Calibrates the mechanical RA axis from two frames of one rigid camera separated by an RA rotation
+// of the mount. Returns the calibration, or the first failed gate of `limits` with the diagnostics
+// gathered so far. `observer` is the site and atmosphere of every later measurement.
+export function calibrateIPolar(first: IPolarFrame, second: IPolarFrame, observer: IPolarObserver, limits: Readonly<IPolarLimits> = DEFAULT_IPOLAR_LIMITS): IPolarCalibrationResult {
+	if (!sameSensor(first.sensor, second.sensor) || !matchesSensor(first) || !matchesSensor(second) || first.solution.parity !== second.solution.parity) return rejected('inconsistentSensor', {})
+
+	const interval = secondsBetween(first.time, second.time)
+	if (!(interval > 0 && interval <= limits.maximumCalibrationInterval)) return rejected('badTime', { interval })
+	if (!(first.solution.radius >= limits.minimumFieldRadius && second.solution.radius >= limits.minimumFieldRadius)) return rejected('poorConditioning', { interval })
+
+	const firstContext = ipolarFrameContext(first.time, observer)
+	const secondContext = ipolarFrameContext(second.time, observer)
+	const reference = ipolarEarthFixedRays(first.solution, firstContext)
+	const rays = ipolarEarthFixedRays(second.solution, secondContext)
+	if (reference === undefined || rays === undefined) return rejected('badWcs', { interval })
+
+	const fit = fitRotation(reference, rays)
+	if (fit === undefined || !(fit.conditioning >= limits.minimumConditioning)) return rejected('poorConditioning', { interval, conditioning: fit?.conditioning })
+
+	const quality = { interval, residual: fit.residual, maximumResidual: fit.maximumResidual, conditioning: fit.conditioning }
+	if (!residualAccepted(fit, first.solution, second.solution, limits)) return rejected('unstableFit', quality)
+
+	// matToVec3 works in the frame-rotation sense, so the transpose gives the active axis × angle.
+	const vector = matToVec3(matTranspose(fit.rotation))
+	const rotation = vecLength(vector)
+	const preferred = rotation >= limits.preferredRotation[0] && rotation <= limits.preferredRotation[1]
+	if (!(rotation >= limits.minimumRotation)) return rejected('insufficientRotation', { ...quality, rotation, preferred })
+	if (!(rotation <= limits.maximumRotation)) return rejected('excessiveRotation', { ...quality, rotation, preferred })
+
+	const target = ipolarTargetPole(second.time, observer, secondContext)
+	const sign = vecDot(vector, target) >= 0 ? 1 : -1
+	const axis: Vec3 = [(sign * vector[0]) / rotation, (sign * vector[1]) / rotation, (sign * vector[2]) / rotation]
+	const axisOffset = vecAngle(axis, target)
+	if (!(axisOffset <= limits.maximumAxisOffset)) return rejected('wrongAxis', { ...quality, rotation, preferred, axisOffset })
 
 	return {
-		x: clampedX,
-		y: clampedY,
-		onScreen: false,
-		clamped: { x: clampedX, y: clampedY },
-		arrow: { x: dx * invLength, y: dy * invLength },
-		unclamped: { x: point.x, y: point.y },
+		accepted: true,
+		calibration: { reference, axis, sensor: first.sensor, parity: first.solution.parity, observer, time: first.time, quality: { ...quality, rotation, preferred, axisOffset } },
 	}
 }
 
-// Splits the small polar error into altitude and azimuth tangent components in the current topocentric frame.
-export function decomposePolarError(axisVector: Vec3, targetVector: Vec3, time: Time, refraction: RefractionParameters | false = DEFAULT_REFRACTION_PARAMETERS, location: GeographicPosition = time.location!): IPolarPolarAlignmentErrorMetrics {
-	const gcrsToCirs = cirsRotationMatrix(time)
-	const axisObserved = cirsToObserved(matMulVec(gcrsToCirs, axisVector), time, refraction, location)
-	const targetObserved = cirsToObserved(matMulVec(gcrsToCirs, targetVector), time, refraction, location)
-	const axisHorizontal = eraS2c(axisObserved.azimuth, axisObserved.altitude)
-	const targetHorizontal = eraS2c(targetObserved.azimuth, targetObserved.altitude)
-	const basis = horizontalBasis(targetObserved.azimuth, targetObserved.altitude)
-	const dot = vecDot(axisHorizontal, targetHorizontal)
-	const delta = vecMinus(axisHorizontal, vecMulScalar(targetHorizontal, dot))
-	return { totalError: vecAngle(axisVector, targetVector), altitudeError: vecDot(delta, basis.altitude), azimuthError: vecDot(delta, basis.azimuth) }
+// Measures the polar error on `frame` with `calibration`: the frame's attitude from its own WCS
+// carries the calibrated axis to the frame's instant, compared with the target pole there.
+// `previous` is the latest accepted measurement, against which time order, axis jumps and slews are
+// checked. Returns the measurement or why the frame was rejected.
+export function measureIPolar(calibration: IPolarCalibration, frame: IPolarFrame, previous?: IPolarAcceptedMeasurement, limits: Readonly<IPolarLimits> = DEFAULT_IPOLAR_LIMITS): IPolarMeasurement {
+	const { time, solution } = frame
+	if (!sameSensor(calibration.sensor, frame.sensor) || !matchesSensor(frame) || solution.parity !== calibration.parity) return { valid: false, time, reason: 'geometryMismatch', invalidatesCalibration: true }
+	if (!(secondsBetween(previous?.time ?? calibration.time, time) > 0)) return refused(time, 'badTime')
+	if (!(solution.radius >= limits.minimumFieldRadius)) return refused(time, 'poorConditioning')
+
+	const context = ipolarFrameContext(time, calibration.observer)
+	const rays = ipolarEarthFixedRays(solution, context)
+	if (rays === undefined) return refused(time, 'badWcs')
+
+	const fit = fitRotation(calibration.reference, rays)
+	if (fit === undefined || !(fit.conditioning >= limits.minimumConditioning)) return refused(time, 'poorConditioning')
+	if (!residualAccepted(fit, solution, solution, limits)) return refused(time, 'unstableFit')
+
+	const center = eraS2c(solution.rightAscension, solution.declination)
+	if (previous !== undefined && !(vecAngle(previous.center, center) <= limits.maximumShift)) return { valid: false, time, reason: 'fieldJump', invalidatesCalibration: true }
+
+	const axis = matMulVec(fit.rotation, calibration.axis)
+	if (previous !== undefined && !(vecAngle(previous.axis, axis) <= limits.maximumAxisJump)) return { valid: false, time, reason: 'geometryMismatch', invalidatesCalibration: true }
+
+	const target = ipolarTargetPole(time, calibration.observer, context)
+	if (!(vecAngle(axis, target) <= limits.maximumAxisOffset)) return { valid: false, time, reason: 'wrongAxis', invalidatesCalibration: true }
+
+	const error = ipolarError(axis, target, context)
+	if (error === undefined) return refused(time, 'singularGeometry')
+
+	return { valid: true, time, error, axis, target, residual: fit.maximumResidual, axisPoint: ipolarProject(axis, solution, context), polePoint: ipolarProject(target, solution, context), center }
 }
 
-// Estimates the RA-axis pixel fixed point from two RA-only frames using a nonlinear root solve with a derivative-free fallback.
-export function solveImageFixedPoint(reference: PlateSolution, current: PlateSolution, initialGuess?: Readonly<Point>, tolerance: number = 1.5): FixedPointSolution | false {
-	const seeds = fixedPointSeeds(reference, current, initialGuess)
+// Advances the convergence streak with `measurement`: a rejection clears it, an error above the
+// threshold or a gap longer than the maximum interval restarts it, and the alignment is converged
+// while the streak holds at least `count` measurements. Returns a fresh state.
+export function advanceIPolarConvergence(state: IPolarConvergence, measurement: IPolarMeasurement, options: Readonly<IPolarConvergenceOptions> = DEFAULT_IPOLAR_CONVERGENCE): IPolarConvergence {
+	if (!measurement.valid) return IPOLAR_CONVERGENCE_START
+	if (!(measurement.error.total <= options.threshold)) return { streak: 0, converged: false, last: measurement.time }
 
-	for (let i = 0; i < seeds.length; i++) {
-		const gaussNewton = solveByGaussNewton(reference, current, seeds[i], tolerance)
-		if (gaussNewton !== false) return gaussNewton
-	}
-
-	for (let i = 0; i < seeds.length; i++) {
-		const fallback = solveByCoordinateSearch(reference, current, seeds[i], tolerance)
-		if (fallback !== false) return fallback
-	}
-
-	return false
+	const continued = state.streak > 0 && state.last !== undefined && secondsBetween(state.last, measurement.time) <= options.maximumInterval
+	const streak = continued ? state.streak + 1 : 1
+	return { streak, converged: streak >= options.count, last: measurement.time }
 }
 
-// Provides a reusable iPolar-like engine with an explicit finite-state machine and time-aware per-frame updates.
-export class IPolarPolarAlignment {
-	readonly #state: PolarAlignmentMutableState
-
-	constructor(config?: IPolarPolarAlignmentConfig) {
-		this.#state = {
-			stage: 'WAITING_FOR_POSITION_1',
-			config: { ...DEFAULT_POLAR_ALIGNMENT_CONFIG, ...config, preferredRaRotationRange: config?.preferredRaRotationRange ?? DEFAULT_POLAR_ALIGNMENT_CONFIG.preferredRaRotationRange, starMatchingConfig: { ...DEFAULT_POLAR_ALIGNMENT_CONFIG.starMatchingConfig, ...config?.starMatchingConfig } },
-		}
-	}
-
-	// Resets the engine to its initial waiting stage.
-	reset() {
-		this.#state.stage = 'WAITING_FOR_POSITION_1'
-		this.#state.observer = undefined
-		this.#state.referenceFrame = undefined
-		this.#state.secondFrame = undefined
-		this.#state.axisPixel = undefined
-		this.#state.axisVector = undefined
-		this.#state.targetVector = undefined
-		this.#state.latestResult = undefined
-		this.#state.latestDiagnostics = undefined
-	}
-
-	// Returns an immutable snapshot of the current engine state.
-	getState(): IPolarPolarAlignmentState {
-		if (!this.#state.observer) throw new Error('polar-alignment session has not started')
-
-		return {
-			stage: this.#state.stage,
-			config: this.#state.config,
-			observer: this.#state.observer,
-			referenceFrame: this.#state.referenceFrame,
-			secondFrame: this.#state.secondFrame,
-			axisPixel: this.#state.axisPixel,
-			axisVector: this.#state.axisVector,
-			targetVector: this.#state.targetVector,
-			latestResult: this.#state.latestResult,
-			latestDiagnostics: this.#state.latestDiagnostics,
-		}
-	}
-
-	// Stores the first solved frame and moves the engine into the RA-rotation acquisition stage.
-	start(frameInput: IPolarPolarAlignmentFrameInput, observerContext?: IPolarPolarAlignmentObserverContext): IPolarPolarAlignmentResult {
-		const observer = observerContext ?? resolveObserverContext(frameInput, this.#state.config)
-		const warnings = validateFrame(frameInput, this.#state.config)
-		this.#state.observer = observer
-		this.#state.referenceFrame = frameInput
-		this.#state.secondFrame = undefined
-		this.#state.axisPixel = undefined
-		this.#state.axisVector = undefined
-		this.#state.targetVector = undefined
-		this.#state.stage = 'WAITING_FOR_POSITION_2'
-		const diagnostics = buildDiagnostics(this.#state.config, warnings, undefined, undefined, undefined)
-		const result = emptyResult('WAITING_FOR_POSITION_2', frameInput.solution, 'ROTATE_RA_TO_POSITION_2', diagnostics) // Should rotate the RA axis to the second calibration position
-		return this.#commit(result)
-	}
-
-	// Confirms the second RA-only frame, estimates the mount axis, and initializes the iterative alignment phase.
-	confirm(frameInput: IPolarPolarAlignmentFrameInput): IPolarPolarAlignmentResult {
-		if (!this.#state.referenceFrame || !this.#state.observer) throw new Error('position 1 must be stored before confirming position 2')
-
-		const warnings = validateFrame(frameInput, this.#state.config)
-		const timingWarning = frameInput.time.day < this.#state.referenceFrame.time.day || (frameInput.time.day === this.#state.referenceFrame.time.day && frameInput.time.fraction < this.#state.referenceFrame.time.fraction) ? 'timestamps out of order' : undefined
-		if (timingWarning) warnings.push(timingWarning)
-
-		const starMatch = maybeMatchStars(this.#state.referenceFrame.stars, frameInput.stars, this.#state.config)
-		const similaritySeed = starMatch?.success && starMatch.similarity ? solveSimilarityFixedPoint(starMatch.similarity) : false
-		const axis = solveImageFixedPoint(this.#state.referenceFrame.solution, frameInput.solution, similaritySeed === false ? undefined : similaritySeed, this.#state.config.fixedPointTolerance)
-		const acceptedRaRotation = calibrationRotationEstimate(this.#state.referenceFrame.solution, frameInput.solution, axis === false ? undefined : axis, starMatch)
-		const [preferredMin, preferredMax] = this.#state.config.preferredRaRotationRange
-		if (acceptedRaRotation < preferredMin || acceptedRaRotation > preferredMax) warnings.push('RA rotation is outside the preferred calibration range')
-
-		if (acceptedRaRotation < this.#state.config.minimumAcceptedRaRotation || axis === false) {
-			const failureWarnings = [...warnings]
-			if (acceptedRaRotation < this.#state.config.minimumAcceptedRaRotation) failureWarnings.push('too little RA rotation between calibration positions')
-			if (axis === false) failureWarnings.push('failed to estimate a stable RA-axis fixed point')
-			const diagnostics = buildDiagnostics(this.#state.config, failureWarnings, starMatch, acceptedRaRotation, axis === false ? undefined : axis)
-			const result = emptyResult('WAITING_FOR_POSITION_2', frameInput.solution, 'INVALID_FRAME', diagnostics) // Should acquire another second-position frame with more RA rotation
-			return this.#commit(result)
-		}
-
-		this.#state.secondFrame = frameInput
-		this.#state.axisPixel = { x: axis.x, y: axis.y }
-		this.#state.axisVector = skyVectorFromPixel(frameInput.solution, this.#state.axisPixel)
-		this.#state.targetVector = celestialPoleVector(frameInput.time, this.#state.observer.location, this.#state.config.refraction)
-		this.#state.stage = 'INITIAL_AXIS_ESTIMATION'
-		const diagnostics = buildDiagnostics(this.#state.config, warnings, starMatch, acceptedRaRotation, axis)
-		const result = this.#measureFrame(frameInput, 'INITIAL_AXIS_ESTIMATION', diagnostics)
-		const committed = this.#commit(result)
-		this.#state.stage = committed.convergence ? 'COMPLETE' : 'REFINEMENT'
-		return committed
-	}
-
-	// Advances the state machine using the next solved frame.
-	update(frameInput: IPolarPolarAlignmentFrameInput): IPolarPolarAlignmentResult {
-		if (!this.#state.referenceFrame || !this.#state.observer) return this.start(frameInput)
-		if (this.#state.stage === 'WAITING_FOR_POSITION_2') return this.confirm(frameInput)
-		if (!this.#state.axisPixel || !this.#state.targetVector) throw new Error('axis calibration is missing')
-		const warnings = validateFrame(frameInput, this.#state.config)
-		const diagnostics = buildDiagnostics(this.#state.config, warnings, undefined, undefined, undefined)
-		this.#state.stage = this.#state.stage === 'COMPLETE' ? 'COMPLETE' : 'REFINEMENT'
-		const result = this.#measureFrame(frameInput, this.#state.stage, diagnostics)
-		return this.#commit(result)
-	}
-
-	// Measures the current frame using the calibrated fixed sensor point and the true celestial pole.
-	#measureFrame(frame: IPolarPolarAlignmentFrameInput, stage: IPolarPolarAlignmentStage, diagnostics: IPolarPolarAlignmentDiagnostics): IPolarPolarAlignmentResult {
-		if (!this.#state.axisPixel || !this.#state.targetVector || !this.#state.observer) throw new Error('alignment state is incomplete')
-		const axisVector = skyVectorFromPixel(frame.solution, this.#state.axisPixel)
-		const targetVector = celestialPoleVector(frame.time, this.#state.observer.location, this.#state.config.refraction)
-		const metrics = decomposePolarError(axisVector, targetVector, frame.time, this.#state.config.refraction, this.#state.observer.location)
-		const currentPoint = projectGuidePoint(this.#state.axisPixel, frame.solution.widthInPixels, frame.solution.heightInPixels)
-		const targetPixel = pixelFromSkyVector(frame.solution, targetVector)
-		const targetPoint = projectGuidePoint(targetPixel, frame.solution.widthInPixels, frame.solution.heightInPixels)
-		this.#state.axisVector = axisVector
-		this.#state.targetVector = targetVector
-		const convergence = metrics.totalError <= this.#state.config.completionThreshold
-		const nextStage = convergence ? 'COMPLETE' : stage
-		this.#state.stage = nextStage
-
-		return {
-			stage: nextStage,
-			currentPoint,
-			targetPoint,
-			onScreenCurrent: currentPoint.onScreen,
-			onScreenTarget: targetPoint.onScreen,
-			totalError: metrics.totalError,
-			altitudeError: metrics.altitudeError,
-			azimuthError: metrics.azimuthError,
-			action: convergence ? 'ALIGNMENT_COMPLETE' : guidanceAction(metrics),
-			convergence,
-			diagnostics,
-		}
-	}
-
-	// Persists the latest result and appends it to the debug history.
-	#commit(result: IPolarPolarAlignmentResult): IPolarPolarAlignmentResult {
-		this.#state.latestResult = result
-		this.#state.latestDiagnostics = result.diagnostics
-		return result
-	}
+// Seconds from `from` to `to` on the TT scale, which has no leap seconds.
+function secondsBetween(from: Time, to: Time) {
+	return timeSubtract(to, from, Timescale.TT) * DAYSEC
 }
 
-// Resolves the observer context from the explicit argument or from the embedded time/location object.
-function resolveObserverContext(frameInput: IPolarPolarAlignmentFrameInput, config: Required<IPolarPolarAlignmentConfig>): IPolarPolarAlignmentObserverContext {
-	if (!frameInput.time.location) throw new Error('location is required when observerContext is omitted')
-	return { location: frameInput.time.location, refraction: config.refraction }
+// Whether two sensor geometries are the same readout.
+function sameSensor(a: IPolarSensorGeometry, b: IPolarSensorGeometry) {
+	return a.width === b.width && a.height === b.height && a.binX === b.binX && a.binY === b.binY && a.x === b.x && a.y === b.y
 }
 
-// Validates the minimal solve quality gates that can be checked without host-specific metadata.
-function validateFrame(frame: IPolarPolarAlignmentFrameInput, config: Required<IPolarPolarAlignmentConfig>) {
-	const warnings: string[] = []
-	if (frame.solution.widthInPixels <= 0 || frame.solution.heightInPixels <= 0) warnings.push('invalid plate solution dimensions')
-	if (frame.stars && frame.stars.length < config.minimumStars) warnings.push('insufficient stars')
-	return warnings
+// Whether the frame's plate solution has the dimensions of its sensor geometry.
+function matchesSensor({ solution, sensor }: IPolarFrame) {
+	return solution.widthInPixels === sensor.width && solution.heightInPixels === sensor.height
 }
 
-// Builds a serializable diagnostics object.
-function buildDiagnostics(config: Required<IPolarPolarAlignmentConfig>, warnings: readonly string[], starMatch?: StarMatchingResult, acceptedRaRotation?: Angle, axis?: FixedPointSolution): IPolarPolarAlignmentDiagnostics {
-	return {
-		solver: axis?.solver,
-		solverIterations: axis?.iterations,
-		residual: axis?.residual,
-		acceptedRaRotation,
-		preferredRaRotationRange: config.preferredRaRotationRange,
-		starMatch,
-		refractionEnabled: config.refraction !== false,
-		earthRotationCompensated: config.compensateEarthRotation,
-		warnings,
-	}
+// Whether the largest residual of `fit` stays within the limit, in pixels of the coarser scale.
+function residualAccepted(fit: RotationFit, a: PlateSolution, b: PlateSolution, limits: Readonly<IPolarLimits>) {
+	return fit.maximumResidual <= limits.maximumResidual * Math.max(a.scale, b.scale)
 }
 
-// Creates the stage result used before the axis calibration is available.
-function emptyResult(stage: IPolarPolarAlignmentStage, adapter: PlateSolution, action: IPolarPolarAlignmentAction, diagnostics: IPolarPolarAlignmentDiagnostics): IPolarPolarAlignmentResult {
-	const center = { x: adapter.widthInPixels * 0.5, y: adapter.heightInPixels * 0.5 }
-	const guide = projectGuidePoint(center, adapter.widthInPixels, adapter.heightInPixels)
-	return { stage, currentPoint: guide, targetPoint: guide, onScreenCurrent: guide.onScreen, onScreenTarget: guide.onScreen, totalError: 0, altitudeError: 0, azimuthError: 0, action, convergence: false, diagnostics }
+// A rejected calibration with its diagnostics.
+function rejected(reason: IPolarRejection, quality: IPolarCalibrationQuality): IPolarCalibrationResult {
+	return { accepted: false, reason, quality }
 }
 
-// Runs star matching when both frames provide detected stars and the feature is enabled.
-function maybeMatchStars(referenceStars: readonly DetectedStar[] | undefined, currentStars: readonly DetectedStar[] | undefined, config: Required<IPolarPolarAlignmentConfig>) {
-	if (!config.useStarMatchingValidation || !referenceStars || !currentStars) return undefined
-	if (referenceStars.length < config.minimumStars || currentStars.length < config.minimumStars) return undefined
-	return matchStars(referenceStars, currentStars, { maxResidual: config.maxStarMatchResidual, ...config.starMatchingConfig })
-}
-
-// Combines sky and image-space cues into a practical RA-rotation estimate.
-function calibrationRotationEstimate(reference: PlateSolution, current: PlateSolution, axis?: Readonly<Point>, starMatch?: StarMatchingResult) {
-	let estimate = centerSeparation(reference, current)
-	const orientationRotation = Math.abs(normalizePI(current.orientation - reference.orientation))
-	if (orientationRotation > estimate) estimate = orientationRotation
-
-	if (axis) {
-		const orbitRotation = rotationAroundFixedPoint(reference, current, axis)
-		if (orbitRotation > estimate) estimate = orbitRotation
-	}
-
-	if (starMatch?.success && starMatch.similarity && !starMatch.similarity.mirrored) {
-		const matchedRotation = Math.abs(normalizePI(starMatch.similarity.rotation))
-		if (matchedRotation > estimate) estimate = matchedRotation
-	}
-
-	return estimate
-}
-
-// Computes the great-circle separation between the solved frame centers.
-function centerSeparation(a: PlateSolution, b: PlateSolution) {
-	return angularDistance(a.rightAscension, a.declination, b.rightAscension, b.declination)
-}
-
-// Estimates the image rotation by comparing center vectors around the solved fixed point.
-function rotationAroundFixedPoint(reference: PlateSolution, current: PlateSolution, axis: Readonly<Point>) {
-	const refDx = reference.widthInPixels * 0.5 - axis.x
-	const refDy = reference.heightInPixels * 0.5 - axis.y
-	const curDx = current.widthInPixels * 0.5 - axis.x
-	const curDy = current.heightInPixels * 0.5 - axis.y
-	const refNorm = Math.hypot(refDx, refDy)
-	const curNorm = Math.hypot(curDx, curDy)
-	if (!(refNorm > 0) || !(curNorm > 0)) return 0
-	const dot = (refDx * curDx + refDy * curDy) / (refNorm * curNorm)
-	return Math.acos(Math.max(-1, Math.min(1, dot)))
-}
-
-// Builds a robust seed list for the fixed-point solve from explicit, sampled, and center guesses.
-function fixedPointSeeds(reference: PlateSolution, current: PlateSolution, initialGuess?: Readonly<Point>) {
-	const center = { x: reference.widthInPixels * 0.5, y: reference.heightInPixels * 0.5 }
-	const sampledSeed = sampledSimilarityTransform(reference, current)
-	const similaritySeed = sampledSeed === undefined ? undefined : solveSimilarityFixedPoint(sampledSeed)
-	const seeds: Point[] = []
-
-	pushSeed(seeds, initialGuess)
-	pushSeed(seeds, similaritySeed === false ? undefined : similaritySeed)
-	pushSeed(seeds, center)
-
-	return seeds
-}
-
-// Adds only distinct finite seeds to the candidate list.
-function pushSeed(seeds: Point[], seed?: Readonly<Point>) {
-	if (!seed || !Number.isFinite(seed.x) || !Number.isFinite(seed.y)) return
-
-	for (let i = 0; i < seeds.length; i++) {
-		if (Math.abs(seeds[i].x - seed.x) <= 1e-9 && Math.abs(seeds[i].y - seed.y) <= 1e-9) return
-	}
-
-	seeds.push({ x: seed.x, y: seed.y })
-}
-
-// Fits a similarity transform from sampled WCS correspondences without requiring detected stars.
-function sampledSimilarityTransform(reference: PlateSolution, current: PlateSolution) {
-	const referenceSamples = referenceFrameSamples(reference)
-	const currentSamples: Point[] = []
-	const currentMappedReference: Point[] = []
-
-	for (let i = 0; i < referenceSamples.length; i++) {
-		const sample = referenceSamples[i]
-		const sky = tanUnproject(reference, sample.x, sample.y)
-		if (sky === undefined) continue
-		const mapped = tanProject(current, sky[0], sky[1])
-		if (mapped === undefined) continue
-		currentSamples.push(sample)
-		currentMappedReference.push({ x: mapped[0], y: mapped[1] })
-	}
-
-	if (currentSamples.length < 2) return undefined
-
-	return fitSimilarityTransform(currentSamples, currentMappedReference)
-}
-
-// Samples stable reference pixels across the frame interior for WCS-based transform estimation.
-function referenceFrameSamples(solution: PlateSolution) {
-	const width = solution.widthInPixels
-	const height = solution.heightInPixels
-
-	return [
-		{ x: width * 0.5, y: height * 0.5 },
-		{ x: width * 0.35, y: height * 0.35 },
-		{ x: width * 0.65, y: height * 0.35 },
-		{ x: width * 0.35, y: height * 0.65 },
-		{ x: width * 0.65, y: height * 0.65 },
-		{ x: width * 0.5, y: height * 0.35 },
-		{ x: width * 0.5, y: height * 0.65 },
-	] as const
-}
-
-// Computes the nonlinear image-space residual p - T(p) for the fixed-point solver.
-function fixedPointResidual(reference: PlateSolution, current: PlateSolution, point: Readonly<Point>): FixedPointCandidate | false {
-	const sky = tanUnproject(reference, point.x, point.y)
-	if (sky === undefined) return false
-	const mapped = tanProject(current, sky[0], sky[1])
-	if (mapped === undefined) return false
-	const mappedPoint = { x: mapped[0], y: mapped[1] }
-	return { x: point.x, y: point.y, mapped: mappedPoint, residual: euclideanDistance(point, mappedPoint) }
-}
-
-// Solves the fixed point with a finite-difference Gauss-Newton iteration.
-function solveByGaussNewton(reference: PlateSolution, current: PlateSolution, seed: Readonly<Point>, tolerance: number): FixedPointSolution | false {
-	let { x, y } = seed
-	const step = 0.5
-	let lastStep = Number.POSITIVE_INFINITY
-
-	for (let iteration = 0; iteration < 24; iteration++) {
-		const center = fixedPointResidual(reference, current, { x, y })
-		if (center === false) return false
-
-		const dxCandidate = fixedPointResidual(reference, current, { x: x + step, y })
-		const dyCandidate = fixedPointResidual(reference, current, { x, y: y + step })
-		if (dxCandidate === false || dyCandidate === false) return false
-
-		const r0x = x - center.mapped.x
-		const r0y = y - center.mapped.y
-		const j00 = (x + step - dxCandidate.mapped.x - r0x) / step
-		const j10 = (y - dxCandidate.mapped.y - r0y) / step
-		const j01 = (x - dyCandidate.mapped.x - r0x) / step
-		const j11 = (y + step - dyCandidate.mapped.y - r0y) / step
-		const det = j00 * j11 - j01 * j10
-		if (Math.abs(det) <= 1e-12) return false
-
-		const deltaX = (j11 * r0x - j01 * r0y) / det
-		const deltaY = (-j10 * r0x + j00 * r0y) / det
-		lastStep = Math.hypot(deltaX, deltaY)
-
-		if (lastStep <= FIXED_POINT_STEP_TOLERANCE) {
-			if (center.residual > tolerance) return false
-			return { x, y, residual: center.residual, iterations: iteration + 1, solver: 'gauss-newton' }
-		}
-
-		x -= deltaX
-		y -= deltaY
-
-		if (!Number.isFinite(x) || !Number.isFinite(y)) return false
-	}
-
-	const final = fixedPointResidual(reference, current, { x, y })
-	if (final === false || lastStep > FIXED_POINT_STEP_TOLERANCE || final.residual > tolerance) return false
-	return { x, y, residual: final.residual, iterations: 24, solver: 'gauss-newton' }
-}
-
-// Falls back to a derivative-free coordinate search when the Jacobian-based solve is poorly conditioned.
-function solveByCoordinateSearch(reference: PlateSolution, current: PlateSolution, seed: Readonly<Point>, tolerance: number) {
-	let { x, y } = seed
-	let stride = Math.max(reference.widthInPixels, reference.heightInPixels) / 8
-	let best = fixedPointResidual(reference, current, { x, y })
-	if (best === false) return false
-
-	for (let iteration = 0; iteration < 60; iteration++) {
-		let improved = false
-
-		for (let i = 0; i < 4; i++) {
-			const candidate = i === 0 ? { x: x + stride, y } : i === 1 ? { x: x - stride, y } : i === 2 ? { x, y: y + stride } : { x, y: y - stride }
-			const residual = fixedPointResidual(reference, current, candidate)
-
-			if (residual !== false && residual.residual < best.residual) {
-				x = candidate.x
-				y = candidate.y
-				best = residual
-				improved = true
-			}
-		}
-
-		if (!improved) stride *= 0.5
-		if (stride <= FIXED_POINT_STEP_TOLERANCE) break
-	}
-
-	if (stride > FIXED_POINT_STEP_TOLERANCE || best.residual > tolerance) return false
-	else return { x, y, residual: best.residual, iterations: 60, solver: 'coordinate-search' } as const
-}
-
-// Converts an image pixel into a normalized J2000/ICRS direction vector.
-function skyVectorFromPixel(solution: PlateSolution, point: Readonly<Point>) {
-	const sky = tanUnproject(solution, point.x, point.y)
-	if (sky === undefined) throw new Error('pixel does not map to a valid sky position')
-	return eraS2c(sky[0], sky[1])
-}
-
-// Projects an inertial direction into the current frame and returns a best-effort pixel location.
-function pixelFromSkyVector(solution: PlateSolution, vector: Vec3) {
-	const [rightAscension, declination] = eraC2s(...vector)
-	const pixel = tanProject(solution, rightAscension, declination)
-	if (pixel !== undefined) return { x: pixel[0], y: pixel[1] }
-
-	const center = tanProject(solution, solution.rightAscension, solution.declination)
-	if (center !== undefined) return { x: center[0], y: center[1] }
-
-	return { x: solution.widthInPixels * 0.5, y: solution.heightInPixels * 0.5 }
-}
-
-// Builds the local tangent basis aligned with azimuth and altitude directions.
-function horizontalBasis(azimuth: Angle, altitude: Angle) {
-	return {
-		azimuth: [-Math.sin(azimuth), Math.cos(azimuth), 0] as Vec3,
-		altitude: [-Math.sin(altitude) * Math.cos(azimuth), -Math.sin(altitude) * Math.sin(azimuth), Math.cos(altitude)] as Vec3,
-	} as const
-}
-
-// Chooses the next machine-friendly action from the signed split error components.
-function guidanceAction(metrics: IPolarPolarAlignmentErrorMetrics): IPolarPolarAlignmentAction {
-	if (Math.abs(metrics.altitudeError) >= Math.abs(metrics.azimuthError)) return metrics.altitudeError <= 0 ? 'ADJUST_ALTITUDE_POSITIVE' : 'ADJUST_ALTITUDE_NEGATIVE'
-	return metrics.azimuthError <= 0 ? 'ADJUST_AZIMUTH_POSITIVE' : 'ADJUST_AZIMUTH_NEGATIVE'
+// A rejected measurement that leaves the calibration usable.
+function refused(time: Time, reason: IPolarRejection): IPolarRejectedMeasurement {
+	return { valid: false, time, reason, invalidatesCalibration: false }
 }

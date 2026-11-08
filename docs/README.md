@@ -14837,130 +14837,129 @@ await session.stop(coordinator)
 
 ### iPolar Alignment
 
-`observation/alignment/ipolar` runs a camera-based polar alignment in the style of an electronic polar scope, from plate solutions only: the camera looks near the pole, two solved frames separated by an RA-only rotation of the mount place the rotation axis in the image as the fixed point of the transform between the frames, that pixel is converted to an inertial J2000 direction, and from then on every new solved frame gives the error to the true celestial pole, split in altitude and azimuth, with the position of both markers on the frame and the next knob to turn. Angles are radians, pixels follow the convention of the supplied `PlateSolution` and the camera must be rigid with the RA axis (the declination, the guiding, the camera and the pier side do not change after the calibration). `IPolarPolarAlignment` is the stateful engine and its constructor takes an `IPolarPolarAlignmentConfig`, whose defaults are a minimum RA rotation of 10 arcminutes (`minimumAcceptedRaRotation`), a preferred window of 30 arcminutes to 2 degrees (`preferredRaRotationRange`, outside it only a warning), at least 6 stars for the star-matching check (`minimumStars`), a completion threshold of 30 arcseconds of total error (`completionThreshold`), a fixed-point residual of 1.5 pixels (`fixedPointTolerance`), 2 pixels for the star matches (`maxStarMatchResidual`), the default `refraction` (or `false`), `compensateEarthRotation`, `useStarMatchingValidation` and the `starMatchingConfig` forwarded to the matcher. A frame is an `IPolarPolarAlignmentFrameInput` (the `time` with its location, the `solution` and optional detected `stars`). `start(frame, observer?)` stores the first frame (the observer, a location with a refraction, comes from the time when omitted) and asks the operator to rotate the RA axis, `confirm(frame)` takes the second one, estimates the axis (Gauss-Newton on the fixed point with a derivative-free fallback and, when stars are given, a similarity transform from the matches as the seed) and measures the error, and `update(frame)` advances the machine (it starts, confirms or measures according to the stage); `getState()` returns a snapshot and `reset()` begins again. The `IPolarPolarAlignmentResult` has the `stage` (`WAITING_FOR_POSITION_1`, `WAITING_FOR_POSITION_2`, `INITIAL_AXIS_ESTIMATION`, `REFINEMENT`, `COMPLETE` or `FAILED`), the `totalError`, `altitudeError` and `azimuthError`, the `currentPoint` of the axis and the `targetPoint` of the pole as `IPolarPolarAlignmentGuidePoint` (the point, `onScreen`, the `clamped` border point, the `arrow` unit direction from the center and the `unclamped` one), `onScreenCurrent`, `onScreenTarget`, the machine-friendly `action` (`WAIT_FOR_POSITION_1`, `ROTATE_RA_TO_POSITION_2`, `ADJUST_ALTITUDE_POSITIVE`, `ADJUST_ALTITUDE_NEGATIVE`, `ADJUST_AZIMUTH_POSITIVE`, `ADJUST_AZIMUTH_NEGATIVE`, `ALIGNMENT_COMPLETE` or `INVALID_FRAME`, the larger of the two components first), `convergence` and the `diagnostics` (the solver, its iterations and residual in pixels, the accepted RA rotation, the star match, the refraction and Earth-rotation flags and the `warnings`). The accepted RA rotation in the diagnostics is an estimate taken as the largest of the separation of the frame centers, the change of the field orientation and the star-match rotation, so with a camera close to the axis it can be far smaller than the real rotation of the mount. A second frame with too little rotation (or with no stable fixed point) is answered by `INVALID_FRAME` and the engine stays waiting for a new second position; the calibrated axis pixel is kept across the following frames, and only the pole marker and the errors change with each solve. The helpers are `solveSimilarityFixedPoint(transform)` (the closed-form fixed point of a similarity transform from the star matcher, mirrored or not, with its determinant, or `false` for a pure translation), `solveImageFixedPoint(reference, current, guess?, tolerance?)` (the fixed point of the WCS transform between two solutions, with the solver, iterations and residual, or `false`), `decomposePolarError(axis, target, time, refraction?, location?)` (the small error split in the topocentric altitude and azimuth tangents of the target) and `projectGuidePoint(point, width, height, margin?)`. The polar error from a three-point sequence is [Three-Point Polar Alignment](#three-point-polar-alignment), and a drawing of the tolerances is [Polar Alignment Overlay](#polar-alignment-overlay).
+`observation/alignment/ipolar` is a camera-based polar alignment in the style of an electronic polar scope, from plate solutions only. The camera must be rigid with the RA axis. Two solved frames separated by an RA-only rotation of the mount calibrate the mechanical axis, and every later solved frame of the same sensor geometry measures the error between that axis and the celestial pole while the operator adjusts the base. The model is a rigid rotation in the Earth-fixed frame: a fixed 7×7 grid of sensor pixels (`ipolarSamplePixels`, FITS 1-based, inset 4 % from the edges) goes through each WCS (SIP included) and then through ERFA's observed-place chain at each frame's own mid-exposure instant: light deflection, annual and diurnal aberration, precession-nutation, Earth rotation, polar motion and refraction. The result is the physical direction of the light in ITRS (`ipolarEarthFixedRays`). The rotation fitted between two frames ([Rotation Fitting](#rotation-fitting)) then gives the axis and the rotation actually achieved. The frames need not overlap, the axis need not fall inside the image, and the delay between the frames (tracking included) does not bias the result. A fit of the raw ICRS rays would mix in the rotation of the Earth, and a pole without annual aberration would be off by up to about 20″.
+
+The site and atmosphere are an `IPolarObserver`: a geodetic `location` and a `refraction`. That one `refraction` sets both how the rays are observed and what the target is. With refraction the target is the pole raised to its apparent altitude; `false` is the vacuum model, with no refraction and the geometric pole. The target is the celestial intermediate pole of the site's hemisphere (`ipolarTargetPole`, the north pole when the latitude is not negative).
+
+A frame is an `IPolarFrame` with three parts:
+
+- the mid-exposure `time`;
+- the `solution` of exactly that exposure;
+- the `sensor`, an `IPolarSensorGeometry` (the image `width` and `height`, `binX`, `binY`, and the subframe origin `x`, `y` in unbinned pixels).
+
+Two frames are comparable only when their sensors are identical and match the dimensions of their solutions.
+
+`calibrateIPolar(first, second, observer, limits?)` returns `{ accepted: true, calibration }` or `{ accepted: false, reason, quality }`, where `quality` holds the diagnostics reached so far. The quality fields are `rotation`, `residual`, `maximumResidual`, `conditioning`, `axisOffset` (the angle to the target pole), `interval` (in seconds), and `preferred`. Every gate of `IPolarLimits` (`DEFAULT_IPOLAR_LIMITS`) is a hard rejection:
+
+- `inconsistentSensor`: a different sensor geometry or parity.
+- `badTime`: frames out of order or more than `maximumCalibrationInterval` (3600 s) apart.
+- `poorConditioning`: a field radius under `minimumFieldRadius` (0.1°), or an undetermined fit.
+- `badWcs`: a sample that cannot be unprojected.
+- `unstableFit`: a sample residual over `maximumResidual` (2 pixels of the plate scale), which is how a non-rigid pair is detected.
+- `insufficientRotation` and `excessiveRotation`: a fitted rotation under `minimumRotation` (10°) or over `maximumRotation` (60°). The `preferredRotation` of 20° to 40° is only reported.
+- `wrongAxis`: an axis more than `maximumAxisOffset` (5°) from the target, which is the mark of a declination move or a wrong blind solve, never a large polar error.
+
+The axis is oriented towards the pole whatever the direction of the rotation. Two poses cannot prove that the motion was pure RA, so a small mixed RA/DEC motion tilts the axis undetected. The `IPolarCalibration` keeps four things that every measurement reuses:
+
+- the `reference` rays of the first frame, which define the sensor frame;
+- the `axis` in that frame;
+- the `sensor` and `parity`;
+- the `observer`.
+
+`measureIPolar(calibration, frame, previous?, limits?)` fits the frame's attitude from its own WCS and carries the calibrated axis to the frame's instant, so RA rotation leaves it unchanged and an adjustment of the base moves it. `previous` is the latest accepted measurement. An `IPolarAcceptedMeasurement` (`valid: true`) holds:
+
+- the `error` (`IPolarError`): the `total`, plus the on-sky `azimuth` component, positive when the axis is east of the pole in either hemisphere, and the `altitude` component, positive when it is above;
+- the ITRS `axis` and `target`;
+- the fit `residual`;
+- the ICRS `center`;
+- the `axisPoint` and `polePoint` as an `IPolarProjection` in FITS 1-based pixels (`ipolarProject`). A projection is `visible`, or `offscreen` with its `position`, the `border` crossing from the image center and the unit `direction`, or `unprojectable` behind the tangent plane. It is never a substitute at the image center.
+
+An `IPolarRejectedMeasurement` (`valid: false`) carries the `reason`:
+
+- `geometryMismatch` for a changed sensor, parity, or an axis jump over `maximumAxisJump` (3°, a DEC, rotator or camera move);
+- `fieldJump` for a field center that moved more than `maximumShift` (5°), a slew;
+- `wrongAxis`, `badTime`, `badWcs`, `poorConditioning`, `unstableFit`, or `singularGeometry` (a pole at the zenith);
+- and `invalidatesCalibration` when only a new calibration can measure again.
+
+`advanceIPolarConvergence(state, measurement, options?)` is the reversible convergence streak, starting from `IPOLAR_CONVERGENCE_START`, with `DEFAULT_IPOLAR_CONVERGENCE` as the default options (three measurements within 30″, at most 300 s apart). A rejection clears the streak, and an error above the `threshold` or a gap over `maximumInterval` restarts it. `converged` holds while the streak reaches `count`. The threshold is a requested target, not a statement of accuracy: that depends on the plate solutions, the optics and the mechanics. Angles are radians, and every result is a fresh value. The polar error from a three-point sequence is [Three-Point Polar Alignment](#three-point-polar-alignment).
 
 ```ts
-import { plateSolutionFrom, type PlateSolution } from 'nebulosa/src/astrometry/solvers/platesolver'
-import { eraC2s } from 'nebulosa/src/astronomy/coordinates/erfa/erfa'
+import { plateSolutionFrom } from 'nebulosa/src/astrometry/solvers/platesolver'
+import { eraS2c } from 'nebulosa/src/astronomy/coordinates/erfa/erfa'
 import { geodeticLocation } from 'nebulosa/src/astronomy/observer/location'
-import { timeShift, timeYMDHMS, type Time } from 'nebulosa/src/astronomy/time/time'
-import type { FitsHeader } from 'nebulosa/src/io/formats/fits/fits'
-import { vecCross, vecDot, vecNormalizeMut, vecRotateByRodrigues, type Vec3 } from 'nebulosa/src/math/linear-algebra/vec3'
-import { arcmin, arcsec, deg, toArcmin, toDeg } from 'nebulosa/src/math/units/angle'
-import { decomposePolarError, IPolarPolarAlignment, projectGuidePoint, solveImageFixedPoint, solveSimilarityFixedPoint } from 'nebulosa/src/observation/alignment/ipolar'
-import { celestialPoleVector, mountAdjustmentAxes } from 'nebulosa/src/observation/alignment/polaralignment'
+import { timeShift, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { DAYSEC } from 'nebulosa/src/core/constants'
+import { matMulVec, matRodriguesRotation } from 'nebulosa/src/math/linear-algebra/mat3'
+import { type Vec3, vecCross, vecDot, vecNormalize } from 'nebulosa/src/math/linear-algebra/vec3'
+import { arcmin, arcsec, deg, toArcsec, toDeg } from 'nebulosa/src/math/units/angle'
+import { advanceIPolarConvergence, calibrateIPolar, IPOLAR_CONVERGENCE_START, type IPolarFrame, measureIPolar } from 'nebulosa/src/observation/alignment/ipolar'
+import { ipolarFrameContext, type IPolarObserver, ipolarItrsToIcrs } from 'nebulosa/src/observation/alignment/ipolar.geometry'
 
-// The closed-form fixed point of a similarity transform (rotation of 5 degrees, a shift of (12, -8) pixels): the point that the transform keeps in place, with the determinant of its 2 x 2 system. A mirrored transform has its own form.
-const fixed = solveSimilarityFixedPoint({ a: Math.cos(deg(5)), b: Math.sin(deg(5)), tx: 12, ty: -8, mirrored: false })
-console.log(fixed && [fixed.x, fixed.y, fixed.determinant]) // 97.615, 133.423, 0.00761
-console.log(solveSimilarityFixedPoint({ a: 0.8, b: 0.1, tx: -7, ty: 11, mirrored: true })) // { x: -32.857, y: 4.286, determinant: 0.35 }
+// A rigid camera 1° from a mechanical axis 10′ east of and 5′ below the north pole (ITRS +z), at 40° N.
+const location = geodeticLocation(deg(-45), deg(40))
+const observer: IPolarObserver = { location, refraction: false }
+const east: Vec3 = [-Math.sin(deg(-45)), Math.cos(deg(-45)), 0]
+const zenith = vecCross(east, [0, 0, 1]) // towards the zenith, tangent at the pole
+const axis = vecNormalize([arcmin(10) * east[0] - arcmin(5) * zenith[0], arcmin(10) * east[1] - arcmin(5) * zenith[1], 1 - arcmin(5) * zenith[2]])
+const boresight = matMulVec(matRodriguesRotation(east, deg(1)), axis)
+const sensor = { width: 1280, height: 960, binX: 1, binY: 1, x: 0, y: 0 }
 
-// A guide point inside the frame stays where it is, and one outside is clamped to the border of an inset of 20 pixels in the direction from the center, with a unit arrow.
-const inside = projectGuidePoint({ x: 400, y: 300 }, 800, 600)
-const outside = projectGuidePoint({ x: 1600, y: -200 }, 800, 600, 20)
-console.log(inside.onScreen, inside.arrow, outside.onScreen, outside.clamped, outside.arrow.x, outside.arrow.y) // true, { x: 0, y: 0 }, false, { x: 780, y: 141.667 }, 0.9231, -0.3846
-
-// A camera that is offset by 1.6 degrees from the axis of a mount at a site of 22.5 degrees of south latitude, with a base 30 arcminutes off in azimuth and -18 in altitude: the synthetic solutions of the camera (a 1280 x 1024 pixels frame of 30 arcseconds per pixel) before and after rotating the RA axis by 25 degrees.
-const location = geodeticLocation(deg(-45.5), deg(-22.5))
-const at = (seconds: number): Time => {
-	const time = timeShift(timeYMDHMS(2026, 3, 27, 12, 0, 29), seconds / 86400)
-	time.location = location
-	return time
-}
-
-const tangentBasis = (origin: Vec3) => {
-	const east = vecNormalizeMut(vecCross([0, 0, 1], origin))
-	return { east, north: vecNormalizeMut(vecCross(origin, east)) }
-}
-
-function frame(time: Time, azimuthError: number, altitudeError: number, raRotation: number): PlateSolution {
-	const pole = celestialPoleVector(time, location, false)
-	const { upAxis, eastAxis } = mountAdjustmentAxes(time, location)
-	const alignedForward = vecRotateByRodrigues(pole, eastAxis, deg(1.6))
-	const axis = vecRotateByRodrigues(vecRotateByRodrigues(pole, upAxis, azimuthError), eastAxis, altitudeError)
-	const forward = vecRotateByRodrigues(vecRotateByRodrigues(alignedForward, upAxis, azimuthError), eastAxis, altitudeError)
-	const right = vecNormalizeMut(vecCross(forward, axis, [0, 0, 0]))
-	const up = vecNormalizeMut(vecCross(right, forward, [0, 0, 0]))
-	const rolledRight = vecRotateByRodrigues(right, forward, deg(33))
-	const rolledUp = vecRotateByRodrigues(up, forward, deg(33))
-	const rotatedForward = vecRotateByRodrigues(forward, axis, raRotation)
-	const rotatedRight = vecRotateByRodrigues(rolledRight, axis, raRotation)
-	const rotatedUp = vecRotateByRodrigues(rolledUp, axis, raRotation)
-	const [rightAscension, declination] = eraC2s(...rotatedForward)
-	const basis = tangentBasis(rotatedForward)
-	const scale = arcsec(30)
-	const header: FitsHeader = {
-		NAXIS: 2,
+// A gnomonic camera at 6″/px; its WCS is built from the physical rays at the exposure instant.
+function frame(rotation: number, seconds: number): IPolarFrame {
+	const time = timeShift(timeYMDHMS(2026, 11, 8, 23, 0, 0), seconds / DAYSEC)
+	const context = ipolarFrameContext(time, observer)
+	const turn = matRodriguesRotation(axis, rotation)
+	const f = matMulVec(turn, boresight)
+	const r = vecNormalize(vecCross(f, matMulVec(turn, axis)))
+	const d = vecCross(f, r)
+	const sky = (u: number, v: number) => eraS2c(...ipolarItrsToIcrs(vecNormalize([f[0] + u * r[0] + v * d[0], f[1] + u * r[1] + v * d[1], f[2] + u * r[2] + v * d[2]]), context))
+	const center = sky(0, 0)
+	const e = vecNormalize(vecCross([0, 0, 1], center))
+	const n = vecCross(center, e)
+	const step = arcsec(6)
+	const [x, y] = [sky(step, 0), sky(0, step)]
+	const [ra, dec] = ipolarItrsToIcrs(f, context)
+	const header = {
 		NAXIS1: 1280,
-		NAXIS2: 1024,
+		NAXIS2: 960,
 		CTYPE1: 'RA---TAN',
 		CTYPE2: 'DEC--TAN',
-		CUNIT1: 'deg',
-		CUNIT2: 'deg',
 		CRPIX1: 640.5,
-		CRPIX2: 512.5,
-		CRVAL1: toDeg(rightAscension),
-		CRVAL2: toDeg(declination),
-		CD1_1: toDeg(scale * vecDot(rotatedRight, basis.east)),
-		CD1_2: toDeg(-scale * vecDot(rotatedUp, basis.east)),
-		CD2_1: toDeg(scale * vecDot(rotatedRight, basis.north)),
-		CD2_2: toDeg(-scale * vecDot(rotatedUp, basis.north)),
-		EQUINOX: 2000,
+		CRPIX2: 480.5,
+		CRVAL1: toDeg(ra),
+		CRVAL2: toDeg(dec),
+		RADESYS: 'ICRS',
+		CD1_1: toDeg(vecDot(x, e) / vecDot(x, center)),
+		CD1_2: toDeg(vecDot(y, e) / vecDot(y, center)),
+		CD2_1: toDeg(vecDot(x, n) / vecDot(x, center)),
+		CD2_2: toDeg(vecDot(y, n) / vecDot(y, center)),
 	}
-	return plateSolutionFrom(header)!
+	return { time, solution: plateSolutionFrom(header)!, sensor }
 }
 
-const times = [at(0), at(20), at(40), at(60)]
-const first = frame(times[0], arcmin(30), arcmin(-18), 0)
-const second = frame(times[1], arcmin(30), arcmin(-18), deg(25))
+// Too little RA rotation is rejected with the rotation measured, never with an error.
+const small = calibrateIPolar(frame(0, 0), frame(deg(4), 40), observer)
+console.log(small.accepted, small.accepted || small.reason, small.accepted || toDeg(small.quality.rotation!)) // false insufficientRotation 3.9999999958304735
 
-// The fixed point of the WCS transform between the two frames: the image position of the mount axis, the solver, its iterations and the residual in pixels (the first seed is the center of the frame when none is given).
-const axis = solveImageFixedPoint(first, second)
-console.log(axis && [axis.x, axis.y, axis.solver, axis.iterations, axis.residual]) // 535.6, 351.4, gauss-newton, 1, 0.040286
+// 30° of RA rotation 90 s later calibrates the axis.
+const result = calibrateIPolar(frame(0, 0), frame(deg(30), 90), observer)
+if (!result.accepted) throw new Error(result.reason)
+const { calibration } = result
+console.log(toDeg(calibration.quality.rotation), toArcsec(calibration.quality.maximumResidual), calibration.quality.preferred) // 29.99999996930482 0.002339928996085704 true
 
-// The engine: the first frame only starts the session and asks for the RA rotation, and a second one, 25 degrees of RA rotation later, calibrates the axis and measures the error at once: the total, the altitude and the azimuth components in arcminutes, the action and the position of the markers.
-const engine = new IPolarPolarAlignment({ refraction: false, minimumAcceptedRaRotation: deg(0.5), completionThreshold: arcmin(4) })
-const started = engine.update({ time: times[0], solution: first })
-console.log(started.stage, started.action, started.convergence)
-const calibrated = engine.update({ time: times[1], solution: second })
-console.log(
-	calibrated.stage,
-	calibrated.action,
-	[calibrated.totalError, calibrated.altitudeError, calibrated.azimuthError].map((value) => toArcmin(value)),
-	calibrated.convergence,
-) // INITIAL_AXIS_ESTIMATION, ADJUST_AZIMUTH_POSITIVE, [33.21, 18.17, -27.8], false
-console.log(
-	[calibrated.currentPoint.x, calibrated.currentPoint.y, calibrated.targetPoint.x, calibrated.targetPoint.y].map((value) => value),
-	calibrated.onScreenCurrent,
-	calibrated.onScreenTarget,
-) // [535.6, 351.4, 595.8, 323.3], true, true
-console.log(calibrated.diagnostics.solver, calibrated.diagnostics.solverIterations, toDeg(calibrated.diagnostics.acceptedRaRotation!), calibrated.diagnostics.warnings, calibrated.diagnostics.refractionEnabled) // gauss-newton, 1, 0.691, [], false
+// Every later frame measures the error from its own WCS, wherever the RA axis has turned.
+let convergence = IPOLAR_CONVERGENCE_START
+const measurement = measureIPolar(calibration, frame(deg(55), 400))
+if (measurement.valid) {
+	console.log(toArcsec(measurement.error.azimuth), toArcsec(measurement.error.altitude), toArcsec(measurement.error.total)) // 599.9986162077672 -299.9986809912764 670.8185656701381
+	console.log(measurement.axisPoint.kind, measurement.polePoint.kind) // offscreen offscreen
+	convergence = advanceIPolarConvergence(convergence, measurement)
+}
+console.log(convergence.streak, convergence.converged) // 0 false (670″ is above the 30″ threshold)
 
-// The user turns the knobs while new frames are solved: the calibrated axis pixel is kept, and the error and the target marker follow each solve (the next step leaves 10 and -6 arcminutes; the last one aligns the pole and completes the session).
-const refined = engine.update({ time: times[2], solution: frame(times[2], arcmin(10), arcmin(-6), deg(25)) })
-console.log(
-	refined.stage,
-	refined.action,
-	[refined.totalError, refined.altitudeError, refined.azimuthError].map((value) => toArcmin(value)),
-	refined.currentPoint.x === calibrated.currentPoint.x,
-) // REFINEMENT, ADJUST_AZIMUTH_POSITIVE, [11.16, 6.13, -9.32], true
-const done = engine.update({ time: times[3], solution: frame(times[3], 0, 0, deg(25)) })
-console.log(done.stage, done.action, toArcmin(done.totalError), done.convergence) // COMPLETE, ALIGNMENT_COMPLETE, 0.151, true
-
-// The state of the session: the stage, the calibrated axis pixel and unit vectors in the inertial frame, and the decomposition of the last measurement computed again from them.
-const state = engine.getState()
-console.log(
-	state.stage,
-	state.axisPixel && [state.axisPixel.x, state.axisPixel.y],
-	state.axisVector!.map((value) => value),
-	state.latestResult === done,
-) // COMPLETE, [535.6, 351.4], [-0.00252, -0.00004, -1], true
-const metrics = decomposePolarError(state.axisVector!, state.targetVector!, times[3], false, location)
-console.log([metrics.totalError, metrics.altitudeError, metrics.azimuthError].map((value) => toArcmin(value))) // [0.151, 0.126, -0.082]
-
-// The reset begins a new session, which accepts a first frame again; a first update after it asks for the second position.
-engine.reset()
-console.log(engine.update({ time: times[0], solution: first }).action) // ROTATE_RA_TO_POSITION_2
+// A different subframe no longer matches the calibration.
+const moved = measureIPolar(calibration, { ...frame(deg(55), 500), sensor: { ...sensor, x: 16 } })
+console.log(moved.valid, moved.valid || moved.reason, moved.valid || moved.invalidatesCalibration) // false geometryMismatch true
 ```
 
 ### Local Pointing Residuals
