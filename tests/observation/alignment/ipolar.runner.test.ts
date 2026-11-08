@@ -79,6 +79,8 @@ class FakeRig {
 	readonly start = this.clock.wall
 	readonly motions: { direction: MountMoveDirection; seconds: number }[] = []
 	readonly commands: string[] = []
+	// Mount snooped by every capture request, in order.
+	readonly snooped: string[] = []
 	axis = axisWith(arcmin(20), arcmin(-10))
 	// Camera attitude (row-major active rotation) applied to the reference camera basis.
 	attitude = matRodriguesRotation([1, 0, 0], 0)
@@ -181,8 +183,9 @@ class FakeRig {
 	}
 
 	readonly capturer = {
-		start: (scope: OperationScope) => {
+		start: (scope: OperationScope, _camera: Camera, request: { readonly mount?: string }) => {
 			const { signal } = scope as OperationContext
+			this.snooped.push(request.mount ?? '')
 			const result = ((): Promise<OperationResult<CameraCaptureResult>> => {
 				if (signal.aborted) return Promise.resolve(failedOperationResult('aborted'))
 				const exposureStartedAt = this.clock.wall
@@ -255,6 +258,8 @@ describe('manual calibration', () => {
 		expect(result).toMatchObject({ ok: true, value: { mount: { declination: deg(89), pierSide: 'WEST' } } })
 		expect(rig.commands).toEqual([])
 		expect(events.at(-1)).toMatchObject({ type: 'calibrationAccepted', verified: true })
+		// The pointing of a mount turned by hand is stale, so it is never snooped as a hint.
+		expect(rig.snooped).toEqual(['', ''])
 	})
 
 	test('keeps the first pose while the rotation is too small', async () => {
@@ -372,6 +377,7 @@ describe('automatic calibration', () => {
 		expect(events[0]).toEqual({ type: 'slewRate', previous: 'FAST', applied: 'SLOW' })
 		expect(events.filter((e) => e.type === 'waitingForRotation')).toHaveLength(0)
 		expect(rig.commands.filter((e) => e.startsWith('move'))).toHaveLength(rig.motions.length)
+		expect(rig.snooped.every((e) => e === 'Fake Mount')).toBeTrue()
 	})
 
 	test('refuses an unusable mount before any command', async () => {

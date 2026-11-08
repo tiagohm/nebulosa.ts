@@ -23,8 +23,10 @@ import { type PolarAlignmentDirection, polarAlignmentTimedMotion } from './polar
 // time. Refinement only captures and solves, measuring every frame against the calibration and
 // keeping the reversible convergence streak; it never commands the mount. A mount, when given, is
 // watched for a declination or pier-side change (a motion that is not RA); without one the motion
-// is the operator's statement. The runner leases nothing itself: the commander and the capturer
-// lease per command. It changes the slew rate only in automatic mode and reports the preset it
+// is the operator's statement. The mount is snooped into the frames as a pointing hint only while
+// its reported pointing follows the camera: in automatic calibration, and in a refinement that asks
+// for it. The runner leases nothing itself: the commander and the capturer lease per command. It
+// changes the slew rate only in automatic mode and reports the preset it
 // replaced, never restoring it, because a cancelled operation commands nothing more; the caller
 // restores it once the devices are free. Angles are radians, durations seconds, wall instants Unix ms.
 
@@ -91,6 +93,9 @@ export interface IPolarRefinementOptions {
 	readonly limits?: Readonly<IPolarLimits>
 	// Convergence streak; defaults to DEFAULT_IPOLAR_CONVERGENCE.
 	readonly convergence?: Readonly<IPolarConvergenceOptions>
+	// Whether the mount is snooped into the frames, its reported pointing a hint for the solver; false when that
+	// pointing is stale, as after a manual RA rotation. Default false.
+	readonly snoop?: boolean
 	// Disposition of each auxiliary frame once its solve ended. Default 'delete'.
 	readonly auxiliary?: 'delete' | 'keep'
 }
@@ -315,6 +320,8 @@ async function calibrationLoop(context: OperationContext, camera: Camera, mount:
 
 	if (mount !== undefined && !mount.connected) return failedOperationResult('disconnected')
 	const reference: IPolarMountReference | undefined = mount && { declination: mount.equatorialCoordinate.declination, pierSide: mount.pierSide }
+	// A mount turned by hand keeps reporting the pointing it had, a stale hint that could keep the second pose from solving.
+	const snooped = mode === 'automatic' ? mount : undefined
 
 	if (mode === 'automatic') {
 		const previous = mount!.slewRate
@@ -324,7 +331,7 @@ async function calibrationLoop(context: OperationContext, camera: Camera, mount:
 	}
 
 	let captures = 0
-	const first = await captureAndSolve(context, camera, mount, 'calibration', ++captures, 1, options, services)
+	const first = await captureAndSolve(context, camera, snooped, 'calibration', ++captures, 1, options, services)
 	if (!first.ok) return first
 	if (first.value === undefined) return failedOperationResult('commandFailed', 'the first frame did not solve')
 
@@ -357,7 +364,7 @@ async function calibrationLoop(context: OperationContext, camera: Camera, mount:
 		const settled = await clock.delay(options.settle * 1000, context.signal)
 		if (!settled.ok) return settled
 
-		const second = await captureAndSolve(context, camera, mount, 'calibration', ++captures, 2, options, services)
+		const second = await captureAndSolve(context, camera, snooped, 'calibration', ++captures, 2, options, services)
 		if (!second.ok) return second
 		// An unsolved frame leaves the first pose and the rate unchanged.
 		if (second.value === undefined) continue
@@ -406,7 +413,7 @@ async function refinementLoop(context: OperationContext, camera: Camera, mount: 
 		const changed = mount && reference && mountChanged(mount, reference, options.maximumDeclinationChange)
 		if (changed) return failedOperationResult('unexpectedState', changed)
 
-		const solved = await captureAndSolve(context, camera, mount, 'refinement', index, undefined, options, services)
+		const solved = await captureAndSolve(context, camera, options.snoop ? mount : undefined, 'refinement', index, undefined, options, services)
 		if (!solved.ok) return solved
 
 		if (solved.value === undefined) {
@@ -428,10 +435,12 @@ async function refinementLoop(context: OperationContext, camera: Camera, mount: 
 // with the frame of the engine (the exposure midpoint and the sensor geometry of the request),
 // undefined when the frame did not solve, or the failure of the capture, the solve timeout, a
 // faulted solver or the cancellation. The file is disposed of only after the solve ended.
+// `snooped`, when given, is the mount whose reported pointing goes into the header as a hint for
+// the solver.
 async function captureAndSolve(
 	context: OperationContext,
 	camera: Camera,
-	mount: Mount | undefined,
+	snooped: Mount | undefined,
 	stage: IPolarStage,
 	index: number,
 	pose: 1 | 2 | undefined,
@@ -440,8 +449,8 @@ async function captureAndSolve(
 ): Promise<OperationResult<{ readonly frame: IPolarFrame; readonly runner: IPolarRunnerFrame; readonly solution: PlateSolution } | undefined>> {
 	const { cameraCapturer, captureListener, solver, clock, solverHealth, listener } = services
 	const path = services.auxiliaryPath(stage, index)
-	// A camera without a mount snoops nothing: a name that resolves no device is snooped as empty.
-	const request = centeringCaptureRequest(options.capture, path, { name: mount?.name ?? '' })
+	// A name that resolves no device is snooped as empty.
+	const request = centeringCaptureRequest(options.capture, path, { name: snooped?.name ?? '' })
 
 	try {
 		listener?.({ type: 'capture', stage, index, pose })
