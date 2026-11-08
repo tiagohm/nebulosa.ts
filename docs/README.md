@@ -24372,6 +24372,47 @@ const dir: [number, number, number] = [0, 3, 0]
 console.log(rigidTransformDirection(rotate, dir, dir) === dir, dir) // true [ -3, 1.8369701987210297e-16, 0 ]
 ```
 
+### Rotation Fitting
+
+`fitRotation(from, to, weights?)` solves Wahba's problem: the proper rotation `R` that best maps paired unit directions, `to[i] ≈ R·from[i]`, minimizing `Σ wᵢ |toᵢ − R·fromᵢ|²` with Horn's closed-form unit-quaternion method. The rotation is active and row-major like those of `matRodriguesRotation` (see [3x3 Matrices](#_3x3-matrices)), always with determinant +1, so a mirrored set gets the best proper rotation and a large residual, never a reflection. The pairs need not overlap or share a fixed point. `residual` is the weighted root-mean-square angle between `R·from[i]` and `to[i]` and `maximumResidual` the largest one, both in radians. `conditioning`, in [0, 1], tells how firmly the pairs fix the weakest rotation direction: 1 for directions spread evenly over the sphere, and for a small cluster it shrinks with the square of the cluster's angular radius, since its roll about the mean direction is barely constrained. The weights default to 1 and must not be negative. The result is undefined when the arrays differ in length, there are fewer than two pairs, the total weight is not positive, an input is not finite, or the directions are collinear (the rotation about them is undetermined).
+
+```ts
+import { matMulVec, matRodriguesRotation, matToVec3, matTranspose } from 'nebulosa/src/math/linear-algebra/mat3'
+import { fitRotation } from 'nebulosa/src/math/linear-algebra/rotation.fit'
+import type { Vec3 } from 'nebulosa/src/math/linear-algebra/vec3'
+
+// A quarter turn about +z, recovered from the images of the three axes.
+const from: Vec3[] = [
+	[1, 0, 0],
+	[0, 1, 0],
+	[0, 0, 1],
+]
+const turn = matRodriguesRotation([0, 0, 1], Math.PI / 2)
+const fit = fitRotation(
+	from,
+	from.map((e) => matMulVec(turn, e)),
+)!
+console.log(fit.rotation) // ≈ [ 0, -1, 0, 1, 0, 0, 0, 0, 1 ]
+console.log(fit.residual, fit.conditioning) // 4.9995996217394874e-17 0.9999999999999999
+
+// matToVec3 works in the frame-rotation sense, so the transpose gives the active axis × angle.
+console.log(matToVec3(matTranspose(fit.rotation))) // [ 0, 0, 1.5707963267948968 ]
+
+// Directions on one line leave the rotation about it undetermined.
+console.log(
+	fitRotation(
+		[
+			[0, 0, 1],
+			[0, 0, -1],
+		],
+		[
+			[1, 0, 0],
+			[-1, 0, 0],
+		],
+	),
+) // undefined
+```
+
 ### Rounding and Integer Conversion
 
 `roundToNearestWholeNumber(a)` rounds to the nearest integer with ties going away from zero (`Math.round` sends `-2.5` to `-2`; this sends it to `-3`), leaves non-finite values unchanged, and returns values at or above 2⁵² untouched because they are already integral, avoiding the spurious change that adding 0.5 would cause there. `roundToNthDecimal(a, n)` rounds to `n` decimal places (`n` is truncated to an integer, and a negative `n` rounds to tens, hundreds and so on), with ties away from zero and an epsilon-tolerant test for a half, so a decimal tie that binary representation pushes slightly below one half, like `1.005`, is still treated as a tie (the tolerance stops mattering beyond about 2⁴⁵ of scaled magnitude); a value whose scaled form overflows is returned unscaled. `modf(n)` splits a number into the truncated integer part and the absolute value of the fraction as a read-only `[integer, fraction]` pair (the integer carries the sign). `signed8(num)` and `signed16(num)` interpret the low 8 or 16 bits of an integer as a two's-complement signed value, which converts raw bytes and words read from a device or a file.
