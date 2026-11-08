@@ -472,6 +472,27 @@ describe('refinement', () => {
 		expect(events.find((e) => e.type === 'measurement')).toMatchObject({ frame: { index: 7 }, convergence: { streak: 3, converged: true } })
 	})
 
+	test('clears the streak on a frame that does not solve', async () => {
+		const rig = new FakeRig()
+		rig.adjust(arcsec(4), arcsec(4))
+		const run = await calibrated(rig)
+		const operations = coordinator()
+		const streaks: number[] = []
+		// Solves 1 and 2 calibrated; the fourth refinement frame (solve 6) does not solve.
+		rig.unsolved = (index) => index === 6
+		const services: IPolarServices = {
+			...rig.services(),
+			listener: (event) => {
+				if (event.type !== 'measurement') return
+				streaks.push(event.convergence.streak)
+				if (streaks.length === 4) void handle.cancel('aborted')
+			},
+		}
+		const handle = operations.start('session', [], (context) => runIPolarRefinement(context, CAMERA, rig.mount, run.mount, run.calibration, { convergence: IPOLAR_CONVERGENCE_START }, REFINEMENT, services))
+		await handle.result
+		expect(streaks).toEqual([1, 2, 3, 1])
+	})
+
 	test('fails when the calibration no longer matches, the mount moves or the frames stop solving', async () => {
 		const rig = new FakeRig()
 		const run = await calibrated(rig)

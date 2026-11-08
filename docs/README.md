@@ -14899,7 +14899,7 @@ After the `settle`, the second frame goes through `calibrateIPolar`:
 
 The accepted run has the `calibration`, the `measurement` of the second frame, its `solution`, the `mount` reference (declination and pier side) and the number of `captures`. Its `calibrationAccepted` event says whether a mount `verified` the motion, since without one the RA-only motion rests on the operator's word.
 
-`runIPolarRefinement(scope, camera, mount, reference, calibration, state, options, services, firstIndex?)` only captures, solves and measures every `delay` seconds until it is cancelled, never commanding the mount. Each frame produces a `measurement` event with the measurement and the convergence after it; `state` (the latest accepted measurement and the convergence) lets a resumed refinement keep its streak. It fails:
+`runIPolarRefinement(scope, camera, mount, reference, calibration, state, options, services, firstIndex?)` only captures, solves and measures every `delay` seconds until it is cancelled, never commanding the mount. Each frame produces a `measurement` event with the measurement and the convergence after it; `state` (the latest accepted measurement and the convergence) lets a resumed refinement keep its streak. A frame without a solution clears the streak. It fails:
 
 - as `commandFailed` after `maximumFailures` consecutive frames without a solution;
 - as `unexpectedState` on a measurement that invalidates the calibration or a declination or pier-side change of the mount since `reference`.

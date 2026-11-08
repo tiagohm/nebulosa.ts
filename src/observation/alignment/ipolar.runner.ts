@@ -10,7 +10,7 @@ import type { CameraCapturer } from '../capture/capture'
 import type { CameraCaptureListener } from '../capture/reporter'
 import { type CenteringCaptureOptions, type CenteringClock, centeringCaptureRequest, exposureMidpoint, solveResult } from '../mount/centering'
 // oxfmt-ignore
-import { advanceIPolarConvergence, calibrateIPolar, DEFAULT_IPOLAR_CONVERGENCE, DEFAULT_IPOLAR_LIMITS, type IPolarAcceptedMeasurement, type IPolarCalibration, type IPolarCalibrationQuality, type IPolarConvergence, type IPolarConvergenceOptions, type IPolarFrame, type IPolarLimits, type IPolarMeasurement, type IPolarRejection, type IPolarSensorGeometry, measureIPolar } from './ipolar'
+import { advanceIPolarConvergence, calibrateIPolar, DEFAULT_IPOLAR_CONVERGENCE, DEFAULT_IPOLAR_LIMITS, type IPolarAcceptedMeasurement, type IPolarCalibration, type IPolarCalibrationQuality, type IPolarConvergence, IPOLAR_CONVERGENCE_START, type IPolarConvergenceOptions, type IPolarFrame, type IPolarLimits, type IPolarMeasurement, type IPolarRejection, type IPolarSensorGeometry, measureIPolar } from './ipolar'
 import type { IPolarObserver } from './ipolar.geometry'
 import { type PolarAlignmentDirection, polarAlignmentTimedMotion } from './polaralignment'
 
@@ -285,8 +285,9 @@ export async function runIPolarCalibration(scope: OperationScope, camera: Camera
 
 // Captures and measures refinement frames inside an operation `ipolarRefinement` of `scope` until
 // it is cancelled, reporting each through a `measurement` event; it never commands the mount. A
-// frame without a solution is skipped until `maximumFailures` consecutive ones fail the run as
-// `commandFailed`; a measurement that invalidates the calibration, or a declination or pier-side
+// frame without a solution is skipped, clearing the convergence streak, until `maximumFailures`
+// consecutive ones fail the run as `commandFailed`; a measurement that invalidates the
+// calibration, or a declination or pier-side
 // change of `mount` since `reference`, fails it as `unexpectedState`. `state` is where a resumed
 // refinement continues from. Resolves the failure of its cancellation when cancelled. Never rejects.
 export async function runIPolarRefinement(
@@ -417,6 +418,8 @@ async function refinementLoop(context: OperationContext, camera: Camera, mount: 
 		if (!solved.ok) return solved
 
 		if (solved.value === undefined) {
+			// A frame that gave no measurement leaves no current guidance, so it breaks the streak like a rejection.
+			convergence = IPOLAR_CONVERGENCE_START
 			if (++failures > options.maximumFailures) return failedOperationResult('commandFailed', `${failures} refinement frames in a row did not solve`)
 			continue
 		}
