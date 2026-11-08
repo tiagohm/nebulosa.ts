@@ -59,3 +59,14 @@ test('keeps even finite medians finite at floating-point extremes', () => {
 	reservoir.push(Number.MAX_VALUE)
 	expect(reservoir.median()).toBe(Number.MAX_VALUE)
 })
+
+test('returns interpolated percentiles of retained samples', () => {
+	const reservoir = new RobustReservoir(8)
+	for (const value of [4, 1, 3, 2, Number.NaN]) reservoir.push(value)
+
+	expect(reservoir.percentile(0)).toBe(1)
+	expect(reservoir.percentile(0.5)).toBe(2.5)
+	expect(reservoir.percentile(0.25)).toBe(1.75)
+	expect(reservoir.percentile(1)).toBe(4)
+	expect(new RobustReservoir(1).percentile(0.5)).toBeNaN()
+})

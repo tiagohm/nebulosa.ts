@@ -8726,7 +8726,7 @@ console.log(
 
 ### Bounded Robust Sampling
 
-`RobustReservoir` is the fixed-memory sampler that the analysis modules use to take the median, the median absolute deviation and a robust standard deviation of an image of any size. `new RobustReservoir(populationCapacity)` allocates room for `min(populationCapacity, ROBUST_SAMPLE_CAPACITY)` values (65536, at least 1) and throws a `RangeError` when the capacity is not a non-negative safe integer. `push(value)` considers one value and ignores non-finite ones: the first values are stored exactly, and once the reservoir is full each new value replaces a random retained one with the probability of a uniform reservoir, drawn from a deterministic xorshift generator that `reset()` restores, so the same sequence always gives the same sample. `seenCount` counts every finite value considered, `retainedCount` those that are kept and `approximate` tells whether the retained values are a sample (more values seen than retained). `median()` returns the median of the retained values and `mad(normalized?, scratch?)` their median absolute deviation (`normalized` multiplies it by the Gaussian factor 1.4826), `madAround(center, normalized?, scratch?)` computes it around a median that is already known, and `robustStandardDeviation()` is the population standard deviation after the samples more than five normalized MADs from the median are dropped. All return `NaN` when nothing has been pushed. The values are reordered by the selection of the median, which is not a problem for the statistics but means the reservoir does not preserve the order of arrival. The scratch passed to `mad` or `madAround` must hold every retained value (a `RangeError` otherwise). Once the reservoir is full the statistics are estimates from at most 65536 values, so they differ slightly from the exact ones.
+`RobustReservoir` is the fixed-memory sampler that the analysis modules use to take the median, the median absolute deviation and a robust standard deviation of an image of any size. `new RobustReservoir(populationCapacity)` allocates room for `min(populationCapacity, ROBUST_SAMPLE_CAPACITY)` values (65536, at least 1) and throws a `RangeError` when the capacity is not a non-negative safe integer. `push(value)` considers one value and ignores non-finite ones: the first values are stored exactly, and once the reservoir is full each new value replaces a random retained one with the probability of a uniform reservoir, drawn from a deterministic xorshift generator that `reset()` restores, so the same sequence always gives the same sample. `seenCount` counts every finite value considered, `retainedCount` those that are kept and `approximate` tells whether the retained values are a sample (more values seen than retained). `median()` returns the median of the retained values, `percentile(fraction)` their percentile (a fraction in 0..1, interpolated between ranks) and `mad(normalized?, scratch?)` their median absolute deviation (`normalized` multiplies it by the Gaussian factor 1.4826), `madAround(center, normalized?, scratch?)` computes it around a median that is already known, and `robustStandardDeviation()` is the population standard deviation after the samples more than five normalized MADs from the median are dropped. All return `NaN` when nothing has been pushed. The values are reordered by the selection of the median, which is not a problem for the statistics but means the reservoir does not preserve the order of arrival. The scratch passed to `mad` or `madAround` must hold every retained value (a `RangeError` otherwise). Once the reservoir is full the statistics are estimates from at most 65536 values, so they differ slightly from the exact ones.
 
 ```ts
 import { ROBUST_SAMPLE_CAPACITY, RobustReservoir } from 'nebulosa/src/imaging/analysis/robust'
@@ -10570,6 +10570,82 @@ console.log(
 ) // true RGGB 1
 ```
 
+### Image Plane Statistics
+
+`imaging/analysis/statistics` measures the original samples of a normalized `Image` one plane at a time. It is meant for an inspector that must report what the pixels hold, not what a stretch shows. The planes follow the layout:
+
+- `'mono'` for a one-channel image.
+- `'red'`, `'green'` and `'blue'` for an interleaved RGB image, plus `'luminance'` unless `luminance` is false. The luminance applies BT.709 weights to the linear samples; it is not a calibrated photometric luminance.
+- `'red'`, `'green1'`, `'green2'` and `'blue'` for a one-channel mosaic when its trusted, image-local `cfa` pattern is given. Each phase is selected by absolute image coordinates, as in [Image Analysis Planes](#image-analysis-planes), so an area at an odd offset keeps its phases and the two greens stay apart. Without `cfa`, a mosaic is one mono plane.
+
+The optional `area` is an integer rectangle: `left` and `top` are inclusive, `right` and `bottom` exclusive. An empty area, or one that leaves the image, is a `RangeError`.
+
+`analyzeImageStatistics(image, options?)` returns the `area` and one `ImagePlaneStatistics` per plane. Every value is in normalized sample units.
+
+- `finiteCount` and `nonFiniteCount`. NaN and infinities are counted, but never enter a reduction.
+- The exact `min`, `max`, `mean` and population `standardDeviation` (divided by N). The moments are accumulated per row and merged in float64.
+- The order statistics: the `median`, the `mad` (about the median), the `robustSigma` and the `p01` and `p99` percentiles. Percentiles interpolate between ranks like `percentileOf` (see [Descriptive Statistics](#descriptive-statistics)). `robustSigma` is 1.4826 times the MAD: a dispersion of the whole population, not a background noise.
+- `quantileMethod`, how the order statistics were obtained, and `quantileSamples`, the number of samples they used. The method is:
+    - `'exact'` over every sample. This applies to a population of at most 65536 samples, and to the unscaled codes of an 8 or 16-bit image (`bitpix` 8 or 16 without `normalization`).
+    - `'binned'` when such an image has samples that are not integer codes; they are rounded to one code.
+    - `'sampled'` otherwise, from the deterministic reservoir of [Bounded Robust Sampling](#bounded-robust-sampling).
+- With the `numericLimits` option, a `numericLimits` field counts the samples at or beyond normalized 0 and 1. Only the caller knows whether those are the representable limits of the source. A count at a limit does not prove saturation.
+
+A plane without finite samples has only its counts.
+
+`histograms` holds two chart histograms of `IMAGE_STATISTICS_BINS` (2048) equal bins, which together count every finite sample:
+
+- `robust` spans the P0.1..P99.9 domain, or the full range when that domain is a single value.
+- `full` spans `min..max`.
+
+Each has its `min`, `max` and `counts`, plus the samples `belowDomain` and `aboveDomain`, which are never folded into the edge bins. A single-valued domain puts its samples in bin 0.
+
+Each native plane also gets the `background` of [Local Background Noise](#local-background-noise), unless `background` is false.
+
+`createImageStatisticsScan(image, options?)` runs the same computation as an incremental scan:
+
+- `consumeRows(rows)` advances by rows of the area and returns whether the scan is `done`. It makes a first pass, then a second one for the histograms, unless every plane has exact integer codes.
+- `finish()` completes the scan and returns the result, which is identical for every chunking.
+
+Memory is bounded by a few fixed buffers per plane, and the image is neither copied nor modified. The quantized `histogram` of [Image Statistics](#image-statistics) is still the one display stretches use.
+
+```ts
+import { analyzeImageStatistics, createImageStatisticsScan } from 'nebulosa/src/imaging/analysis/statistics'
+import type { Image } from 'nebulosa/src/imaging/model/types'
+
+// A 64x64 16-bit mono frame (codes divided by 65535): a sky of code 1000 with a deterministic spread, 3 hot pixels at full scale and one NaN.
+let seed = 7
+const next = () => (seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0) / 4294967296
+const width = 64
+const height = 64
+const raw = new Float32Array(width * height)
+for (let i = 0; i < raw.length; i++) raw[i] = (1000 + Math.floor(next() * 21) - 10) / 65535
+for (let i = 1; i <= 3; i++) raw[i * 1031] = 1
+raw[5] = Number.NaN
+const image: Image = { header: {}, raw, metadata: { width, height, channels: 1, pixelCount: width * height, stride: width, strideInBytes: width * 4, pixelSizeInBytes: 4, bitpix: 16, bayer: undefined } }
+
+// Statistics in normalized units; multiplied by 65535 they are codes. Integer 16-bit codes make the order statistics exact.
+const [mono] = analyzeImageStatistics(image, { numericLimits: true }).planes
+console.log(mono.plane, mono.finiteCount, mono.nonFiniteCount, mono.quantileMethod) // mono 4095 1 exact
+console.log(Math.round(mono.min! * 65535), mono.max! * 65535, mono.median! * 65535, mono.mad! * 65535) // 990 65535 1000 5
+console.log((mono.mean! * 65535).toFixed(2), (mono.standardDeviation! * 65535).toFixed(1), (mono.robustSigma! * 65535).toFixed(3)) // 1047.26 1746.1 7.413 (the hot pixels move the mean and deviation, not the robust sigma)
+console.log(mono.p01! * 65535, mono.p99! * 65535, mono.numericLimits) // 990 1010 { lowCount: 0, highCount: 3 }
+
+// The robust histogram leaves the hot pixels above its domain; the full one spans min..max.
+const { robust, full } = mono.histograms!
+console.log(Math.round(robust.min * 65535), Math.round(robust.max * 65535), robust.aboveDomain, Math.round(full.min * 65535), full.max * 65535, full.counts.length) // 990 1010 3 990 65535 2048
+
+// A trusted RGGB mosaic gets one plane per photosite phase; an area is right/bottom exclusive.
+const roi = analyzeImageStatistics(image, { cfa: 'RGGB', area: { left: 1, top: 1, right: 33, bottom: 33 }, background: false })
+console.log(roi.planes.map((p) => [p.plane, p.finiteCount])) // [['red', 256], ['green1', 256], ['green2', 256], ['blue', 256]]
+
+// The same result, advanced 8 rows at a time (for example between event-loop turns).
+const scan = createImageStatisticsScan(image, { numericLimits: true })
+let chunks = 0
+while (!scan.consumeRows(8)) chunks++
+console.log(chunks, scan.done, scan.finish().planes[0].median === mono.median) // 7 true true
+```
+
 ### Image Scale and Field of View
 
 `astronomy/formulas` collects closed-form planning formulas for an imaging train; these are the ones that relate the optics, the sensor and the sky. They are first-order estimates of the ideal geometry (a thin lens with no distortion, a flat focal plane and the small-angle approximation unless noted), not an optical simulation, and they do no validation of their inputs, so a non-positive focal length or pixel size gives an infinite or negative result. `focalLength(apertureMm, focalRatio)` and `focalRatio(focalLengthMm, apertureMm)` convert between the focal length (millimeters), the aperture (millimeters) and the dimensionless f-number. `plateScale(telescopeFocalLengthMm)` is the focal-plane scale in arcseconds per millimeter (`206265 / F`), and `pixelScale(pixelSizeMicrons, telescopeFocalLengthMm)` is the image scale in arcseconds per pixel (`206.265 * pixel / F`, with the pixel size in microns and the focal length in millimeters; with binning the effective pixel size is the binned one). `sensorFieldOfView(sensorSizeMm, focalLengthMm)` is the field of view along one sensor axis in degrees, in the small-angle approximation (`size / F` in radians), and `sensorDiagonalFov(sensorDiagonal, focalLength)` is the exact `2 atan(d / 2F)` for the diagonal, in radians, with both lengths in the same unit. `mosaicPanelCount(targetFov, cameraFov, overlap)` is the integer number of panels along one axis, `ceil(target / (camera * (1 - overlap)))`, with both fields in the same unit and `overlap` a fraction in `[0, 1)` (a field smaller than one panel is one panel, and an overlap of 1 or more is meaningless, giving an infinite or negative count). The field of view of the sensor is not the usable field: the vignetting and the corrector or reducer of the train are not modeled.
@@ -10972,6 +11048,99 @@ const first = blue.add(dimmer(-4, 5))
 console.log(first.accepted, first.transform?.translationX, first.transform?.translationY, first.overlapFraction) // true 4 -5 0.908
 console.log(blue.add(dimmer(2, 2)).normalization?.scales[0], red.snapshot()?.finalImage?.raw[50 * width + 50], blue.snapshot()?.finalImage?.raw[50 * width + 50]) // 1.010 0.09964 0.03283
 console.log(blue.snapshot()?.finalImage?.metadata.width, liveStackerMemoryBytes(width, height, 1, 8)) // 96 423936
+```
+
+### Local Background Noise
+
+`estimateBackgroundNoise(image, options?)` of `imaging/analysis/background.noise` estimates the background level and the spatial noise of one plane of a normalized `Image`. It is robust to stars, hot pixels and smooth gradients, which a global standard deviation, or the coarse [Background Estimate](#background-estimate), would count as noise.
+
+The estimate is built in steps:
+
+1. The plane grid is split into at most 256 tiles, each at least 32 samples on a side.
+2. Each tile keeps a regular sample of about 512 values. The sampling stride is odd, so it never locks onto one phase of a mosaic.
+3. The sample is clipped about its median, asymmetrically: 5 sigmas below and 3 above, iterated.
+4. A first-order surface is fitted and removed.
+5. The tile noise is the median absolute deviation of the residuals, scaled by 1.4826.
+6. A tile is rejected as structure when less than half of its samples survive, or when its residuals are skewed upward.
+
+The `level` is the median of the accepted tile baselines and `noiseSigma` the median of their sigmas, both in the sample units of the image.
+
+The `options` are:
+
+- `area`: inclusive-exclusive, the whole image by default.
+- `plane`: `'mono'` by default, or `'red'` for RGB and for a mosaic.
+- `cfa`: a trusted image-local pattern. Each photosite phase is then measured on its own, instead of mixing the levels of the colors.
+- `numericLimits`: excludes the samples at normalized 0 and 1.
+
+[Image Plane Statistics](#image-plane-statistics) computes the same estimate for each native plane during its scan. Both use `BackgroundNoiseCollector`, the incremental form: call `collectRow(raw, rowStart, columnStep, row)` for each plane row, then `finish()`.
+
+The `ImageBackgroundNoise` result has a `status`:
+
+- `'measured'`.
+- `'uncertain'`, when fewer than a quarter of the tiles are usable or structure dominates.
+- `'unavailable'`, when fewer than 3 tiles are usable. There is then no `level` or `noiseSigma`.
+
+It also has:
+
+- `usedTiles` and `totalTiles`.
+- `sampleCount`, the contributing samples, and `rejectedFraction`, the share of the considered samples that did not contribute.
+- `gradientIndicator`, the P90 - P10 spread of the tile baselines, in noise sigmas.
+- `method`, which is `'localRobustResidualMad'`, and `version`, the rules version (`BACKGROUND_NOISE_VERSION`).
+- `warnings`, any of:
+    - `insufficientBackground`
+    - `strongStructure`: many tiles were rejected, or the tile sigmas disagree.
+    - `strongGradient`
+    - `heavyClipping`
+    - `nonFinite`
+    - `constant`: a zero noise that is real.
+    - `quantized`: the MAD collapsed to zero on codes that are not constant.
+    - `correlatedNoisePossible`: adjacent residuals are correlated, so the noise is underestimated.
+
+This is a spatial estimate on one frame:
+
+- It is not a read noise, a gain or a temporal noise.
+- It does not know whether the baseline is a sky, a bias or a flat.
+- Debayered, resampled or denoised pixels bias it low.
+- Contamination that covers more than half of every tile, pixel by pixel, cannot be told from noise.
+
+```ts
+import { estimateBackgroundNoise } from 'nebulosa/src/imaging/analysis/background.noise'
+import { analyzeImageStatistics } from 'nebulosa/src/imaging/analysis/statistics'
+import type { Image } from 'nebulosa/src/imaging/model/types'
+
+// A deterministic generator of roughly Gaussian noise (the sum of four uniforms, standard deviation 1).
+let seed = 12345
+const gauss = () => {
+	let sum = 0
+	for (let i = 0; i < 4; i++) sum += (seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0) / 4294967296
+	return (sum - 2) / Math.sqrt(4 / 12)
+}
+
+const frame = (width: number, height: number, value: (x: number, y: number) => number): Image => {
+	const raw = new Float64Array(width * height)
+	for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) raw[y * width + x] = value(x, y)
+	return { header: {}, raw, metadata: { width, height, channels: 1, pixelCount: width * height, stride: width, strideInBytes: width * 8, pixelSizeInBytes: 8, bitpix: -64, bayer: undefined } }
+}
+
+const show = (image: Image, options = {}) => {
+	const { status, level, noiseSigma, usedTiles, totalTiles, warnings } = estimateBackgroundNoise(image, options)
+	return [status, level?.toFixed(4), noiseSigma?.toFixed(4), `${usedTiles}/${totalTiles}`, warnings]
+}
+
+// A sky of 0.1 with a noise of 0.01, a gradient of 0.3 across the frame and 500 bright stars: the noise is recovered.
+const stars = new Set(Array.from({ length: 500 }, (_, i) => (i * 7919) % (400 * 300)))
+const sky = frame(400, 300, (x, y) => 0.1 + (0.3 * x) / 400 + 0.01 * gauss() + (stars.has(y * 400 + x) ? 0.6 : 0))
+console.log(show(sky)) // ['measured', '0.2396', '0.0103', '130/130', ['strongGradient']]
+console.log(analyzeImageStatistics(sky, { background: false }).planes[0].standardDeviation!.toFixed(4)) // 0.0954 (dominated by the gradient)
+
+// One phase of an RGGB mosaic, and an area too small to hold enough tiles.
+const mosaic = frame(400, 300, (x, y) => [0.3, 0.15, 0.15, 0.05][((y & 1) << 1) | (x & 1)] + 0.004 * gauss())
+console.log(show(mosaic, { plane: 'blue', cfa: 'RGGB' })) // ['measured', '0.0500', '0.0038', '35/35', []]
+console.log(show(sky, { area: { left: 0, top: 0, right: 20, bottom: 20 } })) // ['unavailable', undefined, undefined, '1/1', ['insufficientBackground']]
+
+// Smoothed (correlated) noise is measured lower than its per-pixel noise of 0.01 and flagged.
+const white = frame(402, 300, () => gauss())
+console.log(show(frame(400, 300, (x, y) => 0.1 + (0.01 * (white.raw[y * 402 + x] + white.raw[y * 402 + x + 1] + white.raw[y * 402 + x + 2])) / 3))) // ['measured', '0.1000', '0.0058', '130/130', ['correlatedNoisePossible']]
 ```
 
 ### Local Image Normalization

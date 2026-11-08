@@ -1,4 +1,4 @@
-import { medianAbsoluteDeviationOf, medianBySelectionOf } from '../../math/numerical/statistics'
+import { medianAbsoluteDeviationOf, medianBySelectionOf, percentileBySelectionOf } from '../../math/numerical/statistics'
 
 // Deterministic fixed-memory robust sampling shared by image-analysis modules. Small populations are
 // retained exactly; larger populations use reproducible reservoir replacement capped at 65,536 values.
@@ -68,6 +68,14 @@ export class RobustReservoir {
 		const count = this.retainedCount
 		if (count === 0) return Number.NaN
 		return medianBySelectionOf(this.#values, count)
+	}
+
+	// Reorders retained samples and returns their interpolated percentile (a fraction in [0, 1], linear
+	// between ranks as percentileBySelectionOf), or NaN when no finite value was seen.
+	percentile(fraction: number): number {
+		const count = this.retainedCount
+		if (count === 0) return Number.NaN
+		return percentileBySelectionOf(this.#values, fraction, count)
 	}
 
 	// Returns the median absolute deviation of retained samples, optionally reusing caller-owned scratch.
