@@ -4567,6 +4567,56 @@ console.log(planetMagnitude('jupiter', [5, 0, 0], [4, 0, 0])) // -2.890 — base
 console.log(planetMagnitude('saturn', [10, 0, 0], [10 * Math.cos(0.17), 10 * Math.sin(0.17), 0])) // NaN
 ```
 
+### Planetary Appulses
+
+An appulse is the least angular distance between two bodies as seen from the observer, the instant they look closest in the sky. It is not a conjunction: a conjunction is defined by equal ecliptic longitudes (see [Planetary Longitude Events](#planetary-longitude-events)), and for inclined orbits the two instants differ, by seconds for a slow pair or by hours when one body moves fast in latitude. A pair can also have appulses with no conjunction at all, at the turning points of a retrograde loop.
+
+`planetaryAppulses(firstAt, secondAt, start, stop, options?)` returns the local minima of the great-circle separation in the window as chronological `{ time, separation }`, with `separation` in radians. Both providers return the observer-relative ICRS-oriented vector at a time (AU), with the same observer, axes, and correction stage, and are evaluated at the same epoch; swapping them gives the same events. `options.step` and `options.tolerance` are in days. A minimum on the first or last sample of the window, or one flatter than one step, is not reported.
+
+```ts
+import { earth, jupiter, saturn } from 'nebulosa/src/astronomy/ephemeris/models/analytical/vsop87e'
+import { planetaryAppulses } from 'nebulosa/src/astronomy/events/planetary'
+import { type Time, Timescale, timeShift, timeToDate, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { vecMinus } from 'nebulosa/src/math/linear-algebra/vec3'
+import { toDeg } from 'nebulosa/src/math/units/angle'
+
+const start = timeYMDHMS(2020, 1, 1, 0, 0, 0, Timescale.TT)
+const stop = timeShift(start, 366)
+
+const jupiterAt = (time: Time) => vecMinus(jupiter(time)[0], earth(time)[0])
+const saturnAt = (time: Time) => vecMinus(saturn(time)[0], earth(time)[0])
+
+for (const appulse of planetaryAppulses(jupiterAt, saturnAt, start, stop, { step: 2 })) console.log(timeToDate(appulse.time).slice(0, 5), toDeg(appulse.separation))
+// [2020, 5, 18, 4, 47] 4.697 — degrees, during the retrograde loop, TT
+// [2020, 12, 21, 18, 12] 0.102 — the great conjunction's closest approach, 23 s after the longitude conjunction
+```
+
+### Planetary Brightness Maxima
+
+A planet's apparent magnitude changes with its distance and phase. Venus is brightest not at inferior conjunction, where it is nearest but almost unlit, but about a month before and after it, at its greatest brilliancy near a 120° phase angle.
+
+`planetaryBrightnessMaxima(planet, targetAt, sunAt, start, stop, options?, magnitude?)` returns the local minima of the magnitude from [Planetary Apparent Magnitudes (Mallama and Hilton)](#planetary-apparent-magnitudes-mallama-and-hilton) as chronological `{ time, magnitude, phaseAngle }`, with `phaseAngle` the Sun-planet-observer angle in radians. `targetAt` and `sunAt` return observer-relative vectors (AU) with the same axes and correction stage, and the Sun-planet vector is their difference; `magnitude` passes the model options (`year`, `rings`). Every minimum of the model is reported, so for Venus the forward-scattering branch beyond a 163.7° phase angle adds two faint minima around inferior conjunction; filter on `phaseAngle` to keep the greatest brilliancies. Where the model is undefined (`NaN`), no extremum is reported. A brightness maximum is flat, so its instant is far less precise than its magnitude.
+
+```ts
+import { earth, sun, venus } from 'nebulosa/src/astronomy/ephemeris/models/analytical/vsop87e'
+import { planetaryBrightnessMaxima } from 'nebulosa/src/astronomy/events/planetary'
+import { type Time, Timescale, timeShift, timeToDate, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { vecMinus } from 'nebulosa/src/math/linear-algebra/vec3'
+import { deg, toDeg } from 'nebulosa/src/math/units/angle'
+
+const start = timeYMDHMS(2020, 1, 1, 0, 0, 0, Timescale.TT)
+const stop = timeShift(start, 366)
+
+const venusAt = (time: Time) => vecMinus(venus(time)[0], earth(time)[0])
+const sunAt = (time: Time) => vecMinus(sun(time)[0], earth(time)[0])
+
+const brilliancies = planetaryBrightnessMaxima('venus', venusAt, sunAt, start, stop, { step: 2 }).filter((event) => event.phaseAngle < deg(163.7))
+
+for (const event of brilliancies) console.log(timeToDate(event.time).slice(0, 3), event.magnitude, toDeg(event.phaseAngle))
+// [2020, 5, 2] -4.753 121.7 — magnitude and degrees, evening star, TT
+// [2020, 7, 5] -4.717 122.9 — morning star
+```
+
 ### Planetary Closest Approaches
 
 A planet's distance from the observer is not constant: for Mars it swings from about 0.4 AU at a favorable opposition to over 2.5 AU near conjunction. A closest approach is a local minimum of that distance.
@@ -4596,7 +4646,7 @@ console.log(planetaryClosestApproaches(venusAt, start, stop, { step: 2 }).map((a
 
 A conjunction is when a planet and the Sun have the same ecliptic longitude as seen from the observer, so the planet is lost in the Sun's glare. In practice the planet is rarely exactly on the Sun's disk, because of the inclination of its orbit, so the event is taken as the local minimum of the angular separation, which is reported as it is. For an inner planet there are two kinds: inferior conjunction, between the Earth and the Sun, and superior conjunction, beyond the Sun.
 
-`planetaryConjunctions(targetAt, sunAt, start, stop, options?)` returns the separation minima in the window as chronological `{ time, elongation }`, with `elongation` the actual target-Sun separation in radians. `planetaryInnerConjunctions` returns the same events as `{ time, elongation, kind }`, where `kind` is `'inferior'` when the target is closer to the observer than the Sun and `'superior'` otherwise; use it for Mercury and Venus. Both providers, `targetAt` and `sunAt`, return the observer-relative ICRS-oriented vector at a time, in AU, and must share the observer and correction stage. `options.step` and `options.tolerance` are in days. For the outer planets conjunction is the minimum of the same quantity; their opposition is in [Planetary Oppositions](#planetary-oppositions).
+`planetaryConjunctions(targetAt, sunAt, start, stop, options?)` returns the separation minima in the window as chronological `{ time, elongation }`, with `elongation` the actual target-Sun separation in radians. `planetaryInnerConjunctions` returns the same events as `{ time, elongation, kind }`, where `kind` is `'inferior'` when the target is closer to the observer than the Sun and `'superior'` otherwise; use it for Mercury and Venus. Both providers, `targetAt` and `sunAt`, return the observer-relative ICRS-oriented vector at a time, in AU, and must share the observer and correction stage. `options.step` and `options.tolerance` are in days. For the outer planets conjunction is the minimum of the same quantity; their opposition is in [Planetary Oppositions](#planetary-oppositions). These are separation minima; the almanac conjunction by equal ecliptic longitudes is `planetaryLongitudeConjunctions` in [Planetary Longitude Events](#planetary-longitude-events).
 
 ```ts
 import { earth, sun, venus } from 'nebulosa/src/astronomy/ephemeris/models/analytical/vsop87e'
@@ -4684,11 +4734,73 @@ for (const event of planetaryGreatestElongations(venusAt, sunAt, start, stop, { 
 // [2020, 8, 13, 0, 0] 45.79 west — morning star
 ```
 
+### Planetary Illumination Crossings
+
+The illuminated fraction of a planet's disk seen by the observer is `(1 + cos i) / 2`, with `i` the Sun-planet-observer phase angle. Mercury and Venus go from full to new and back, and the instant they are half lit, the dichotomy, falls days away from the greatest elongation, which is a separation maximum (see [Planetary Greatest Elongations](#planetary-greatest-elongations)).
+
+`planetaryIlluminationCrossings(targetAt, sunAt, start, stop, fraction, options?)` returns the instants the illuminated fraction crosses `fraction` (0 to 1) as chronological `{ time, kind, phaseAngle }`, where `kind` is `'increasing'` or `'decreasing'` and `phaseAngle` is in radians. `targetAt` and `sunAt` return observer-relative vectors (AU) with the same axes and correction stage. Each crossing is classified by the fraction 0.01 day either side, and a tangential touch that does not cross is not reported. `options.step` and `options.tolerance` are in days.
+
+```ts
+import { earth, sun, venus } from 'nebulosa/src/astronomy/ephemeris/models/analytical/vsop87e'
+import { planetaryIlluminationCrossings } from 'nebulosa/src/astronomy/events/planetary'
+import { type Time, Timescale, timeShift, timeToDate, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { vecMinus } from 'nebulosa/src/math/linear-algebra/vec3'
+
+const start = timeYMDHMS(2020, 1, 1, 0, 0, 0, Timescale.TT)
+const stop = timeShift(start, 366)
+
+const venusAt = (time: Time) => vecMinus(venus(time)[0], earth(time)[0])
+const sunAt = (time: Time) => vecMinus(sun(time)[0], earth(time)[0])
+
+for (const event of planetaryIlluminationCrossings(venusAt, sunAt, start, stop, 0.5, { step: 2 })) console.log(timeToDate(event.time).slice(0, 5), event.kind)
+// [2020, 3, 27, 0, 47] decreasing — evening dichotomy, two days after greatest elongation, TT
+// [2020, 8, 12, 20, 48] increasing — morning dichotomy
+```
+
+### Planetary Longitude Events
+
+The almanac defines conjunction, opposition, and quadrature by ecliptic longitude, not by angular distance: two bodies are in conjunction when their true ecliptic longitudes of date are equal, a planet is in opposition when its longitude differs from the Sun's by 180°, and in quadrature at ±90°. For an inclined orbit the separation is not zero or 180° at these instants, and its extremum falls at a different time: Mars's longitude opposition of 2020 comes about 2.7 hours before its separation maximum. The separation-based finders are [Planetary Conjunctions](#planetary-conjunctions), [Planetary Oppositions](#planetary-oppositions), and [Planetary Quadratures](#planetary-quadratures); the least distance of two bodies is in [Planetary Appulses](#planetary-appulses).
+
+`planetaryLongitudeCrossings(targetAt, referenceAt, start, stop, offset, options?)` returns the instants the longitude of the target minus that of the reference equals `offset` (radians, taken modulo 2π) as chronological `{ time, longitudeDifference, separation, latitudeDifference }`. `longitudeDifference` is the wrapped difference in `(−π, π]`, `separation` the great-circle separation in radians, and `latitudeDifference` the target's ecliptic latitude minus the reference's (positive when the target is north). It solves `sin(Δλ − offset)` and keeps the roots where `cos(Δλ − offset) > 0`, so the 0/2π seam creates no root and the opposite alignment is never reported.
+
+`planetaryLongitudeConjunctions` (offset 0) adds `kind`: `'inferior'` when the target is closer to the observer than the reference, `'superior'` otherwise, meaningful for an inner planet with the Sun as reference. `planetaryLongitudeOppositions` is offset π. `planetaryLongitudeQuadratures` finds both ±90° crossings in one scan, with `kind` `'east'` (+90°, evening sky) or `'west'` (−90°, morning sky). The providers return observer-relative ICRS-oriented vectors (AU) with the same observer, axes, and correction stage; they are rotated to the true ecliptic of date with precession-nutation and the true obliquity. `options.step` and `options.tolerance` are in days, and the step must be shorter than half the time the relative longitude takes to advance 180°. A touch that does not cross the target value is not reported.
+
+```ts
+import { earth, jupiter, mars, saturn, sun, venus } from 'nebulosa/src/astronomy/ephemeris/models/analytical/vsop87e'
+import { planetaryLongitudeConjunctions, planetaryLongitudeCrossings, planetaryLongitudeOppositions, planetaryLongitudeQuadratures } from 'nebulosa/src/astronomy/events/planetary'
+import { type Time, Timescale, timeShift, timeToDate, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { vecMinus } from 'nebulosa/src/math/linear-algebra/vec3'
+import { deg, toDeg } from 'nebulosa/src/math/units/angle'
+
+const start = timeYMDHMS(2020, 1, 1, 0, 0, 0, Timescale.TT)
+const stop = timeShift(start, 366)
+
+const geocentric = (body: typeof venus) => (time: Time) => vecMinus(body(time)[0], earth(time)[0])
+const sunAt = geocentric(sun)
+
+const [conjunction] = planetaryLongitudeConjunctions(geocentric(venus), sunAt, start, stop, { step: 2 })
+console.log(timeToDate(conjunction.time).slice(0, 5), conjunction.kind) // [2020, 6, 3, 17, 38] inferior — TT
+console.log(toDeg(conjunction.separation), toDeg(conjunction.latitudeDifference)) // 0.487 0.487 — degrees, Venus north of the Sun
+
+const [opposition] = planetaryLongitudeOppositions(geocentric(mars), sunAt, start, stop, { step: 2 })
+console.log(timeToDate(opposition.time).slice(0, 5), toDeg(opposition.separation)) // [2020, 10, 13, 23, 19] 177.0
+
+for (const quadrature of planetaryLongitudeQuadratures(geocentric(mars), sunAt, start, stop, { step: 2 })) console.log(timeToDate(quadrature.time).slice(0, 5), quadrature.kind)
+// [2020, 6, 6, 19, 2] west
+
+// The great conjunction of Jupiter and Saturn, a conjunction of two planets.
+const [great] = planetaryLongitudeConjunctions(geocentric(jupiter), geocentric(saturn), start, stop, { step: 2 })
+console.log(timeToDate(great.time).slice(0, 5), toDeg(great.separation)) // [2020, 12, 21, 18, 12] 0.102
+
+// Venus 30° of longitude west of the Sun, on the way out and back.
+console.log(planetaryLongitudeCrossings(geocentric(venus), sunAt, start, stop, deg(-30), { step: 2 }).map((event) => timeToDate(event.time).slice(0, 3))) // [[2020, 6, 26], [2020, 11, 20]]
+```
+
 ### Planetary Oppositions
 
 An outer planet is in opposition when it lies opposite the Sun in the sky, so it is up all night, at its closest and brightest. Because planetary orbits are inclined, the elongation reaches its maximum near, but rarely exactly at, 180°, so the event is taken as the maximum of the separation on the far side of quadrature.
 
-`planetaryOppositions(targetAt, sunAt, start, stop, options?)` returns chronological `{ time, elongation }`, with `elongation` in radians, the separation maxima over 90° in the window. `targetAt` and `sunAt` return the observer-relative ICRS-oriented vectors at a time (AU) with the same observer, axes, and correction stage. The reported elongation need not reach π. `options.step` and `options.tolerance` are in days, and a maximum at the first or last sample is missed. For the closest distance, which can differ by days, use [Planetary Closest Approaches](#planetary-closest-approaches).
+`planetaryOppositions(targetAt, sunAt, start, stop, options?)` returns chronological `{ time, elongation }`, with `elongation` in radians, the separation maxima over 90° in the window. `targetAt` and `sunAt` return the observer-relative ICRS-oriented vectors at a time (AU) with the same observer, axes, and correction stage. The reported elongation need not reach π. `options.step` and `options.tolerance` are in days, and a maximum at the first or last sample is missed. For the closest distance, which can differ by days, use [Planetary Closest Approaches](#planetary-closest-approaches); for the almanac opposition, a 180° difference of ecliptic longitudes, use `planetaryLongitudeOppositions` in [Planetary Longitude Events](#planetary-longitude-events).
 
 ```ts
 import { earth, mars, sun } from 'nebulosa/src/astronomy/ephemeris/models/analytical/vsop87e'
@@ -4713,7 +4825,7 @@ console.log(toDeg(opposition.elongation)) // 177.0 — degrees: Mars is 3° off 
 
 A planet is at quadrature when it is 90° from the Sun as seen from the observer. For an outer planet it marks the half-lit phase and the boundary between the morning and evening halves of its apparition. East quadrature has the planet east of the Sun, in the evening sky, and west quadrature has it west, in the morning sky.
 
-`planetaryQuadratures(targetAt, sunAt, start, stop, options?)` returns the instants the separation crosses 90° as chronological `{ time, elongation, kind }`, where `elongation` is the resolved separation in radians (close to π/2) and `kind` is `'east'` or `'west'` from the ecliptic-longitude difference, safe across the 0/2π seam. `targetAt` and `sunAt` return observer-relative ICRS-oriented vectors at a time, sharing the observer, axes, and correction stage. `options.step` and `options.tolerance` (days) must resolve the crossings.
+`planetaryQuadratures(targetAt, sunAt, start, stop, options?)` returns the instants the separation crosses 90° as chronological `{ time, elongation, kind }`, where `elongation` is the resolved separation in radians (close to π/2) and `kind` is `'east'` or `'west'` from the ecliptic-longitude difference, safe across the 0/2π seam. `targetAt` and `sunAt` return observer-relative ICRS-oriented vectors at a time, sharing the observer, axes, and correction stage. `options.step` and `options.tolerance` (days) must resolve the crossings. The almanac quadrature, a ±90° difference of ecliptic longitudes, is `planetaryLongitudeQuadratures` in [Planetary Longitude Events](#planetary-longitude-events).
 
 ```ts
 import { earth, mars, sun } from 'nebulosa/src/astronomy/ephemeris/models/analytical/vsop87e'

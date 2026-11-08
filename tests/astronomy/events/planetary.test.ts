@@ -1,12 +1,13 @@
 import { expect, test } from 'bun:test'
 import { eraNut06a, eraPnm06a } from '../../../src/astronomy/coordinates/erfa/erfa'
 import { ECLIPTIC, frameToBase } from '../../../src/astronomy/coordinates/frame'
-import { earth, mars, sun, venus } from '../../../src/astronomy/ephemeris/models/analytical/vsop87e'
-import { planetaryClosestApproaches, planetaryConjunctions, planetaryGreatestElongations, planetaryInnerConjunctions, planetaryOppositions, planetaryQuadratures, planetaryStations } from '../../../src/astronomy/events/planetary'
+import { earth, jupiter, mars, mercury, saturn, sun, venus } from '../../../src/astronomy/ephemeris/models/analytical/vsop87e'
+// oxfmt-ignore
+import { planetaryAppulses, planetaryBrightnessMaxima, planetaryClosestApproaches, planetaryConjunctions, planetaryGreatestElongations, planetaryIlluminationCrossings, planetaryInnerConjunctions, planetaryLongitudeConjunctions, planetaryLongitudeCrossings, planetaryLongitudeOppositions, planetaryLongitudeQuadratures, planetaryOppositions, planetaryQuadratures, planetaryStations } from '../../../src/astronomy/events/planetary'
 import { type Time, Timescale, timeShift, timeSubtract, timeYMDHMS } from '../../../src/astronomy/time/time'
-import { PI } from '../../../src/core/constants'
+import { PI, TAU } from '../../../src/core/constants'
 import { type MutVec3, vecClone, vecMinus, vecX, vecZero } from '../../../src/math/linear-algebra/vec3'
-import { deg, toDeg } from '../../../src/math/units/angle'
+import { deg, normalizePI, toDeg } from '../../../src/math/units/angle'
 
 // Skyfield 1.55 / JPL DE421, scipy 1.16.2 bounded scalar minimization and brentq.
 // Same-epoch geometric geocentric positions, true ecliptic of date, no light time/aberration.
@@ -152,4 +153,183 @@ test('empty, reversed, no-event and non-advancing search windows are handled', (
 	expect(planetaryConjunctions(VENUS, SUN, EPOCH, timeShift(EPOCH, 2), { step: 0.1 })).toEqual([])
 	expect(() => planetaryQuadratures(MARS, SUN, EPOCH, STOP, { step: Number.MIN_VALUE })).toThrow('too small')
 	expect(() => planetaryStations(MARS, EPOCH, STOP, { derivativeHalfStep: 0 })).toThrow()
+})
+
+// Skyfield 1.55 / JPL DE421 (Mars, Jupiter and Saturn system barycenters), scipy 1.16.2 brentq and
+// bounded minimization: same-epoch geometric geocentric vectors in skyfield.framelib.ecliptic_frame
+// (true ecliptic and equinox of date). Venus magnitudes use skyfield.magnitudelib._venus_magnitude
+// on the same geometric r, delta and phase angle. Offsets are TT days from 2020-01-01 00:00 TT.
+const MERCURY = (time: Time) => vecMinus(mercury(time)[0], earth(time)[0])
+const JUPITER = (time: Time) => vecMinus(jupiter(time)[0], earth(time)[0])
+const SATURN = (time: Time) => vecMinus(saturn(time)[0], earth(time)[0])
+
+// Unit direction at ecliptic-of-date longitude and latitude, in ICRS-oriented axes.
+function eclipticDirection(longitude: number, latitude: number, time: Time) {
+	return frameToBase([Math.cos(longitude) * Math.cos(latitude), Math.sin(longitude) * Math.cos(latitude), Math.sin(latitude)], ECLIPTIC, time)
+}
+
+test('longitude conjunctions differ from separation minima and keep the inferior/superior label', () => {
+	const events = planetaryLongitudeConjunctions(VENUS, SUN, EPOCH, timeShift(EPOCH, 480), OPTIONS)
+	expect(events.map((event) => event.kind)).toEqual(['inferior', 'superior'])
+	expectEpoch(events[0].time, 154.735233641)
+	expectEpoch(events[1].time, 450.264553875)
+	expect(Math.abs(toDeg(events[0].separation) - 0.48709003)).toBeLessThan(0.002)
+	expect(Math.abs(toDeg(events[1].separation) - 1.35294383)).toBeLessThan(0.002)
+	expect(toDeg(events[0].latitudeDifference)).toBeCloseTo(0.487, 2)
+	expect(toDeg(events[1].latitudeDifference)).toBeCloseTo(-1.353, 2)
+	expect(Math.abs(events[0].longitudeDifference)).toBeLessThan(1e-9)
+	// The separation minimum of the same inferior conjunction is about an hour later.
+	const [minimum] = planetaryInnerConjunctions(VENUS, SUN, EPOCH, STOP, OPTIONS)
+	expect(timeSubtract(minimum.time, events[0].time)).toBeGreaterThan(0.03)
+
+	const [mercuryConjunction] = planetaryLongitudeConjunctions(MERCURY, SUN, timeShift(EPOCH, 40), timeShift(EPOCH, 70), { step: 1, tolerance: 1e-7 })
+	expect(mercuryConjunction.kind).toBe('inferior')
+	expectEpoch(mercuryConjunction.time, 56.068870483)
+	expect(Math.abs(toDeg(mercuryConjunction.separation) - 3.72041302)).toBeLessThan(0.002)
+})
+
+test('Mars longitude opposition precedes its separation maximum by more than two hours', () => {
+	const start = timeShift(EPOCH, 250)
+	const stop = timeShift(EPOCH, 330)
+	const [opposition] = planetaryLongitudeOppositions(MARS, SUN, start, stop, OPTIONS)
+	expectEpoch(opposition.time, 286.972187658)
+	expect(Math.abs(toDeg(opposition.separation) - 177.00408216)).toBeLessThan(0.002)
+	expect(toDeg(opposition.latitudeDifference)).toBeCloseTo(-2.996, 2)
+	expect(Math.abs(normalizePI(opposition.longitudeDifference - PI))).toBeLessThan(1e-9)
+	const [maximum] = planetaryOppositions(MARS, SUN, start, stop, OPTIONS)
+	expect(timeSubtract(maximum.time, opposition.time)).toBeGreaterThan(0.1)
+	expect(planetaryLongitudeConjunctions(MARS, SUN, start, stop, OPTIONS)).toEqual([])
+})
+
+test('Mars longitude quadratures are labelled by the signed longitude difference', () => {
+	const events = planetaryLongitudeQuadratures(MARS, SUN, timeShift(EPOCH, 140), timeShift(EPOCH, 410), OPTIONS)
+	expect(events.map((event) => event.kind)).toEqual(['west', 'east'])
+	expectEpoch(events[0].time, 157.79367173)
+	expectEpoch(events[1].time, 397.436505738)
+	expect(toDeg(events[0].longitudeDifference)).toBeCloseTo(-90, 6)
+	expect(toDeg(events[1].longitudeDifference)).toBeCloseTo(90, 6)
+})
+
+test('the 2020 Jupiter-Saturn great conjunction and appulse agree with DE421', () => {
+	const start = timeShift(EPOCH, 340)
+	const stop = timeShift(EPOCH, 370)
+	const [conjunction] = planetaryLongitudeConjunctions(JUPITER, SATURN, start, stop, OPTIONS)
+	expectEpoch(conjunction.time, 355.758279214)
+	expect(Math.abs(toDeg(conjunction.separation) - 0.10174434)).toBeLessThan(0.002)
+	expect(conjunction.latitudeDifference).toBeLessThan(0)
+	const [appulse] = planetaryAppulses(JUPITER, SATURN, start, stop, OPTIONS)
+	expectEpoch(appulse.time, 355.758542331)
+	expect(Math.abs(toDeg(appulse.separation) - 0.10174434)).toBeLessThan(0.002)
+	const [swapped] = planetaryAppulses(SATURN, JUPITER, start, stop, OPTIONS)
+	expect(timeSubtract(swapped.time, appulse.time)).toBeCloseTo(0, 6)
+	expect(swapped.separation).toBeCloseTo(appulse.separation, 12)
+})
+
+test('Venus dichotomies and greatest brightness agree with DE421 geometry', () => {
+	const dichotomies = planetaryIlluminationCrossings(VENUS, SUN, EPOCH, STOP, 0.5, OPTIONS)
+	expect(dichotomies.map((event) => event.kind)).toEqual(['decreasing', 'increasing'])
+	expectEpoch(dichotomies[0].time, 86.032947603)
+	expectEpoch(dichotomies[1].time, 224.867131809)
+	for (const event of dichotomies) expect(toDeg(event.phaseAngle)).toBeCloseTo(90, 6)
+
+	// The two minima at phase angles below 163.7 degrees are the greatest brilliancies; any other
+	// minimum comes from the forward-scattering branch of the model near inferior conjunction.
+	const brightest = planetaryBrightnessMaxima('venus', VENUS, SUN, EPOCH, STOP, OPTIONS).filter((event) => event.phaseAngle < deg(163.7))
+	expect(brightest).toHaveLength(2)
+	for (const [i, days, magnitude, phase] of [
+		[0, 122.363410816, -4.753237705, 121.731900706],
+		[1, 186.524636626, -4.717127058, 122.924923136],
+	] as const) {
+		// A brightness maximum is flat: 0.1 day moves the magnitude by about 1e-5.
+		expect(Math.abs(timeSubtract(brightest[i].time, EPOCH) - days)).toBeLessThan(0.1)
+		expect(brightest[i].magnitude).toBeCloseTo(magnitude, 3)
+		expect(Math.abs(toDeg(brightest[i].phaseAngle) - phase)).toBeLessThan(0.05)
+	}
+})
+
+test('longitude crossings are seam-safe, reject the opposite alignment and find repeated retrograde roots', () => {
+	const stop = timeShift(EPOCH, 1)
+	const reference = (time: Time) => eclipticDirection(0, 0, time)
+	// Oscillates across longitude 0 (and the 0/TAU seam) three times: direct, retrograde, direct.
+	const looping = (time: Time) => eclipticDirection(0.2 * Math.sin(3 * PI * (timeSubtract(time, EPOCH) - 0.1)), 0.01, time)
+	const roots = planetaryLongitudeConjunctions(looping, reference, EPOCH, stop, { step: 0.01 })
+	expect(roots).toHaveLength(3)
+	for (const [i, offset] of [0.1, 0.1 + 1 / 3, 0.1 + 2 / 3].entries()) expect(timeSubtract(roots[i].time, EPOCH)).toBeCloseTo(offset, 6)
+	expect(planetaryLongitudeOppositions(looping, reference, EPOCH, stop, { step: 0.01 })).toEqual([])
+
+	// A full sweep passes both 0 and PI once: each finder keeps only its own alignment.
+	const sweeping = (time: Time) => eclipticDirection(-1 + TAU * timeSubtract(time, EPOCH), 0, time)
+	const [conjunction] = planetaryLongitudeConjunctions(sweeping, reference, EPOCH, stop, { step: 0.01 })
+	expect(timeSubtract(conjunction.time, EPOCH)).toBeCloseTo(1 / TAU, 6)
+	const oppositions = planetaryLongitudeOppositions(sweeping, reference, EPOCH, stop, { step: 0.01 })
+	expect(oppositions).toHaveLength(1)
+	expect(timeSubtract(oppositions[0].time, EPOCH)).toBeCloseTo((1 + PI) / TAU, 6)
+	const offset = planetaryLongitudeCrossings(sweeping, reference, EPOCH, stop, deg(-30), { step: 0.01 })
+	expect(timeSubtract(offset[0].time, EPOCH)).toBeCloseTo((1 - deg(30)) / TAU, 6)
+	expect(planetaryLongitudeQuadratures(sweeping, reference, EPOCH, stop, { step: 0.01 }).map((event) => event.kind)).toEqual(['east', 'west'])
+})
+
+test('an inclined pair reaches its longitude conjunction and least separation at different instants', () => {
+	const stop = timeShift(EPOCH, 1)
+	const reference = (time: Time) => eclipticDirection(0, 0, time)
+	// Small-angle separation^2 = (0.1 u)^2 + (0.05 + 0.08 u)^2 with u = t - 0.5 is least at u = -0.244.
+	const target = (time: Time) => {
+		const u = timeSubtract(time, EPOCH) - 0.5
+		return eclipticDirection(0.1 * u, 0.05 + 0.08 * u, time)
+	}
+	const [conjunction] = planetaryLongitudeConjunctions(target, reference, EPOCH, stop, { step: 0.05 })
+	expect(timeSubtract(conjunction.time, EPOCH)).toBeCloseTo(0.5, 6)
+	expect(conjunction.separation).toBeCloseTo(0.05, 6)
+	expect(conjunction.latitudeDifference).toBeCloseTo(0.05, 6)
+	const [appulse] = planetaryAppulses(target, reference, EPOCH, stop, { step: 0.05 })
+	expect(timeSubtract(appulse.time, EPOCH)).toBeCloseTo(0.256, 2)
+	expect(appulse.separation).toBeLessThan(conjunction.separation)
+})
+
+test('almanac finders keep borrowed buffers intact and return nothing for empty windows', () => {
+	const targetScratch = vecZero()
+	const referenceScratch: MutVec3 = [1, 0, 0]
+	const target = (time: Time) => {
+		const angle = timeSubtract(time, EPOCH) - 0.5
+		targetScratch[0] = 2 * Math.cos(angle)
+		targetScratch[1] = 2 * Math.sin(angle)
+		targetScratch[2] = 0
+		return targetScratch
+	}
+	const reference = () => referenceScratch
+	const stop = timeShift(EPOCH, 1)
+	const borrowed = planetaryLongitudeConjunctions(target, reference, EPOCH, stop, { step: 0.1 })
+	const cloned = planetaryLongitudeConjunctions(
+		(time) => vecClone(target(time)),
+		() => vecClone(reference()),
+		EPOCH,
+		stop,
+		{ step: 0.1 },
+	)
+	expect(borrowed).toHaveLength(1)
+	expect(timeSubtract(borrowed[0].time, cloned[0].time)).toBeCloseTo(0, 10)
+	expect(borrowed[0].kind).toBe('superior')
+	expect(referenceScratch).toEqual([1, 0, 0])
+
+	for (const end of [EPOCH, timeShift(EPOCH, -1)]) {
+		expect(planetaryLongitudeCrossings(VENUS, SUN, EPOCH, end, 0, OPTIONS)).toEqual([])
+		expect(planetaryAppulses(VENUS, SUN, EPOCH, end, OPTIONS)).toEqual([])
+		expect(planetaryIlluminationCrossings(VENUS, SUN, EPOCH, end, 0.5, OPTIONS)).toEqual([])
+		expect(planetaryBrightnessMaxima('venus', VENUS, SUN, EPOCH, end, OPTIONS)).toEqual([])
+	}
+})
+
+test('brightness maxima never come from an undefined magnitude', () => {
+	// Saturn 10 AU away with the Sun placed so the phase angle is 0.4 |t - 0.5| radians: the model
+	// with rings is undefined beyond 6.5 degrees, |t - 0.5| > 0.284, and brightest at zero phase.
+	const planet: MutVec3 = [10, 0, 0]
+	const target = () => planet
+	const solar = (time: Time): MutVec3 => {
+		const phase = 0.4 * Math.abs(timeSubtract(time, EPOCH) - 0.5)
+		return [10 - 9.5 * Math.cos(phase), 9.5 * Math.sin(phase), 0]
+	}
+	const events = planetaryBrightnessMaxima('saturn', target, solar, EPOCH, timeShift(EPOCH, 1), { step: 0.05 })
+	expect(events).toHaveLength(1)
+	expect(timeSubtract(events[0].time, EPOCH)).toBeCloseTo(0.5, 3)
+	expect(Number.isFinite(events[0].magnitude)).toBeTrue()
 })
