@@ -14883,6 +14883,29 @@ An `IPolarRejectedMeasurement` (`valid: false`) carries the `reason`:
 
 `advanceIPolarConvergence(state, measurement, options?)` is the reversible convergence streak, starting from `IPOLAR_CONVERGENCE_START`, with `DEFAULT_IPOLAR_CONVERGENCE` as the default options (three measurements within 30″, at most 300 s apart). A rejection clears the streak, and an error above the `threshold` or a gap over `maximumInterval` restarts it. `converged` holds while the streak reaches `count`. The threshold is a requested target, not a statement of accuracy: that depends on the plate solutions, the optics and the mechanics. Angles are radians, and every result is a fresh value. The polar error from a three-point sequence is [Three-Point Polar Alignment](#three-point-polar-alignment).
 
+`observation/alignment/ipolar.runner` runs the calibration and the refinement as operations over the device commanders. Neither leases anything itself: the commander and the capturer lease the mount and camera per command.
+
+`runIPolarCalibration(scope, camera, mount, options, services)` captures and solves a first frame where the mount stands, then a second one after an RA rotation. The `mode` decides how the rotation happens:
+
+- `manual`: the runner emits `waitingForRotation` and waits for `services.rotationConfirmed(signal)`, which resolves true once the operator has turned the RA axis. It never calls the commander, and `mount` (optional) is only watched.
+- `automatic`: needs the `mount`, the `motion` settings and the commander, and refuses a mount `ipolarMountRefusal(mount, slewRate)` rejects. That means a mount that is disconnected, alt-az or parked, cannot move west-east or abort, or does not announce the preset; tracking is not required. The runner applies the preset (a `slewRate` event with the one it replaced) and turns the mount in `direction` with timed manual motions, each stopped in a `finally`. The first motion lasts `initialMotion` seconds, then longer probes run while no rotation is measured. After that each motion is sized from the fitted rotation per second of motion towards `targetRotation`, capped at `maximumMotion` and at `maximumTotalMotion` overall. Only the fitted rotation of the solves decides; motion time is never taken as rotation.
+
+After the `settle`, the second frame goes through `calibrateIPolar`:
+
+- `insufficientRotation`, `badWcs`, `poorConditioning`, `unstableFit` and an unsolved frame keep the first frame and try another second pose, up to `maximumAttempts`.
+- Every other rejection ends the run as `unexpectedState` (a `calibrationRejected` event says whether it retries).
+- A mount's reported declination changing by more than `maximumDeclinationChange`, or its pier side changing, also ends the run as `unexpectedState`.
+- A first frame that does not solve ends it as `commandFailed`.
+
+The accepted run has the `calibration`, the `measurement` of the second frame, its `solution`, the `mount` reference (declination and pier side) and the number of `captures`. Its `calibrationAccepted` event says whether a mount `verified` the motion, since without one the RA-only motion rests on the operator's word.
+
+`runIPolarRefinement(scope, camera, mount, reference, calibration, state, options, services, firstIndex?)` only captures, solves and measures every `delay` seconds until it is cancelled, never commanding the mount. Each frame produces a `measurement` event with the measurement and the convergence after it; `state` (the latest accepted measurement and the convergence) lets a resumed refinement keep its streak. It fails:
+
+- as `commandFailed` after `maximumFailures` consecutive frames without a solution;
+- as `unexpectedState` on a measurement that invalidates the calibration or a declination or pier-side change of the mount since `reference`.
+
+The services are the optional `MountCommander`, the `CameraCapturer`, a solver of `IPolarRunnerFrame` (the file, the exposure midpoint, the stage, the index and the pose), the auxiliary paths, the clock, `rotationConfirmed`, a synchronous `listener` of `IPolarEvent` (`slewRate`, `capture`, `solved`, `waitingForRotation`, `move`, `calibrationRejected`, `calibrationAccepted` and `measurement`) and an optional `captureListener`. Each frame's sensor geometry is its solved dimensions with the binning and subframe origin requested. The runner never restores the slew rate, since a cancelled operation commands nothing more: the caller restores the `previous` preset once the mount is free.
+
 ```ts
 import { plateSolutionFrom } from 'nebulosa/src/astrometry/solvers/platesolver'
 import { eraS2c } from 'nebulosa/src/astronomy/coordinates/erfa/erfa'
