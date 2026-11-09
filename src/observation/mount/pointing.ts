@@ -9,8 +9,28 @@ import { estimateLeastSquaresConditioning, leastSquaresCoefficients, linearLeast
 import type { NumberArray } from '../../math/numerical/math'
 import { medianOf, percentileOf, rmsOf, STANDARD_DEVIATION_SCALE } from '../../math/numerical/statistics'
 import { type Angle, normalizeAngle, normalizePI } from '../../math/units/angle'
-// oxfmt-ignore
-import { availableContextRequirement, buildEmpiricalPointingFeatureNames, empiricalFeatureRequirement, extractPointingContext, featuresFromContext, normalizePierSide, type PointingContext, type PointingContextRequirement, type PointingFeatureConfiguration, type PointingFrame, type PointingModelInput, type PointingOffset, predictSemiPhysicalOffset, type ResolvedPointingFeatureConfiguration, resolveFeatureConfiguration, SEMI_PHYSICAL_TERM_NAMES, SEMI_PHYSICAL_TERM_REQUIREMENTS, semiPhysicalBasis, type SemiPhysicalTermName, satisfiesContextRequirement } from './pointing.basis'
+import {
+	availableContextRequirement,
+	buildEmpiricalPointingFeatureNames,
+	empiricalFeatureRequirement,
+	extractPointingContext,
+	featuresFromContext,
+	normalizePierSide,
+	type PointingContext,
+	type PointingContextRequirement,
+	type PointingFeatureConfiguration,
+	type PointingFrame,
+	type PointingModelInput,
+	type PointingOffset,
+	predictSemiPhysicalOffset,
+	type ResolvedPointingFeatureConfiguration,
+	resolveFeatureConfiguration,
+	SEMI_PHYSICAL_TERM_NAMES,
+	SEMI_PHYSICAL_TERM_REQUIREMENTS,
+	semiPhysicalBasis,
+	type SemiPhysicalTermName,
+	satisfiesContextRequirement,
+} from './pointing.basis'
 import { buildLocalPointingResidual, type LocalPointingResidualModel, type LocalPointingResidualOptions, predictLocalPointingResidual, type ResolvedLocalPointingResidualOptions, resolveLocalResidualOptions } from './pointing.local'
 
 // Telescope mount pointing-model fitting and correction. Takes commanded vs plate-solved sky samples

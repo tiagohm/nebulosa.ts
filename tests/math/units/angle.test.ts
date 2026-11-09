@@ -1,7 +1,36 @@
 import { describe, expect, test } from 'bun:test'
 import { PI, PIOVERTWO, TAU } from '../../../src/core/constants'
-// oxfmt-ignore
-import { arcmin, arcsec, deg, dms, type FormatAngleOptions, formatALT, formatAngle, formatAZ, formatDEC, formatDMS, formatHMS, formatRA, formatSignedDMS, hms, hour, mas, normalizeAngle, normalizePI, parseAngle, safeAngularDifference, unwrapAngle, unwrapAngles, toArcmin, toArcsec, toDeg, toDms, toHms, toHour, toMas } from '../../../src/math/units/angle'
+import {
+	arcmin,
+	arcsec,
+	deg,
+	dms,
+	type FormatAngleOptions,
+	formatALT,
+	formatAngle,
+	formatAZ,
+	formatDEC,
+	formatDMS,
+	formatHMS,
+	formatRA,
+	formatSignedDMS,
+	hms,
+	hour,
+	mas,
+	normalizeAngle,
+	normalizePI,
+	parseAngle,
+	safeAngularDifference,
+	unwrapAngle,
+	unwrapAngles,
+	toArcmin,
+	toArcsec,
+	toDeg,
+	toDms,
+	toHms,
+	toHour,
+	toMas,
+} from '../../../src/math/units/angle'
 
 test('normalize', () => {
 	expect(normalizeAngle(0)).toBeCloseTo(0, 16)

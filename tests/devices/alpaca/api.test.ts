@@ -1,8 +1,20 @@
 import { describe, expect, spyOn, test } from 'bun:test'
 import { AlpacaApi } from '../../../src/devices/alpaca/api'
 import { AlpacaServer } from '../../../src/devices/alpaca/server'
-// oxfmt-ignore
-import { AlpacaCameraState, AlpacaDomeShutterState, AlpacaException, AlpacaGuideDirection, AlpacaTelescopeAlignmentMode, AlpacaTelescopeAxis, AlpacaTelescopeEquatorialCoordinateType, AlpacaTelescopeTrackingRate, type AlpacaConfiguredDevice, type AlpacaDeviceType, type AlpacaRequestResult, type AlpacaStateItem } from '../../../src/devices/alpaca/types'
+import {
+	AlpacaCameraState,
+	AlpacaDomeShutterState,
+	AlpacaException,
+	AlpacaGuideDirection,
+	AlpacaTelescopeAlignmentMode,
+	AlpacaTelescopeAxis,
+	AlpacaTelescopeEquatorialCoordinateType,
+	AlpacaTelescopeTrackingRate,
+	type AlpacaConfiguredDevice,
+	type AlpacaDeviceType,
+	type AlpacaRequestResult,
+	type AlpacaStateItem,
+} from '../../../src/devices/alpaca/types'
 import { IndiClientHandlerSet } from '../../../src/devices/indi/client'
 import { CameraManager } from '../../../src/devices/indi/manager/camera'
 import { CoverManager } from '../../../src/devices/indi/manager/cover'

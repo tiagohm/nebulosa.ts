@@ -2,7 +2,6 @@ import { quickSelect } from '../../math/numerical/array'
 import { clamp } from '../../math/numerical/math'
 import { medianBySelectionOf, medianOf, STANDARD_DEVIATION_SCALE } from '../../math/numerical/statistics'
 import { DEFAULT_GRAYSCALE, type Image, type ImageRawType } from '../model/types'
-// oxfmt-ignore
 import { createScalarSurfaceEvaluator, createScalarSurfacePointEvaluator, createSurfaceColumnTable, evaluateThinPlateSplineAt, fitScalarSurface, type ScalarSurfaceModel, type ScalarSurfacePointEvaluator, type SurfaceDomain, type SurfaceModelType, type SurfaceSample } from './surface'
 
 // Photometric normalization of a frame against a reference frame, applied after registration and

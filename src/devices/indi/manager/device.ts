@@ -1,7 +1,27 @@
 import type { PickByValue, Writable } from '../../../core/types'
 import type { IndiClientHandler } from '../client'
-// oxfmt-ignore
-import { CLIENT, type Client, DEFAULT_CAMERA, DEFAULT_COVER, DEFAULT_DOME, DEFAULT_FLAT_PANEL, DEFAULT_FOCUSER, DEFAULT_MOUNT, DEFAULT_POWER, DEFAULT_ROTATOR, DEFAULT_WEATHER, DEFAULT_WHEEL, type Device, DeviceInterfaceType, type DeviceType, findDeviceTypes, isInterfaceType, isSubDevice, type MinMaxValueProperty, type Parkable } from '../device'
+import {
+	CLIENT,
+	type Client,
+	DEFAULT_CAMERA,
+	DEFAULT_COVER,
+	DEFAULT_DOME,
+	DEFAULT_FLAT_PANEL,
+	DEFAULT_FOCUSER,
+	DEFAULT_MOUNT,
+	DEFAULT_POWER,
+	DEFAULT_ROTATOR,
+	DEFAULT_WEATHER,
+	DEFAULT_WHEEL,
+	type Device,
+	DeviceInterfaceType,
+	type DeviceType,
+	findDeviceTypes,
+	isInterfaceType,
+	isSubDevice,
+	type MinMaxValueProperty,
+	type Parkable,
+} from '../device'
 import { IndiPropertyRegistry, makeHardwareId } from '../properties'
 import type { BlobEncoding, DefNumber, DefSwitchVector, DefText, DefTextVector, DefVector, DelProperty, OneNumber, PropertyState, SetSwitchVector, SetTextVector, SetVector, StatefulSetVector, VectorType } from '../types'
 

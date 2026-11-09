@@ -1,6 +1,31 @@
 import { describe, expect, test } from 'bun:test'
-// oxfmt-ignore
-import { type MutMat2, mat2Clone, mat2Copy, mat2Determinant, mat2DivScalar, mat2Fill, mat2FlipX, mat2FlipY, mat2Identity, mat2Minus, mat2MinusScalar, mat2Mul, mat2MulScalar, mat2MulTranspose, mat2MulVec, mat2Negate, mat2Plus, mat2PlusScalar, mat2Rot, mat2Trace, mat2Transpose, mat2TransposeMul, mat2TransposeMulTranspose, mat2TransposeMulVec, mat2Zero } from '../../../src/math/linear-algebra/mat2'
+import {
+	type MutMat2,
+	mat2Clone,
+	mat2Copy,
+	mat2Determinant,
+	mat2DivScalar,
+	mat2Fill,
+	mat2FlipX,
+	mat2FlipY,
+	mat2Identity,
+	mat2Minus,
+	mat2MinusScalar,
+	mat2Mul,
+	mat2MulScalar,
+	mat2MulTranspose,
+	mat2MulVec,
+	mat2Negate,
+	mat2Plus,
+	mat2PlusScalar,
+	mat2Rot,
+	mat2Trace,
+	mat2Transpose,
+	mat2TransposeMul,
+	mat2TransposeMulTranspose,
+	mat2TransposeMulVec,
+	mat2Zero,
+} from '../../../src/math/linear-algebra/mat2'
 import type { MutVec2 } from '../../../src/math/linear-algebra/vec2'
 
 test('zero', () => {

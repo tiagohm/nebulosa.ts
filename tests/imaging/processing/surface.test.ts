@@ -1,7 +1,20 @@
 import { describe, expect, test } from 'bun:test'
-// oxfmt-ignore
-import { basisTermCount, createScalarSurfaceEvaluator, createScalarSurfacePointEvaluator, createSurfaceColumnTable, evaluateScalarSurfaceInto, fillBasisExponents, fillChebyshev, fitScalarSurface, fullSurfaceDomain, SURFACE_MAX_CONTROL_POINTS, SURFACE_MAX_POLYNOMIAL_SAMPLES, type SurfaceFitOptions, type SurfaceSample } from '../../../src/imaging/processing/surface'
 import { PI } from '../../../src/core/constants'
+import {
+	basisTermCount,
+	createScalarSurfaceEvaluator,
+	createScalarSurfacePointEvaluator,
+	createSurfaceColumnTable,
+	evaluateScalarSurfaceInto,
+	fillBasisExponents,
+	fillChebyshev,
+	fitScalarSurface,
+	fullSurfaceDomain,
+	SURFACE_MAX_CONTROL_POINTS,
+	SURFACE_MAX_POLYNOMIAL_SAMPLES,
+	type SurfaceFitOptions,
+	type SurfaceSample,
+} from '../../../src/imaging/processing/surface'
 
 function sampleGrid(width: number, height: number, columns: number, rows: number, value: (x: number, y: number) => number, weight?: (x: number, y: number) => number) {
 	const samples: SurfaceSample[] = []

@@ -1,6 +1,5 @@
 import { describe, expect, test } from 'bun:test'
 import { PI, PIOVERTWO, TAU } from '../../../../src/core/constants'
-// oxfmt-ignore
 import { IDENTITY_PERIODIC_ERROR_CURVE, PERIODIC_ERROR_HARMONICS, periodicErrorAt, periodicErrorBound, periodicErrorCorrectionAt, type PeriodicErrorCurve, rawPeriodicErrorAt, trainPeriodicErrorCorrection } from '../../../../src/devices/indi/simulator/mount.periodic'
 import { arcsec, toArcsec } from '../../../../src/math/units/angle'
 

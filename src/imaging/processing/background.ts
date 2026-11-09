@@ -2,8 +2,27 @@ import { clamp, type NumberArray } from '../../math/numerical/math'
 import { medianOf, STANDARD_DEVIATION_SCALE } from '../../math/numerical/statistics'
 import { DEFAULT_GRAYSCALE, type Image, type ImageRawType } from '../model/types'
 import type { DetectedStar } from '../stars/detector'
-// oxfmt-ignore
-import { activeSurfaceSampleCount, basisTermCount, computeResidualDispersion, createSurfaceColumnTable, createSurfaceSampleSet, deduplicateSurfaceSamples, evaluateScalarSurfaceInto, evaluateThinPlateSplineAt, fillBasisExponents, fitPolynomialSurfaceWithRejection, fitThinPlateSplineSurface, fullSurfaceDomain, hasSurfaceTwoDimensionalCoverage, normalizeSurfaceSampleSet, pushSurfaceSample, type ScalarSurfaceModel, subsampleSurfaceControlPoints, SURFACE_MAX_CONTROL_POINTS, type SurfaceSampleSet } from './surface'
+import {
+	activeSurfaceSampleCount,
+	basisTermCount,
+	computeResidualDispersion,
+	createSurfaceColumnTable,
+	createSurfaceSampleSet,
+	deduplicateSurfaceSamples,
+	evaluateScalarSurfaceInto,
+	evaluateThinPlateSplineAt,
+	fillBasisExponents,
+	fitPolynomialSurfaceWithRejection,
+	fitThinPlateSplineSurface,
+	fullSurfaceDomain,
+	hasSurfaceTwoDimensionalCoverage,
+	normalizeSurfaceSampleSet,
+	pushSurfaceSample,
+	type ScalarSurfaceModel,
+	subsampleSurfaceControlPoints,
+	SURFACE_MAX_CONTROL_POINTS,
+	type SurfaceSampleSet,
+} from './surface'
 
 // Automatic Background Extraction (ABE/DBE): models a smooth sky background from a grid of robust
 // samples and removes it, correcting gradients, vignetting, and light pollution. The background is

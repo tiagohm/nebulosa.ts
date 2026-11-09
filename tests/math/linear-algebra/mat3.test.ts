@@ -1,7 +1,33 @@
 import { describe, expect, test } from 'bun:test'
-// oxfmt-ignore
-import { type MutMat3, matClone, matDeterminant, matDivScalar, matFlipX, matFlipY, matFromVec3, matIdentity, matIsIdentity, matMinus, matMinusScalar, matMul, matMulScalar, matMulTranspose, matMulVec, matPlus, matPlusScalar, matRodriguesRotation, matRotX, matRotY, matRotZ, matToVec3, matTranspose, matTransposeMul, matTransposeMulTranspose, matZero } from '../../../src/math/linear-algebra/mat3'
 import { PI, PIOVERTWO } from '../../../src/core/constants'
+import {
+	type MutMat3,
+	matClone,
+	matDeterminant,
+	matDivScalar,
+	matFlipX,
+	matFlipY,
+	matFromVec3,
+	matIdentity,
+	matIsIdentity,
+	matMinus,
+	matMinusScalar,
+	matMul,
+	matMulScalar,
+	matMulTranspose,
+	matMulVec,
+	matPlus,
+	matPlusScalar,
+	matRodriguesRotation,
+	matRotX,
+	matRotY,
+	matRotZ,
+	matToVec3,
+	matTranspose,
+	matTransposeMul,
+	matTransposeMulTranspose,
+	matZero,
+} from '../../../src/math/linear-algebra/mat3'
 import { type MutVec3, vecX, vecY, vecZ, vecZero } from '../../../src/math/linear-algebra/vec3'
 
 test('is identity', () => {

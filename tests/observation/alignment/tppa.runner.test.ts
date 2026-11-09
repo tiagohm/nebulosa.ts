@@ -20,7 +20,6 @@ import { matMulVec, matTransposeMulVec } from '../../../src/math/linear-algebra/
 import { type Vec3, vecAngle, vecCross, vecNormalize, vecRotateByRodrigues } from '../../../src/math/linear-algebra/vec3'
 import { type Angle, arcsec, deg, normalizeAngle, toArcsec, toDeg } from '../../../src/math/units/angle'
 import { applyMountAdjustment } from '../../../src/observation/alignment/polaralignment'
-// oxfmt-ignore
 import { acquireThreePointPolarAlignment, refineThreePointPolarAlignment, type ThreePointPolarAlignmentAcquisitionOptions, type ThreePointPolarAlignmentEvent, type ThreePointPolarAlignmentRefinementOptions, type ThreePointPolarAlignmentServices } from '../../../src/observation/alignment/tppa.runner'
 import type { CameraCaptureHooks, CameraCapturer, CameraCaptureResult } from '../../../src/observation/capture/capture'
 import type { CameraCaptureListener } from '../../../src/observation/capture/reporter'

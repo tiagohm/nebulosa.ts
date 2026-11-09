@@ -16,8 +16,21 @@ import { bodyFixedFrame, JUPITER_ROTATION, MARS_ROTATION, MOON_ROTATION, positio
 import { planetMagnitude, type Planet } from '../src/astronomy/bodies/photometry'
 import { spaceMotion, star } from '../src/astronomy/bodies/star'
 import { carringtonRotationNumber, equationOfTime, nearestSolarEclipse, season } from '../src/astronomy/bodies/sun'
-// oxfmt-ignore
-import { cirsToObserved, distance as vectorDistance, equatorial as vectorToEquatorial, icrsToCirs, icrsToObserved, parallacticAngle, phaseAngle, refractedAltitude, relativePositionAndVelocity, separationFrom, unrefractedAltitude, type PositionAndVelocityOverTime, type PositionOverTime } from '../src/astronomy/coordinates/astrometry'
+import {
+	cirsToObserved,
+	distance as vectorDistance,
+	equatorial as vectorToEquatorial,
+	icrsToCirs,
+	icrsToObserved,
+	parallacticAngle,
+	phaseAngle,
+	refractedAltitude,
+	relativePositionAndVelocity,
+	separationFrom,
+	unrefractedAltitude,
+	type PositionAndVelocityOverTime,
+	type PositionOverTime,
+} from '../src/astronomy/coordinates/astrometry'
 import { angularDistance, eclipticToEquatorial, equatorialFromJ2000, equatorialToEcliptic, equatorialToGalactic, equatorialToHorizontal, galacticToEquatorial, horizontalToEquatorial, zenith } from '../src/astronomy/coordinates/coordinate'
 import { annualAberration, observerState, radialVelocityCorrection } from '../src/astronomy/coordinates/correction'
 import { eraAnpm, eraC2s, eraLd, eraLdSun, eraPmpx, eraS2c, eraSeps, eraStarpm, eraStarpv } from '../src/astronomy/coordinates/erfa/erfa'
@@ -44,8 +57,18 @@ import { lunarLibrationExtrema } from '../src/astronomy/events/lunar'
 import { galileanMutualEvents, saturnianMutualEvents } from '../src/astronomy/events/mutual'
 import { occultationCandidates } from '../src/astronomy/events/occultation'
 import { planetaryClosestApproaches, planetaryConjunctions, planetaryGreatestElongations, planetaryInnerConjunctions, planetaryOppositions, planetaryQuadratures, planetaryStations } from '../src/astronomy/events/planetary'
-// oxfmt-ignore
-import { satelliteBetaAngle as computeSatelliteBetaAngle, satelliteGroundFootprint as computeSatelliteGroundFootprint, satelliteSubpoint, satelliteTrackingState, satelliteVisibleIntervals, satelliteConjunctions, satelliteEclipses, satelliteMagnitude, satellitePasses, satelliteShadowState } from '../src/astronomy/events/satellite'
+import {
+	satelliteBetaAngle as computeSatelliteBetaAngle,
+	satelliteGroundFootprint as computeSatelliteGroundFootprint,
+	satelliteSubpoint,
+	satelliteTrackingState,
+	satelliteVisibleIntervals,
+	satelliteConjunctions,
+	satelliteEclipses,
+	satelliteMagnitude,
+	satellitePasses,
+	satelliteShadowState,
+} from '../src/astronomy/events/satellite'
 import { searchExtrema } from '../src/astronomy/events/search'
 import { bodySurfaceSunEvents } from '../src/astronomy/events/surface'
 import { planetaryTransits } from '../src/astronomy/events/transit'
@@ -63,13 +86,40 @@ import { parseTLE, recordFromTLE, sgp4 } from '../src/astronomy/orbits/propagati
 import { HealpixIndex } from '../src/astronomy/sky/spatial/healpix'
 import { deltaT } from '../src/astronomy/time/deltat'
 import { iersab, iersb } from '../src/astronomy/time/iers'
+import { formatTemporal, temporalFromTime } from '../src/astronomy/time/temporal'
+import {
+	Timescale,
+	dut1 as dut1FromTime,
+	earthRotationAngle,
+	equationOfEquinoxes,
+	greenwichApparentSiderealTime,
+	greenwichMeanSiderealTime,
+	nutationAngles,
+	pmAngles,
+	pmMatrix,
+	tai,
+	taiMinusUtc,
+	tcb,
+	tdb,
+	timeBesselianYear,
+	timeJulianYear,
+	timeMJD,
+	timeShift,
+	timeSubtract,
+	timeToDate,
+	timeUnix,
+	timeYMDHMS,
+	toJulianDay,
+	toJulianEpoch,
+	tt,
+	ut1,
+	utc,
+	type Time,
+} from '../src/astronomy/time/time'
+import { AU_KM, DAYSEC, DAYSPERSY, DAYSPERTY, EARTH_RADIUS_KM, GM_EARTH, GM_EARTH_KM3_S2, GM_SUN_PITJEVA_2005, PI, PIOVERTWO, SUN_RADIUS_AU, TAU } from '../src/core/constants'
 import { fileHandleSource } from '../src/io/file'
 import { matIdentity } from '../src/math/linear-algebra/mat3'
 import { Matrix } from '../src/math/linear-algebra/matrix'
-// oxfmt-ignore
-import { Timescale, dut1 as dut1FromTime, earthRotationAngle, equationOfEquinoxes, greenwichApparentSiderealTime, greenwichMeanSiderealTime, nutationAngles, pmAngles, pmMatrix, tai, taiMinusUtc, tcb, tdb, timeBesselianYear, timeJulianYear, timeMJD, timeShift, timeSubtract, timeToDate, timeUnix, timeYMDHMS, toJulianDay, toJulianEpoch, tt, ut1, utc, type Time } from '../src/astronomy/time/time'
-import { formatTemporal, temporalFromTime } from '../src/astronomy/time/temporal'
-import { AU_KM, DAYSEC, DAYSPERSY, DAYSPERTY, EARTH_RADIUS_KM, GM_EARTH, GM_EARTH_KM3_S2, GM_SUN_PITJEVA_2005, PI, PIOVERTWO, SUN_RADIUS_AU, TAU } from '../src/core/constants'
 import { type Vec3, vecAngle, vecCross, vecLatitude, vecLength, vecLongitude, vecMinus, vecMulScalar, vecNormalize, vecPlus } from '../src/math/linear-algebra/vec3'
 import { sphericalDestination, sphericalInterpolate, sphericalPolygonArea, sphericalPositionAngle, sphericalProjectTangentPlane, sphericalSeparation, sphericalTriangleAngles, sphericalTriangleArea, sphericalUnprojectTangentPlane } from '../src/math/numerical/geometry'
 import { type Angle, arcsec, deg, formatAZ, formatHMS, formatSignedDMS, hms, hour, normalizeAngle, normalizePI, toArcsec, toDeg, toHour } from '../src/math/units/angle'

@@ -1,16 +1,37 @@
-// oxfmt-ignore
-import { type AlpacaAxisRate, AlpacaCameraState, type AlpacaConfiguredDevice, type AlpacaDeviceNumberProvider, type AlpacaDeviceType, AlpacaDomeShutterState, AlpacaError, AlpacaException, type AlpacaFocuserAction, AlpacaImageElementType, type AlpacaServerStartOptions, type AlpacaStateItem, type AlpacaWheelAction, defaultDeviceNumberProvider, findWeatherSensor, SUPPORTED_FOCUSER_ACTIONS, SUPPORTED_WHEEL_ACTIONS, WEATHER_SENSORS, WEATHER_SENSORS_BY_FIELD } from './types'
 import { observedToCirs } from '../../astronomy/coordinates/astrometry'
 import { type EquatorialCoordinate, equatorialToHorizontal } from '../../astronomy/coordinates/coordinate'
+import { dewPoint, isMagnusDomain, relativeHumidity } from '../../astronomy/formulas'
+import { type GeographicCoordinate, localSiderealTime } from '../../astronomy/observer/location'
+import { type Time, timeNow } from '../../astronomy/time/time'
 import { Bitpix, computeRemainingBytes, FitsKeywordReader } from '../../io/formats/fits/fits'
 import { bitpixInBytes } from '../../io/formats/fits/util'
 import { type Angle, deg, hour, normalizeAngle, toDeg, toHour } from '../../math/units/angle'
 import { meter, toMeter } from '../../math/units/distance'
-// oxfmt-ignore
-import { type Camera, type Cover, type Device, type DeviceType, expectedPierSide, type Dome, type FlatPanel, type Focuser, type GuideDirection, type GuideOutput, isCamera, isFocuser, isMount, isWheel, type Mount, type NameAndLabel, type PierSide, type Rotator, type SafetyMonitor, type TrackMode, type Weather, type WeatherSensor, type Wheel } from '../indi/device'
-import { dewPoint, isMagnusDomain, relativeHumidity } from '../../astronomy/formulas'
-import { type GeographicCoordinate, localSiderealTime } from '../../astronomy/observer/location'
-import { type Time, timeNow } from '../../astronomy/time/time'
+import {
+	type Camera,
+	type Cover,
+	type Device,
+	type DeviceType,
+	expectedPierSide,
+	type Dome,
+	type FlatPanel,
+	type Focuser,
+	type GuideDirection,
+	type GuideOutput,
+	isCamera,
+	isFocuser,
+	isMount,
+	isWheel,
+	type Mount,
+	type NameAndLabel,
+	type PierSide,
+	type Rotator,
+	type SafetyMonitor,
+	type TrackMode,
+	type Weather,
+	type WeatherSensor,
+	type Wheel,
+} from '../indi/device'
 import type { CameraManager } from '../indi/manager/camera'
 import type { CoverManager } from '../indi/manager/cover'
 import type { DeviceHandler, DeviceManager } from '../indi/manager/device'
@@ -24,6 +45,27 @@ import type { SafetyMonitorManager } from '../indi/manager/safetymonitor'
 import type { WeatherManager } from '../indi/manager/weather'
 import type { WheelManager } from '../indi/manager/wheel'
 import type { BlobEncoding } from '../indi/types'
+import {
+	type AlpacaAxisRate,
+	AlpacaCameraState,
+	type AlpacaConfiguredDevice,
+	type AlpacaDeviceNumberProvider,
+	type AlpacaDeviceType,
+	AlpacaDomeShutterState,
+	AlpacaError,
+	AlpacaException,
+	type AlpacaFocuserAction,
+	AlpacaImageElementType,
+	type AlpacaServerStartOptions,
+	type AlpacaStateItem,
+	type AlpacaWheelAction,
+	defaultDeviceNumberProvider,
+	findWeatherSensor,
+	SUPPORTED_FOCUSER_ACTIONS,
+	SUPPORTED_WHEEL_ACTIONS,
+	WEATHER_SENSORS,
+	WEATHER_SENSORS_BY_FIELD,
+} from './types'
 
 // Embedded ASCOM Alpaca server: exposes the app's INDI devices (camera, mount, focuser, wheel, rotator,
 // dome, cover/calibrator) over the Alpaca REST API so external Alpaca clients can control them. Subscribes to

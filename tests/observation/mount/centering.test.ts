@@ -16,9 +16,23 @@ import { type FitsHeader, isFits, readFits } from '../../../src/io/formats/fits/
 import { bufferSource } from '../../../src/io/io'
 import { type Angle, deg, normalizeAngle, toArcsec, toDeg } from '../../../src/math/units/angle'
 import type { CameraCaptureHooks, CameraCapturer, CameraCaptureResult } from '../../../src/observation/capture/capture'
-// oxfmt-ignore
-import { type CenteringCaptureOptions, type CenteringCorrection, type CenteringFrame, type CenteringMeasurement, type CenteringOptions, type CenteringResult, type CenteringServices, type CenteringSolver, type CenteringStep, type CenteringTarget, centerTarget, centeringCaptureRequest, centeringStalled, exposureMidpoint } from '../../../src/observation/mount/centering'
 import type { CameraCaptureStart } from '../../../src/observation/capture/types'
+import {
+	type CenteringCaptureOptions,
+	type CenteringCorrection,
+	type CenteringFrame,
+	type CenteringMeasurement,
+	type CenteringOptions,
+	type CenteringResult,
+	type CenteringServices,
+	type CenteringSolver,
+	type CenteringStep,
+	type CenteringTarget,
+	centerTarget,
+	centeringCaptureRequest,
+	centeringStalled,
+	exposureMidpoint,
+} from '../../../src/observation/mount/centering'
 import { applyPointingOffset, computePointingError } from '../../../src/observation/mount/pointing'
 import { isBinaryTestSkipped, waitUntil } from '../../util'
 import { connectSimulatorRig, createSimulatorRig, ManualClock, RIG_INITIAL_POINTING, resetSimulatorRig } from '../../util/rig'

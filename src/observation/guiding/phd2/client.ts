@@ -1,8 +1,26 @@
 import type { PartialOnly, Writable } from '../../../core/types'
 import { SocketWriteQueue } from '../../../io/socket'
 import type { Point, Size } from '../../../math/numerical/geometry'
-// oxfmt-ignore
-import { DEFAULT_PHD2_PORT, DEFAULT_PHD2_SETTLE, DEFAULT_ROI, type PHD2AppState, type PHD2CalibrationData, type PHD2Command, type PHD2DeclinationGuideMode, type PHD2Equipment, type PHD2Error, type PHD2Events, type PHD2GuideAxis, type PHD2GuideDirection, type PHD2JsonRpcEvent, type PHD2LockShiftParams, type PHD2Profile, type PHD2Settle, type PHD2StarImage, type PHD2WhichMount } from './types'
+import {
+	DEFAULT_PHD2_PORT,
+	DEFAULT_PHD2_SETTLE,
+	DEFAULT_ROI,
+	type PHD2AppState,
+	type PHD2CalibrationData,
+	type PHD2Command,
+	type PHD2DeclinationGuideMode,
+	type PHD2Equipment,
+	type PHD2Error,
+	type PHD2Events,
+	type PHD2GuideAxis,
+	type PHD2GuideDirection,
+	type PHD2JsonRpcEvent,
+	type PHD2LockShiftParams,
+	type PHD2Profile,
+	type PHD2Settle,
+	type PHD2StarImage,
+	type PHD2WhichMount,
+} from './types'
 
 // Client for PHD2's TCP event-monitoring / JSON-RPC interface. A PHD2Client issues RPC commands (each a thin
 // wrapper over send()) and dispatches async events and command replies to every registered handler. The protocol

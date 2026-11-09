@@ -9,7 +9,6 @@ import type { CameraCaptureClock } from '../capture/types'
 import { type Ditherer, type DitherPhase, type DitherRequest, type DitherResult, settleOnAbort } from './ditherer'
 import type { PHD2Client, PHD2ClientHandler, PHD2CommandResult } from './phd2/client'
 import { DEFAULT_PHD2_PORT, type PHD2AppState, type PHD2Events } from './phd2/types'
-// oxfmt-ignore
 import { DEFAULT_GUIDING_CLOCK, type GuidingInterruptionKind, GuidingInterruptionHistory, type GuidingSession, type GuidingSessionResources, type GuidingSessionState, type GuidingSettle, GuidingSettleListeners, type GuidingStartOptions, guidingSettleWaitTimeout, waitForGuidingSettle } from './session'
 
 // Guiding session and ditherer over a remote PHD2 (`PHD2GuidingSession`), through its JSON-RPC client. The only

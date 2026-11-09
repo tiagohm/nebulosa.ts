@@ -1,5 +1,4 @@
 import { describe, expect, test } from 'bun:test'
-// oxfmt-ignore
 import { BT709_LUMINANCE, blendLuminanceRows, type ChannelMix, type CompositionPlane, collectLuminanceSamples, createCompositionCounters, createLuminanceSamples, type LuminanceMatch, mixChannelRows, solveLuminanceMatch, validateChannelMix } from '../../../src/imaging/processing/channel.composition'
 import { mulberry32, normal } from '../../../src/math/numerical/random'
 

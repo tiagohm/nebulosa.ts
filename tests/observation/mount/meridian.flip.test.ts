@@ -1,8 +1,20 @@
 import { expect, test } from 'bun:test'
 import { PI, TAU } from '../../../src/core/constants'
 import { deg, type Angle, normalizeAngle } from '../../../src/math/units/angle'
-// oxfmt-ignore
-import { computeHourAngle, computeLocalSiderealTime, createMeridianFlipState, evaluateMeridianFlip, type MeridianFlipAction, type MeridianFlipEvent, type MeridianFlipPhase, type MeridianFlipPolicy, type MeridianFlipReason, type MeridianFlipSnapshot, type MeridianFlipState, transitionMeridianFlip } from '../../../src/observation/mount/meridian.flip'
+import {
+	computeHourAngle,
+	computeLocalSiderealTime,
+	createMeridianFlipState,
+	evaluateMeridianFlip,
+	type MeridianFlipAction,
+	type MeridianFlipEvent,
+	type MeridianFlipPhase,
+	type MeridianFlipPolicy,
+	type MeridianFlipReason,
+	type MeridianFlipSnapshot,
+	type MeridianFlipState,
+	transitionMeridianFlip,
+} from '../../../src/observation/mount/meridian.flip'
 
 const TARGET_RA = deg(40)
 

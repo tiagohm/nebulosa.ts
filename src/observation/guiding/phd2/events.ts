@@ -1,7 +1,6 @@
 import type { GuidingCalibrationDiagnostics } from '../calibrator'
 import type { GuiderLockShift, GuiderSettingChange, GuiderState, GuidingEvent } from '../events'
 import type { AxisPulse, DeclinationGuideMode } from '../guider'
-// oxfmt-ignore
 import { PHD2_MSG_VERSION, PHD2_OVERLAP_SUPPORT, PHD2_SUBVER, PHD2_VERSION, type PHD2AppState, type PHD2DeclinationGuideMode, type PHD2EventMap, type PHD2Events, type PHD2GuideDirection, type PHD2LockShiftParams } from './types'
 
 // Translation of the native events of the local guider (`GuidingEvent`) into the PHD2 events the PHD2 event-monitoring

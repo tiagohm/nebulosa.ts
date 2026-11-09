@@ -1,12 +1,33 @@
-import { type FitsKeyword, KEYWORDS } from './headers'
-// oxfmt-ignore
-import { bitpixInBytes, bitpixKeyword, computeHduDataSize, escapeQuotedText, heightKeyword, isCommentKeyword, isCommentStyleCard, isCompressedImageHeader, isRiceCompressedImageHeader, numberOfChannelsKeyword, numericKeyword, RICE_1_COMPRESSION_TYPE, textKeyword, uncompressedBitpixKeyword, uncompressedHeightKeyword, uncompressedNumberOfChannelsKeyword, uncompressedScaleKeyword, uncompressedWidthKeyword, uncompressedZeroKeyword, unescapeQuotedText, widthKeyword } from './util'
 import type { Writable } from '../../../core/types'
 import { validatePositiveInteger } from '../../../core/validation'
 import type { Image, ImageNormalization, ImageRawType, ImageSampleScale } from '../../../imaging/model/types'
 import { clamp, type NumberArray } from '../../../math/numerical/math'
 import { readUntil, writeFully } from '../../io'
 import { type Source, type Seekable, type Sink, isSeekable } from '../../types'
+import { type FitsKeyword, KEYWORDS } from './headers'
+import {
+	bitpixInBytes,
+	bitpixKeyword,
+	computeHduDataSize,
+	escapeQuotedText,
+	heightKeyword,
+	isCommentKeyword,
+	isCommentStyleCard,
+	isCompressedImageHeader,
+	isRiceCompressedImageHeader,
+	numberOfChannelsKeyword,
+	numericKeyword,
+	RICE_1_COMPRESSION_TYPE,
+	textKeyword,
+	uncompressedBitpixKeyword,
+	uncompressedHeightKeyword,
+	uncompressedNumberOfChannelsKeyword,
+	uncompressedScaleKeyword,
+	uncompressedWidthKeyword,
+	uncompressedZeroKeyword,
+	unescapeQuotedText,
+	widthKeyword,
+} from './util'
 
 // FITS container reading and writing: parses an HDU list (header keyword cards plus data segment
 // offsets/sizes) from a seekable source and writes image HDUs back, including optional Rice tile

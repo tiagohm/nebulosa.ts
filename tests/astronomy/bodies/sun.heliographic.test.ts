@@ -1,6 +1,20 @@
 import { describe, expect, test } from 'bun:test'
-// oxfmt-ignore
-import { ALLEN_DIFFERENTIAL_ROTATION, approximateSolarDiskGeometry, HOWARD_1990_DIFFERENTIAL_ROTATION, heliographicToHelioprojective, heliographicToSolarImage, helioprojectiveToHeliographic, rotateCarringtonLongitude, SNODGRASS_1983_DIFFERENTIAL_ROTATION, type SolarDiskGeometry, type SolarImageCalibration, solarDiskGeometry, solarImageScale, solarImageToHeliographic, solarRotationRate } from '../../../src/astronomy/bodies/sun.heliographic'
+import {
+	ALLEN_DIFFERENTIAL_ROTATION,
+	approximateSolarDiskGeometry,
+	HOWARD_1990_DIFFERENTIAL_ROTATION,
+	heliographicToHelioprojective,
+	heliographicToSolarImage,
+	helioprojectiveToHeliographic,
+	rotateCarringtonLongitude,
+	SNODGRASS_1983_DIFFERENTIAL_ROTATION,
+	type SolarDiskGeometry,
+	type SolarImageCalibration,
+	solarDiskGeometry,
+	solarImageScale,
+	solarImageToHeliographic,
+	solarRotationRate,
+} from '../../../src/astronomy/bodies/sun.heliographic'
 import { observerState } from '../../../src/astronomy/coordinates/correction'
 import { earth, sun } from '../../../src/astronomy/ephemeris/models/analytical/vsop87e'
 import { geodeticLocation } from '../../../src/astronomy/observer/location'

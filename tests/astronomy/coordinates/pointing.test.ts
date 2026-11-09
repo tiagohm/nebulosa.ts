@@ -1,7 +1,6 @@
 import { describe, expect, test } from 'bun:test'
-// oxfmt-ignore
-import { applyEquatorialPointingError, applyTubeFlexureError, equatorialPointingError, type EquatorialPointingModel, IDENTITY_EQUATORIAL_POINTING_MODEL, isIdentityEquatorialPointingModel, MAX_POINTING_DECLINATION, polarAlignmentPointingModel, tubeFlexureError } from '../../../src/astronomy/coordinates/pointing'
 import { angularDistance } from '../../../src/astronomy/coordinates/coordinate'
+import { applyEquatorialPointingError, applyTubeFlexureError, equatorialPointingError, type EquatorialPointingModel, IDENTITY_EQUATORIAL_POINTING_MODEL, isIdentityEquatorialPointingModel, MAX_POINTING_DECLINATION, polarAlignmentPointingModel, tubeFlexureError } from '../../../src/astronomy/coordinates/pointing'
 import { PIOVERTWO } from '../../../src/core/constants'
 import { arcsec, deg, hour, normalizePI, toArcsec } from '../../../src/math/units/angle'
 import { polarAlignmentError } from '../../../src/observation/alignment/polaralignment'

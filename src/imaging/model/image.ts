@@ -1,16 +1,44 @@
 import type { PathLike } from 'fs'
 import { type FileHandle, open } from 'fs/promises'
 import { isJpeg, Jpeg, type PixelFormat } from '../../bindings/imaging/libturbojpeg'
-import { Bitpix, type Fits, type FitsHdu, type FitsHeader, FitsImageReader, readFits, writeFits } from '../../io/formats/fits/fits'
-// oxfmt-ignore
-import { bitpixInBytes, cfaPatternKeyword, heightKeyword, isCompressedImageHeader, isRiceCompressedImageHeader, numberOfAxesKeyword, textKeyword, uncompressedBitpixKeyword, uncompressedHeightKeyword, uncompressedNumberOfChannelsKeyword, uncompressedScaleKeyword, uncompressedWidthKeyword, uncompressedZeroKeyword, widthKeyword } from '../../io/formats/fits/util'
 import { fileHandleSource } from '../../io/file'
+import { Bitpix, type Fits, type FitsHdu, type FitsHeader, FitsImageReader, readFits, writeFits } from '../../io/formats/fits/fits'
+import {
+	bitpixInBytes,
+	cfaPatternKeyword,
+	heightKeyword,
+	isCompressedImageHeader,
+	isRiceCompressedImageHeader,
+	numberOfAxesKeyword,
+	textKeyword,
+	uncompressedBitpixKeyword,
+	uncompressedHeightKeyword,
+	uncompressedNumberOfChannelsKeyword,
+	uncompressedScaleKeyword,
+	uncompressedWidthKeyword,
+	uncompressedZeroKeyword,
+	widthKeyword,
+} from '../../io/formats/fits/util'
 import { readXisf, writeXisf, type Xisf, type XisfImage, type XisfImageBounds, XisfImageReader, type XisfWriteFormat } from '../../io/formats/xisf/xisf'
 import { bufferSink, bufferSource, readRemaining, readUntil } from '../../io/io'
 import type { Source, Seekable, Sink } from '../../io/types'
 import { clamp } from '../../math/numerical/math'
-// oxfmt-ignore
-import { DEFAULT_WRITE_IMAGE_TO_FORMAT_OPTIONS, makeImageRawTypedArray, type DigitalImage, type DigitalImageReadOptions, type Image, type ImageFormat, type ImageNormalization, type ImageRawPrecision, type ImageRawType, type ImageReadOptions, type ImageSampleScale, type NormalizedImageReadOptions, type WriteImageOptions, type WriteImageToFormatOptions } from './types'
+import {
+	DEFAULT_WRITE_IMAGE_TO_FORMAT_OPTIONS,
+	makeImageRawTypedArray,
+	type DigitalImage,
+	type DigitalImageReadOptions,
+	type Image,
+	type ImageFormat,
+	type ImageNormalization,
+	type ImageRawPrecision,
+	type ImageRawType,
+	type ImageReadOptions,
+	type ImageSampleScale,
+	type NormalizedImageReadOptions,
+	type WriteImageOptions,
+	type WriteImageToFormatOptions,
+} from './types'
 
 // Image input/output for the imaging model: reads FITS, XISF, and JPEG sources (auto-detected) into a
 // normalized in-memory Image or a DigitalImage preserving source digital numbers, and writes an Image

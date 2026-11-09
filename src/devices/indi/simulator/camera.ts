@@ -27,8 +27,26 @@ import type { RotatorManager } from '../manager/rotator'
 import type { WheelManager } from '../manager/wheel'
 import { findOnSwitch, makeBlobVector, makeNumberVector, makeSwitchVector, makeTextVector, type EnableBlob, type NewNumberVector, type NewSwitchVector, type NewTextVector } from '../types'
 import type { ClientSimulator } from './client'
-// oxfmt-ignore
-import { CAMERA_AMBIENT_TEMPERATURE, CAMERA_BLOB_PADDING, CAMERA_DEFAULT_TARGET_TEMPERATURE, CAMERA_MAX_BIN, CAMERA_MAX_EXPOSURE, CAMERA_MAX_SCENE_MARGIN, CAMERA_MIN_EXPOSURE, CAMERA_PIXEL_SIZE, CAMERA_SCENE_SEED, CAMERA_SENSOR_HEIGHT, CAMERA_SENSOR_WIDTH, CAMERA_TEMPERATURE_THRESHOLD, GENERAL_INFO, MAIN_CONTROL, MAX_TRAJECTORY_SAMPLES, SIMULATION, TICK_INTERVAL_MS, TRAJECTORY_PIXELS_PER_SAMPLE } from './constants'
+import {
+	CAMERA_AMBIENT_TEMPERATURE,
+	CAMERA_BLOB_PADDING,
+	CAMERA_DEFAULT_TARGET_TEMPERATURE,
+	CAMERA_MAX_BIN,
+	CAMERA_MAX_EXPOSURE,
+	CAMERA_MAX_SCENE_MARGIN,
+	CAMERA_MIN_EXPOSURE,
+	CAMERA_PIXEL_SIZE,
+	CAMERA_SCENE_SEED,
+	CAMERA_SENSOR_HEIGHT,
+	CAMERA_SENSOR_WIDTH,
+	CAMERA_TEMPERATURE_THRESHOLD,
+	GENERAL_INFO,
+	MAIN_CONTROL,
+	MAX_TRAJECTORY_SAMPLES,
+	SIMULATION,
+	TICK_INTERVAL_MS,
+	TRAJECTORY_PIXELS_PER_SAMPLE,
+} from './constants'
 import { DeviceSimulator } from './device'
 import { FocuserSimulator } from './focuser'
 import { MountSimulator } from './mount'

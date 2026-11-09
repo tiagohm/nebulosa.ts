@@ -1,8 +1,21 @@
 import { PI } from '../../core/constants'
 import type { ImageAnalysisPlane } from '../../imaging/analysis/plane'
 import { DEFAULT_LIMB_TRACKING_OPTIONS, type LimbGeometry, type LimbMeasurement, type LimbTrackingOptions, locateBrightObject, measureLimb } from '../../imaging/analysis/tracking/limb'
-// oxfmt-ignore
-import { applyRigidTransform, composeRigidTransforms, createSurfaceReference, DEFAULT_SURFACE_TRACKING_OPTIONS, IDENTITY_RIGID_TRANSFORM, invertRigidTransform, reacquireSurface, registerSurface, type RigidTransform2D, type SurfaceReference, type SurfaceRegistration, type SurfaceTrackingOptions, selectSurfacePlane } from '../../imaging/analysis/tracking/surface'
+import {
+	applyRigidTransform,
+	composeRigidTransforms,
+	createSurfaceReference,
+	DEFAULT_SURFACE_TRACKING_OPTIONS,
+	IDENTITY_RIGID_TRANSFORM,
+	invertRigidTransform,
+	reacquireSurface,
+	registerSurface,
+	type RigidTransform2D,
+	type SurfaceReference,
+	type SurfaceRegistration,
+	type SurfaceTrackingOptions,
+	selectSurfacePlane,
+} from '../../imaging/analysis/tracking/surface'
 import { SurfaceTrackingWorkspace } from '../../imaging/analysis/tracking/workspace'
 import type { Image } from '../../imaging/model/types'
 import type { Rect } from '../../math/numerical/geometry'

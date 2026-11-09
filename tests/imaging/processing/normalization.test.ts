@@ -1,7 +1,18 @@
 import { describe, expect, test } from 'bun:test'
 import type { Image } from '../../../src/imaging/model/types'
-// oxfmt-ignore
-import { applyLocalNormalization, applyLocalNormalizationInPlace, fitLocalNormalization, fitLocalNormalizationRaw, isLocalNormalizationFallback, type LocalNormalizationModel, type LocalNormalizationOptions, localNormalization, resolveLocalNormalizationOptions, solveGlobalNormalization, solveGlobalNormalizationPlanes } from '../../../src/imaging/processing/normalization'
+import {
+	applyLocalNormalization,
+	applyLocalNormalizationInPlace,
+	fitLocalNormalization,
+	fitLocalNormalizationRaw,
+	isLocalNormalizationFallback,
+	type LocalNormalizationModel,
+	type LocalNormalizationOptions,
+	localNormalization,
+	resolveLocalNormalizationOptions,
+	solveGlobalNormalization,
+	solveGlobalNormalizationPlanes,
+} from '../../../src/imaging/processing/normalization'
 import type { ScalarSurfaceModel } from '../../../src/imaging/processing/surface'
 import { Bitpix } from '../../../src/io/formats/fits/fits'
 import { deg } from '../../../src/math/units/angle'

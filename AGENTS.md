@@ -117,7 +117,6 @@ Use `uv` only as a development-time reference tool for Astropy, ERFA, NumPy, Sky
 Follow OXC configuration: tabs, single quotes, no semicolons, trailing commas, sorted imports, LF endings, and the configured line width.
 
 - Use TypeScript and ESM. Never add CommonJS.
-- Preserve `// oxfmt-ignore` immediately above intentionally long imports and keep those imports on one line.
 - Keep strict types. Avoid `any`, broad index signatures, unchecked assertions, and suppressions when `unknown`, generics, narrowing, or explicit shapes work.
 - Always type function and method parameters.
 - Prefer inference for primitive and tuple returns. Add explicit return types for public structured results or where inference would make a contract unclear or unstable.

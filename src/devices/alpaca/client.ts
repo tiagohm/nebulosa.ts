@@ -1,20 +1,52 @@
-import { AlpacaCameraApi, AlpacaCoverCalibratorApi, AlpacaDomeApi, type AlpacaDeviceApi, AlpacaFilterWheelApi, AlpacaFocuserApi, AlpacaManagementApi, AlpacaObservingConditionsApi, AlpacaRotatorApi, AlpacaSafetyMonitorApi, AlpacaTelescopeApi } from './api'
-// oxfmt-ignore
-import { type AlpacaAxisRate, type AlpacaCameraSensorType, type AlpacaCameraState, type AlpacaConfiguredDevice, type AlpacaDeviceType, AlpacaDomeShutterState, AlpacaException, type AlpacaRequestResult, type AlpacaStateItem, AlpacaTelescopeAlignmentMode, type AlpacaTelescopeEquatorialCoordinateType, type AlpacaTelescopePierSide, type AlpacaTelescopeTrackingRate, alpacaImageElementTypeToBitpix, type ImageBytesMetadata } from './types'
 import { equatorialFromJ2000, equatorialToJ2000 } from '../../astronomy/coordinates/coordinate'
+import { formatTemporal, TIMEZONE } from '../../astronomy/time/temporal'
+import { type Time, timeNow } from '../../astronomy/time/time'
 import { SIDEREAL_RATE } from '../../core/constants'
 import { computeRemainingBytes, FITS_BLOCK_SIZE, FITS_HEADER_CARD_SIZE, type FitsHeader, FitsKeywordWriter } from '../../io/formats/fits/fits'
 import { bitpixInBytes } from '../../io/formats/fits/util'
+import { roundToNthDecimal } from '../../math/numerical/math'
 import { type Angle, deg, formatDEC, formatRA, hour, normalizeAngle, toDeg, toHour } from '../../math/units/angle'
 import { handleDefLightVector, handleDefNumberVector, handleDefSwitchVector, handleDefTextVector, handleDelProperty, handleSetBlobVector, handleSetLightVector, handleSetNumberVector, handleSetSwitchVector, handleSetTextVector, type IndiClientHandler } from '../indi/client'
 import type { Camera, Client, Device, Focuser, Mount, Rotator, WeatherSensor, Wheel } from '../indi/device'
 import type { DeviceProvider } from '../indi/manager/device'
 import { WEATHER_SENSORS, type WeatherSensorMapping } from '../indi/manager/weather'
-// oxfmt-ignore
-import { type DefNumber, type DefSwitchVector, type DefVector, type EnableBlob, findOnSwitch, type GetProperties, makeBlobVector, makeLightVector, makeNumberVector, makeSwitchVector, makeTextVector, type NewNumberVector, type NewSwitchVector, type NewTextVector, type PropertyState, type ValueType, type VectorType } from '../indi/types'
-import { formatTemporal, TIMEZONE } from '../../astronomy/time/temporal'
-import { type Time, timeNow } from '../../astronomy/time/time'
-import { roundToNthDecimal } from '../../math/numerical/math'
+import {
+	type DefNumber,
+	type DefSwitchVector,
+	type DefVector,
+	type EnableBlob,
+	findOnSwitch,
+	type GetProperties,
+	makeBlobVector,
+	makeLightVector,
+	makeNumberVector,
+	makeSwitchVector,
+	makeTextVector,
+	type NewNumberVector,
+	type NewSwitchVector,
+	type NewTextVector,
+	type PropertyState,
+	type ValueType,
+	type VectorType,
+} from '../indi/types'
+import { AlpacaCameraApi, AlpacaCoverCalibratorApi, AlpacaDomeApi, type AlpacaDeviceApi, AlpacaFilterWheelApi, AlpacaFocuserApi, AlpacaManagementApi, AlpacaObservingConditionsApi, AlpacaRotatorApi, AlpacaSafetyMonitorApi, AlpacaTelescopeApi } from './api'
+import {
+	type AlpacaAxisRate,
+	type AlpacaCameraSensorType,
+	type AlpacaCameraState,
+	type AlpacaConfiguredDevice,
+	type AlpacaDeviceType,
+	AlpacaDomeShutterState,
+	AlpacaException,
+	type AlpacaRequestResult,
+	type AlpacaStateItem,
+	AlpacaTelescopeAlignmentMode,
+	type AlpacaTelescopeEquatorialCoordinateType,
+	type AlpacaTelescopePierSide,
+	type AlpacaTelescopeTrackingRate,
+	alpacaImageElementTypeToBitpix,
+	type ImageBytesMetadata,
+} from './types'
 
 // Alpaca-to-INDI client adapter: polls an ASCOM Alpaca server over HTTP and presents each device to the
 // rest of the app through the same INDI Client/handler interface used by native INDI. Each Alpaca device

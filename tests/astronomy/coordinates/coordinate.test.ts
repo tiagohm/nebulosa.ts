@@ -1,6 +1,23 @@
 import { expect, test } from 'bun:test'
-// oxfmt-ignore
-import { angularDistance, angularDistanceHaversine, eclipticJ2000ToEquatorial, eclipticToEquatorial, equatorEcliptic, equatorialFromJ2000, equatorialToEcliptic, equatorialToEclipticJ2000, equatorialToGalactic, equatorialToHorizontal, equatorialToJ2000, galacticToEquatorial, horizontalToEquatorial, meridianEcliptic, meridianEquator, positionAngleBetween, zenith } from '../../../src/astronomy/coordinates/coordinate'
+import {
+	angularDistance,
+	angularDistanceHaversine,
+	eclipticJ2000ToEquatorial,
+	eclipticToEquatorial,
+	equatorEcliptic,
+	equatorialFromJ2000,
+	equatorialToEcliptic,
+	equatorialToEclipticJ2000,
+	equatorialToGalactic,
+	equatorialToHorizontal,
+	equatorialToJ2000,
+	galacticToEquatorial,
+	horizontalToEquatorial,
+	meridianEcliptic,
+	meridianEquator,
+	positionAngleBetween,
+	zenith,
+} from '../../../src/astronomy/coordinates/coordinate'
 import { localSiderealTime } from '../../../src/astronomy/observer/location'
 import { timeNormalize, timeYMDHMS } from '../../../src/astronomy/time/time'
 import { PI, PIOVERTWO, TAU } from '../../../src/core/constants'

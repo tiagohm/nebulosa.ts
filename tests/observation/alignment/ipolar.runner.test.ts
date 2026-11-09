@@ -16,7 +16,6 @@ import { type Vec3, vecCross, vecDot, vecNormalize } from '../../../src/math/lin
 import { arcmin, arcsec, deg, toArcsec, toDeg } from '../../../src/math/units/angle'
 import { IPOLAR_CONVERGENCE_START } from '../../../src/observation/alignment/ipolar'
 import { ipolarFrameContext, type IPolarObserver, ipolarItrsToIcrs } from '../../../src/observation/alignment/ipolar.geometry'
-// oxfmt-ignore
 import { type IPolarCalibrationOptions, type IPolarEvent, type IPolarRefinementOptions, type IPolarServices, ipolarMountRefusal, runIPolarCalibration, runIPolarRefinement } from '../../../src/observation/alignment/ipolar.runner'
 import type { CameraCapturer, CameraCaptureResult } from '../../../src/observation/capture/capture'
 import type { CenteringCaptureOptions } from '../../../src/observation/mount/centering'

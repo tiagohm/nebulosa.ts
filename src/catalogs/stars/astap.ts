@@ -1,8 +1,26 @@
 import { DEG2RAD } from '../../core/constants'
 import type { Angle } from '../../math/units/angle'
 import type { StarCatalogEntry } from './catalog'
-// oxfmt-ignore
-import { createTiledSkyGeometry, findTiledStarAreas, findTiledStarRegion, readTiledStarArea, readTiledStarHeader, tiledStarAreaFile, TiledStarCatalog, TILED_STAR_DEC_SCALE, TILED_STAR_RA_SCALE, type TiledStarArea, type TiledStarFile, type TiledStarFileHeader, type TiledStarFiles, type TiledStarRawRecord, type TiledStarRecordSize, type TiledStarRegionQuery, type TiledStarSearchResult, type TiledStarSortable } from './tiled.catalog'
+import {
+	createTiledSkyGeometry,
+	findTiledStarAreas,
+	findTiledStarRegion,
+	readTiledStarArea,
+	readTiledStarHeader,
+	tiledStarAreaFile,
+	TiledStarCatalog,
+	TILED_STAR_DEC_SCALE,
+	TILED_STAR_RA_SCALE,
+	type TiledStarArea,
+	type TiledStarFile,
+	type TiledStarFileHeader,
+	type TiledStarFiles,
+	type TiledStarRawRecord,
+	type TiledStarRecordSize,
+	type TiledStarRegionQuery,
+	type TiledStarSearchResult,
+	type TiledStarSortable,
+} from './tiled.catalog'
 
 // Reader and star-catalog adapter for ASTAP ".1476" tiled binary star archives. ASTAP reuses the exact
 // HNSKY packed record layout and 110-byte header (the Pascal source names its record types

@@ -1,7 +1,21 @@
 import { describe, expect, test } from 'bun:test'
-// oxfmt-ignore
-import { applyRigidTransform, composeRigidTransforms, createSurfaceReference, DEFAULT_SURFACE_TRACKING_OPTIONS, fitRigidTransform, IDENTITY_RIGID_TRANSFORM, invertRigidTransform, reacquireSurface, registerSurface, rigidTransformThrough, type SurfaceReference, type SurfaceRegistration, type SurfaceTrackingOptions, selectSurfacePlane, } from '../../../../src/imaging/analysis/tracking/surface'
 import { TAU } from '../../../../src/core/constants'
+import {
+	applyRigidTransform,
+	composeRigidTransforms,
+	createSurfaceReference,
+	DEFAULT_SURFACE_TRACKING_OPTIONS,
+	fitRigidTransform,
+	IDENTITY_RIGID_TRANSFORM,
+	invertRigidTransform,
+	reacquireSurface,
+	registerSurface,
+	rigidTransformThrough,
+	type SurfaceReference,
+	type SurfaceRegistration,
+	type SurfaceTrackingOptions,
+	selectSurfacePlane,
+} from '../../../../src/imaging/analysis/tracking/surface'
 import { SurfaceTrackingWorkspace } from '../../../../src/imaging/analysis/tracking/workspace'
 import type { Rect } from '../../../../src/math/numerical/geometry'
 import { moveScenePoint, type RenderOptions, renderScene, type Scene, type SceneMotion, seeingWarp, spotsScene, textureScene } from '../../../util/scene'

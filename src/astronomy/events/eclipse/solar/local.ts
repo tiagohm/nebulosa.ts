@@ -1,16 +1,28 @@
 import { ASEC2RAD, DAYSEC, EARTH_RADIUS_KM, PI } from '../../../../core/constants'
+import type { Writable } from '../../../../core/types'
+import { NumberComparator } from '../../../../core/util'
 import type { Point } from '../../../../math/numerical/geometry'
 import { clamp } from '../../../../math/numerical/math'
 import { bisection, brentMinimize, type RootFindingOptions } from '../../../../math/numerical/optimization'
 import { type Angle, normalizeAngle, normalizePI } from '../../../../math/units/angle'
 import { nearestSolarEclipse, type SolarEclipse } from '../../../bodies/sun'
 import { eraGst06a } from '../../../coordinates/erfa/erfa'
-import { F, hourAngleFromLongitude, type SunMoonPosition } from '../eclipse'
-// oxfmt-ignore
-import { besselianSampleAtJulianDay, centralAxisIntersectsEarth, centralLineKind, computePolynomialBesselianElements, evaluateBesselian, findMaximumPoint, projectFundamentalPoint, solarAltitudeAtPoint, SUN_RADIUS_EARTH_RADII, type SolarEclipseGeoPoint, type InstantBesselianElements, type PolynomialBesselianElements } from './map'
-import type { Writable } from '../../../../core/types'
-import { NumberComparator } from '../../../../core/util'
 import { type Time, timeAtJulianDay, toJulianDay, tt } from '../../../time/time'
+import { F, hourAngleFromLongitude, type SunMoonPosition } from '../eclipse'
+import {
+	besselianSampleAtJulianDay,
+	centralAxisIntersectsEarth,
+	centralLineKind,
+	computePolynomialBesselianElements,
+	evaluateBesselian,
+	findMaximumPoint,
+	projectFundamentalPoint,
+	solarAltitudeAtPoint,
+	SUN_RADIUS_EARTH_RADII,
+	type SolarEclipseGeoPoint,
+	type InstantBesselianElements,
+	type PolynomialBesselianElements,
+} from './map'
 
 // Local solar eclipse circumstances ("Local View"): for a single geographic point this module resolves
 // the local contacts C1/C2/MAX/C3/C4, the local magnitude, durations, the Sun altitude and the position

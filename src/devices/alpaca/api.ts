@@ -1,6 +1,21 @@
 import { errorMessage } from '../../core/util'
-// oxfmt-ignore
-import type { AlpacaAxisRate, AlpacaCameraSensorType, AlpacaCameraState, AlpacaConfiguredDevice, AlpacaDomeShutterState, AlpacaGuideDirection, AlpacaRequestFailedResult, AlpacaRequestResult, AlpacaResponse, AlpacaStateItem, AlpacaTelescopeAlignmentMode, AlpacaTelescopeAxis, AlpacaTelescopeEquatorialCoordinateType, AlpacaTelescopePierSide, AlpacaTelescopeTrackingRate } from './types'
+import type {
+	AlpacaAxisRate,
+	AlpacaCameraSensorType,
+	AlpacaCameraState,
+	AlpacaConfiguredDevice,
+	AlpacaDomeShutterState,
+	AlpacaGuideDirection,
+	AlpacaRequestFailedResult,
+	AlpacaRequestResult,
+	AlpacaResponse,
+	AlpacaStateItem,
+	AlpacaTelescopeAlignmentMode,
+	AlpacaTelescopeAxis,
+	AlpacaTelescopeEquatorialCoordinateType,
+	AlpacaTelescopePierSide,
+	AlpacaTelescopeTrackingRate,
+} from './types'
 
 // Thin typed HTTP client for the ASCOM Alpaca REST API. Each class wraps one device type and exposes a
 // method per Alpaca property/operation; the methods are intentionally one-line mappings onto the shared

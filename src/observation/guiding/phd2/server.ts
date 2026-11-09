@@ -4,8 +4,23 @@ import type { ImageRawType } from '../../../imaging/model/types'
 import { DEFAULT_MAX_PENDING_WRITE, SocketWriteQueue } from '../../../io/socket'
 import type { GuiderClient, GuiderClientConnectOptions, GuiderClientHandler } from '../client'
 import { phd2EventsOf } from './events'
-// oxfmt-ignore
-import { DEFAULT_PHD2_PORT, PHD2_MSG_VERSION, PHD2_OVERLAP_SUPPORT, PHD2_SUBVER, PHD2_VERSION, type PHD2DeclinationGuideMode, type PHD2Equipment, type PHD2Error, type PHD2EventMap, type PHD2GuideDirection, type PHD2LockShiftParams, type PHD2RateUnit, type PHD2Settle, type PHD2ShiftAxis, type PHD2StarImage } from './types'
+import {
+	DEFAULT_PHD2_PORT,
+	PHD2_MSG_VERSION,
+	PHD2_OVERLAP_SUPPORT,
+	PHD2_SUBVER,
+	PHD2_VERSION,
+	type PHD2DeclinationGuideMode,
+	type PHD2Equipment,
+	type PHD2Error,
+	type PHD2EventMap,
+	type PHD2GuideDirection,
+	type PHD2LockShiftParams,
+	type PHD2RateUnit,
+	type PHD2Settle,
+	type PHD2ShiftAxis,
+	type PHD2StarImage,
+} from './types'
 
 // PHD2-compatible TCP server over a local GuiderClient. It speaks PHD2's event-monitoring / JSON-RPC 2.0 protocol
 // (newline-delimited JSON, `\r\n` on output): every request is executed on the GuiderClient and answered on the

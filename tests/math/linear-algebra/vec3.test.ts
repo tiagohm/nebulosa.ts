@@ -1,8 +1,40 @@
 import { expect, test } from 'bun:test'
 import { PI, PIOVERFOUR, PIOVERTWO } from '../../../src/core/constants'
+import {
+	type MutVec3,
+	type Vec3,
+	vecAngle,
+	vecCross,
+	vecDistance,
+	vecDiv,
+	vecDivScalar,
+	vecDot,
+	vecLatitude,
+	vecLength,
+	vecLongitude,
+	vecMidpoint,
+	vecMinus,
+	vecMinusScalar,
+	vecMul,
+	vecMulScalar,
+	vecNegate,
+	vecNormalize,
+	vecNormalizeMut,
+	vecPlane,
+	vecPlus,
+	vecPlusScalar,
+	vecPolarAngle,
+	vecPositionAngle,
+	vecRotateByRodrigues,
+	vecRotX,
+	vecRotY,
+	vecRotZ,
+	vecX,
+	vecY,
+	vecZ,
+	vecZero,
+} from '../../../src/math/linear-algebra/vec3'
 import { deg } from '../../../src/math/units/angle'
-// oxfmt-ignore
-import { type MutVec3, type Vec3, vecAngle, vecCross, vecDistance, vecDiv, vecDivScalar, vecDot, vecLatitude, vecLength, vecLongitude, vecMidpoint, vecMinus, vecMinusScalar, vecMul, vecMulScalar, vecNegate, vecNormalize, vecNormalizeMut, vecPlane, vecPlus, vecPlusScalar, vecPolarAngle, vecPositionAngle, vecRotateByRodrigues, vecRotX, vecRotY, vecRotZ, vecX, vecY, vecZ, vecZero } from '../../../src/math/linear-algebra/vec3'
 
 test('angle', () => {
 	expect(vecAngle(vecX(), vecY())).toBe(PIOVERTWO)

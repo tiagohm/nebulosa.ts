@@ -1,9 +1,35 @@
 import { describe, expect, test } from 'bun:test'
-import { deg, normalizePI } from '../../../src/math/units/angle'
-// oxfmt-ignore
-import { AzimuthalEquidistant, Balthasart, Behrmann, Braun, CentralCylindrical, CylindricalEqualArea, CylindricalEquidistant, CylindricalStereographic, EllipsoidalMercator, Gall, GallPeters, Gnomonic, HoboDyer, LambertAzimuthalEqualArea, LambertCylindricalEqualArea, Mercator, Miller, Orthographic, PlateCarree, projectMany, projectPolygon, projectPolyline, Stereographic, TrystanEdwards, WEB_MERCATOR_MAX_LATITUDE, WebMercator, } from '../../../src/astronomy/projections/projection'
+import {
+	AzimuthalEquidistant,
+	Balthasart,
+	Behrmann,
+	Braun,
+	CentralCylindrical,
+	CylindricalEqualArea,
+	CylindricalEquidistant,
+	CylindricalStereographic,
+	EllipsoidalMercator,
+	Gall,
+	GallPeters,
+	Gnomonic,
+	HoboDyer,
+	LambertAzimuthalEqualArea,
+	LambertCylindricalEqualArea,
+	Mercator,
+	Miller,
+	Orthographic,
+	PlateCarree,
+	projectMany,
+	projectPolygon,
+	projectPolyline,
+	Stereographic,
+	TrystanEdwards,
+	WEB_MERCATOR_MAX_LATITUDE,
+	WebMercator,
+} from '../../../src/astronomy/projections/projection'
 import { PI, PIOVERFOUR, PIOVERTWO } from '../../../src/core/constants'
 import { sphericalSeparation, type Point } from '../../../src/math/numerical/geometry'
+import { deg, normalizePI } from '../../../src/math/units/angle'
 
 describe('azimuthal projections round-trip', () => {
 	const centerLongitude = deg(10)

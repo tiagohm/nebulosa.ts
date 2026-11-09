@@ -1,10 +1,35 @@
 import { expect, test } from 'bun:test'
 import { eraC2s, eraS2c, eraS2p } from '../../../src/astronomy/coordinates/erfa/erfa'
-import { arcmin, deg, hour } from '../../../src/math/units/angle'
-// oxfmt-ignore
-import { intersectLineAndSphere, intersectSegmentEllipsoid, midPoint, rectIntersection, signedDistanceToEllipse, type SphericalMountBasis, type SphericalTangentBasis, sphericalCoordinateBasis, sphericalDestination, sphericalDirectionVector, sphericalGreatCirclePole, sphericalInterpolate, sphericalMountBasis, sphericalMountDeclinationAxisVector, sphericalMountPolarAxisVector, sphericalOffsetVector, sphericalPoleVector, sphericalPolygonArea, sphericalPositionAngle, sphericalProjectTangentPlane, sphericalSeparation, sphericalTangentBasis, sphericalTriangleAngles, sphericalTriangleArea, sphericalUnprojectTangentPlane } from '../../../src/math/numerical/geometry'
 import { PI, PIOVERTWO, TAU } from '../../../src/core/constants'
 import { type Vec3, vecCross, vecDot, vecLength, vecNormalize, vecX, vecY, vecZ, vecZero } from '../../../src/math/linear-algebra/vec3'
+import {
+	intersectLineAndSphere,
+	intersectSegmentEllipsoid,
+	midPoint,
+	rectIntersection,
+	signedDistanceToEllipse,
+	type SphericalMountBasis,
+	type SphericalTangentBasis,
+	sphericalCoordinateBasis,
+	sphericalDestination,
+	sphericalDirectionVector,
+	sphericalGreatCirclePole,
+	sphericalInterpolate,
+	sphericalMountBasis,
+	sphericalMountDeclinationAxisVector,
+	sphericalMountPolarAxisVector,
+	sphericalOffsetVector,
+	sphericalPoleVector,
+	sphericalPolygonArea,
+	sphericalPositionAngle,
+	sphericalProjectTangentPlane,
+	sphericalSeparation,
+	sphericalTangentBasis,
+	sphericalTriangleAngles,
+	sphericalTriangleArea,
+	sphericalUnprojectTangentPlane,
+} from '../../../src/math/numerical/geometry'
+import { arcmin, deg, hour } from '../../../src/math/units/angle'
 
 // Checks a vector with one tolerance per component.
 function expectVectorClose(actual: Vec3, expected: Vec3, digits: number = 14) {

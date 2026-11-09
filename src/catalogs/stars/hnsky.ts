@@ -1,8 +1,28 @@
 import { PIOVERTWO } from '../../core/constants'
 import type { Angle } from '../../math/units/angle'
 import type { StarCatalogEntry } from './catalog'
-// oxfmt-ignore
-import { createTiledSkyGeometry, decodeTiledStarDesignation, findTiledStarAreas, findTiledStarRegion, readTiledStarArea, readTiledStarHeader, tiledStarAreaFile, TiledStarCatalog, TILED_STAR_DEC_SCALE, TILED_STAR_RA_SCALE, type TiledStarArea, type TiledStarDesignation, type TiledStarFile, type TiledStarFileHeader, type TiledStarFiles, type TiledStarRawRecord, type TiledStarRecordSize, type TiledStarRegionQuery, type TiledStarSearchResult, type TiledStarSortable } from './tiled.catalog'
+import {
+	createTiledSkyGeometry,
+	decodeTiledStarDesignation,
+	findTiledStarAreas,
+	findTiledStarRegion,
+	readTiledStarArea,
+	readTiledStarHeader,
+	tiledStarAreaFile,
+	TiledStarCatalog,
+	TILED_STAR_DEC_SCALE,
+	TILED_STAR_RA_SCALE,
+	type TiledStarArea,
+	type TiledStarDesignation,
+	type TiledStarFile,
+	type TiledStarFileHeader,
+	type TiledStarFiles,
+	type TiledStarRawRecord,
+	type TiledStarRecordSize,
+	type TiledStarRegionQuery,
+	type TiledStarSearchResult,
+	type TiledStarSortable,
+} from './tiled.catalog'
 
 // Reader and star-catalog adapter for HNSKY ".290" tiled binary star archives. The sky is split into 290
 // declination-band areas. Record decoding, header parsing, and the tiling engine are shared with ASTAP

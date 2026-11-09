@@ -1,7 +1,20 @@
 import { describe, expect, test } from 'bun:test'
 import type { NumberArray } from '../../../src/math/numerical/math'
-// oxfmt-ignore
-import { exponentialRegression, chebyshevLeastSquares, hyperbolicRegression, intersect, polynomialRegression, powerRegression, quadraticRegression, regressionScore, simpleLinearRegression, theilSenRegression, trendLineRegression, weightedLinearRegression, weightedLinearRegressionScore } from '../../../src/math/numerical/regression'
+import {
+	exponentialRegression,
+	chebyshevLeastSquares,
+	hyperbolicRegression,
+	intersect,
+	polynomialRegression,
+	powerRegression,
+	quadraticRegression,
+	regressionScore,
+	simpleLinearRegression,
+	theilSenRegression,
+	trendLineRegression,
+	weightedLinearRegression,
+	weightedLinearRegressionScore,
+} from '../../../src/math/numerical/regression'
 
 function chebyshevSeries(x: number, coefficients: Readonly<NumberArray>) {
 	let previous = 1

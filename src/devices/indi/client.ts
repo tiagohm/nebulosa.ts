@@ -1,9 +1,41 @@
-import type { Client } from './device'
-// oxfmt-ignore
-import type { DefBlob, DefBlobVector, DefLight, DefLightVector, DefNumber, DefNumberVector, DefSwitch, DefSwitchVector, DefText, DefTextVector, DefVector, DelProperty, EnableBlob, GetProperties, Message, NewNumberVector, NewSwitchVector, NewTextVector, OneBlob, OneLight, OneNumber, OneSwitch, OneText, PropertyState, SetBlobVector, SetLightVector, SetNumberVector, SetSwitchVector, SetTextVector, SetVector, SwitchRule, VectorType } from './types'
 import { SocketWriteQueue } from '../../io/socket'
 import { SimpleXmlParser, type XmlNode } from '../../io/xml'
+import type { Client } from './device'
 import { parseIndiNumber } from './number'
+import type {
+	DefBlob,
+	DefBlobVector,
+	DefLight,
+	DefLightVector,
+	DefNumber,
+	DefNumberVector,
+	DefSwitch,
+	DefSwitchVector,
+	DefText,
+	DefTextVector,
+	DefVector,
+	DelProperty,
+	EnableBlob,
+	GetProperties,
+	Message,
+	NewNumberVector,
+	NewSwitchVector,
+	NewTextVector,
+	OneBlob,
+	OneLight,
+	OneNumber,
+	OneSwitch,
+	OneText,
+	PropertyState,
+	SetBlobVector,
+	SetLightVector,
+	SetNumberVector,
+	SetSwitchVector,
+	SetTextVector,
+	SetVector,
+	SwitchRule,
+	VectorType,
+} from './types'
 
 // INDI protocol client over a TCP socket: parses the streamed XML messages into typed property vectors,
 // dispatches them to a handler, and serializes outgoing getProperties/enableBLOB/newXXX commands. Output the

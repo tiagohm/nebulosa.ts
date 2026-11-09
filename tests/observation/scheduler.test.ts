@@ -2,7 +2,6 @@ import { expect, test } from 'bun:test'
 import { greenwichApparentSiderealTime, type Time, timeShift, timeSubtract, timeToDate, timeYMDHMS } from '../../src/astronomy/time/time'
 import { DAYSEC, SIDEREAL_DRIFT_RATE } from '../../src/core/constants'
 import { deg, normalizeAngle } from '../../src/math/units/angle'
-// oxfmt-ignore
 import { type ScheduleBlockRequest, type ScheduleOptions, type SchedulePointing, type ScheduleTarget, scheduleSession, type SessionSchedule } from '../../src/observation/scheduler'
 
 // A winter night starting at 22:00 UTC, so the session wraps across 0h UTC after two hours.

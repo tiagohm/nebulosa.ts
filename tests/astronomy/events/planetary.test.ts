@@ -2,8 +2,22 @@ import { expect, test } from 'bun:test'
 import { eraNut06a, eraPnm06a } from '../../../src/astronomy/coordinates/erfa/erfa'
 import { ECLIPTIC, frameToBase } from '../../../src/astronomy/coordinates/frame'
 import { earth, jupiter, mars, mercury, saturn, sun, venus } from '../../../src/astronomy/ephemeris/models/analytical/vsop87e'
-// oxfmt-ignore
-import { planetaryAppulses, planetaryBrightnessMaxima, planetaryClosestApproaches, planetaryConjunctions, planetaryGreatestElongations, planetaryIlluminationCrossings, planetaryInnerConjunctions, planetaryLongitudeConjunctions, planetaryLongitudeCrossings, planetaryLongitudeOppositions, planetaryLongitudeQuadratures, planetaryOppositions, planetaryQuadratures, planetaryStations } from '../../../src/astronomy/events/planetary'
+import {
+	planetaryAppulses,
+	planetaryBrightnessMaxima,
+	planetaryClosestApproaches,
+	planetaryConjunctions,
+	planetaryGreatestElongations,
+	planetaryIlluminationCrossings,
+	planetaryInnerConjunctions,
+	planetaryLongitudeConjunctions,
+	planetaryLongitudeCrossings,
+	planetaryLongitudeOppositions,
+	planetaryLongitudeQuadratures,
+	planetaryOppositions,
+	planetaryQuadratures,
+	planetaryStations,
+} from '../../../src/astronomy/events/planetary'
 import { type Time, Timescale, timeShift, timeSubtract, timeYMDHMS } from '../../../src/astronomy/time/time'
 import { PI, TAU } from '../../../src/core/constants'
 import { type MutVec3, vecClone, vecMinus, vecX, vecZero } from '../../../src/math/linear-algebra/vec3'

@@ -1,7 +1,6 @@
 import { clamp } from '../../math/numerical/math'
 import { meanOf, medianAbsoluteDeviationOf, medianOf } from '../../math/numerical/statistics'
 import type { ImageRawType } from '../model/types'
-// oxfmt-ignore
 import type { MinMaxRejectionOptions, PercentileRangeOptions, SigmaClipStackingOptions, StackBounds, StackingCombinationMethod, StackingCropMode, StackingOptions, StackingWeightingMode } from './stacker'
 import type { SubframeQualityMetrics } from './subframe.selector'
 

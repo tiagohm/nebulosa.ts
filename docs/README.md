@@ -13196,7 +13196,6 @@ The model is rigid: a scale change (focus, a changing apparent diameter) or a la
 
 ```ts
 import { matchPatchZNCC, PhaseCorrelationWorkspace, phaseCorrelate, phaseCorrelationSpectrum, refineTranslationECC } from 'nebulosa/src/imaging/analysis/tracking/registration'
-// oxfmt-ignore
 import { applyRigidTransform, composeRigidTransforms, createSurfaceReference, DEFAULT_SURFACE_TRACKING_OPTIONS, IDENTITY_RIGID_TRANSFORM, invertRigidTransform, reacquireSurface, registerSurface, rigidTransformThrough, selectSurfacePlane } from 'nebulosa/src/imaging/analysis/tracking/surface'
 import { SurfaceTrackingWorkspace } from 'nebulosa/src/imaging/analysis/tracking/workspace'
 import type { Image } from 'nebulosa/src/imaging/model/types'

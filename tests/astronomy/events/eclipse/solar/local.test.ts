@@ -1,13 +1,27 @@
 import { describe, expect, test } from 'bun:test'
 import { nearestSolarEclipse } from '../../../../../src/astronomy/bodies/sun'
-import { computePolynomialBesselianElements, refineSolarEclipse, type PolynomialBesselianElements } from '../../../../../src/astronomy/events/eclipse/solar/map'
-import { ASEC2RAD, PI, PIOVERFOUR, PIOVERTWO, RAD2DEG, TAU } from '../../../../../src/core/constants'
-import { deg, normalizeAngle } from '../../../../../src/math/units/angle'
-// oxfmt-ignore
-import { computeLocalSolarEclipseViewGeometry, computeLocalViewDiskPair, buildLocalViewHorizonGeometry, computeGreatestDurationCircumstances, computeGreatestEclipseCircumstances, computeLocalSolarEclipseCircumstances, findLocalContactRoots, findLocalMaximumTime, listLocalSolarEclipses, type LocalFundamentalState, type LocalSolarEclipseCircumstancesOptions, type LocalSolarEclipseEvent, type LocalSolarEclipseViewOptions, type LocalSolarEclipseCircumstances, } from '../../../../../src/astronomy/events/eclipse/solar/local'
 import { sunMoonPosition, sunMoonPositionAround } from '../../../../../src/astronomy/events/eclipse/eclipse'
+import {
+	computeLocalSolarEclipseViewGeometry,
+	computeLocalViewDiskPair,
+	buildLocalViewHorizonGeometry,
+	computeGreatestDurationCircumstances,
+	computeGreatestEclipseCircumstances,
+	computeLocalSolarEclipseCircumstances,
+	findLocalContactRoots,
+	findLocalMaximumTime,
+	listLocalSolarEclipses,
+	type LocalFundamentalState,
+	type LocalSolarEclipseCircumstancesOptions,
+	type LocalSolarEclipseEvent,
+	type LocalSolarEclipseViewOptions,
+	type LocalSolarEclipseCircumstances,
+} from '../../../../../src/astronomy/events/eclipse/solar/local'
+import { computePolynomialBesselianElements, refineSolarEclipse, type PolynomialBesselianElements } from '../../../../../src/astronomy/events/eclipse/solar/map'
 import { timeToDate, timeYMD, timeYMDHMS, Timescale, toJulianDay, type Time } from '../../../../../src/astronomy/time/time'
+import { ASEC2RAD, PI, PIOVERFOUR, PIOVERTWO, RAD2DEG, TAU } from '../../../../../src/core/constants'
 import { sphericalSeparation } from '../../../../../src/math/numerical/geometry'
+import { deg, normalizeAngle } from '../../../../../src/math/units/angle'
 
 function viewOptions(overrides: Partial<LocalSolarEclipseViewOptions> = {}): LocalSolarEclipseViewOptions {
 	return { width: 450, height: 160, selectedEvent: 'MAX', orientationMode: 'zenith', solarRadiusPx: 34, includeGhostDisks: true, includeHorizon: true, horizonBandPaddingPx: 4, ...overrides }

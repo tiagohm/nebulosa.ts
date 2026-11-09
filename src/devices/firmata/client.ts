@@ -10,8 +10,24 @@ import { encodeMultiStepperConfig, encodeMultiStepperMoveTo, encodeMultiStepperS
 import { encodeTwoWireConfig, encodeTwoWireReadWrite } from './codecs/twowire'
 import { FirmataFsm, FirmataParser, WAITING_FOR_MESSAGE_STATE } from './parser'
 import * as Firmata from './protocol'
-// oxfmt-ignore
-import { type AnalogMapping, type Board, DEFAULT_ONE_WIRE_COMMAND_OPTIONS, type DhtModel, type FirmataClientHandler, type OneWireCommandOptions, type OneWirePowerMode, type OneWireSearchMode, type Pin, PinMode, type SerialPort, type StepperConfig, type Transport, type TwoWireAddressMode, type TwoWireAutoRestartMode, type TwoWireOperationMode } from './types'
+import {
+	type AnalogMapping,
+	type Board,
+	DEFAULT_ONE_WIRE_COMMAND_OPTIONS,
+	type DhtModel,
+	type FirmataClientHandler,
+	type OneWireCommandOptions,
+	type OneWirePowerMode,
+	type OneWireSearchMode,
+	type Pin,
+	PinMode,
+	type SerialPort,
+	type StepperConfig,
+	type Transport,
+	type TwoWireAddressMode,
+	type TwoWireAutoRestartMode,
+	type TwoWireOperationMode,
+} from './types'
 
 // Firmata command client: owns board metadata, handshake, transport writes and bus/session
 // state. Codec modules build outgoing messages; this class preserves the public method API.

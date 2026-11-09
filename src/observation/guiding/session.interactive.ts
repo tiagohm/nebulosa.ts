@@ -11,7 +11,6 @@ import type { GuidingCalibrationContext, GuidingCalibrationRecord } from './cali
 import type { GuidePulseAdmission, GuiderClient, GuiderClientConnectOptions, GuiderClientHandler, GuidingCalibrationRestore } from './client'
 import { type DitherPhase, type DitherRequest, type DitherResult, settleOnAbort } from './ditherer'
 import type { GuiderState, GuidingEvent } from './events'
-// oxfmt-ignore
 import { DEFAULT_GUIDING_CLOCK, type GuidingInterruptionKind, GuidingInterruptionHistory, type GuidingSettle, GuidingSettleListeners, type GuidingStartOptions, guidingSettleWaitTimeout, waitForGuidingSettle } from './session'
 
 // Interactive guiding over the local `GuiderClient` (`InteractiveGuidingSession`): one long-lived session that begins

@@ -14,10 +14,26 @@ import { type Image, type ImageRawPrecision, type ImageRawType, makeImageRawType
 import type { DetectedStar } from '../stars/detector'
 import type { SigmaClipCenterMethod, SigmaClipDispersionMethod } from './computation'
 import { createDrizzleAccumulator, depositDrizzle, type DrizzleAccumulator, drizzleNormalization, drizzleOverlap, prepareDrizzleFootprint } from './drizzle'
-// oxfmt-ignore
-import { applyGlobalNormalizationInPlace, applyLocalNormalizationInPlace, broadcastNormalizationPlanes, DEFAULT_LOCAL_NORMALIZATION_OPTIONS, type FrameNormalizationSummary, fitLocalNormalizationRaw, type GlobalNormalizationMode, isLocalNormalizationFallback, type LocalNormalizationFallbackReason, type LocalNormalizationModel, type LocalNormalizationOptions, localNormalizationFailureReason, localNormalizationSummary, MIN_GLOBAL_NORMALIZATION_SAMPLES, type NormalizationColorMode, resolveLocalNormalizationOptions, solveGlobalNormalizationPlanes } from './normalization'
+import {
+	applyGlobalNormalizationInPlace,
+	applyLocalNormalizationInPlace,
+	broadcastNormalizationPlanes,
+	DEFAULT_LOCAL_NORMALIZATION_OPTIONS,
+	type FrameNormalizationSummary,
+	fitLocalNormalizationRaw,
+	type GlobalNormalizationMode,
+	isLocalNormalizationFallback,
+	type LocalNormalizationFallbackReason,
+	type LocalNormalizationModel,
+	type LocalNormalizationOptions,
+	localNormalizationFailureReason,
+	localNormalizationSummary,
+	MIN_GLOBAL_NORMALIZATION_SAMPLES,
+	type NormalizationColorMode,
+	resolveLocalNormalizationOptions,
+	solveGlobalNormalizationPlanes,
+} from './normalization'
 import { type ImageInterpolationMode, type ImageRegistrationFailureReason, type ImageRegistrationSuccess, registerImage, registerStars, toAffineMatrix, warpImage } from './registration'
-// oxfmt-ignore
 import { accumulateSamples, combineStrip, coverageBounds, coverageThreshold as countThreshold, createCombinationScratch, DEFAULT_COMBINATION_PARAMETERS, finalizeOnlineSamples, frameWeight, isOnlineCombinationMethod, resolveCombinationParameters } from './stacking.combination'
 import { measureSubframeQuality, type SubframeQualityMetrics } from './subframe.selector'
 

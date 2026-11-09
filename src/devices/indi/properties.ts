@@ -1,7 +1,29 @@
 import type { IndiClientHandler } from './client'
 import { CLIENT, type Client, type Device } from './device'
-// oxfmt-ignore
-import type { DefBlobVector, DefLight, DefLightVector, DefNumber, DefNumberVector, DefSwitch, DefSwitchVector, DefText, DefTextVector, DefVector, DelProperty, Message, PropertyPermission, PropertyState, SetBlobVector, SetLightVector, SetNumberVector, SetSwitchVector, SetTextVector, SetVector, SwitchRule, VectorType } from './types'
+import type {
+	DefBlobVector,
+	DefLight,
+	DefLightVector,
+	DefNumber,
+	DefNumberVector,
+	DefSwitch,
+	DefSwitchVector,
+	DefText,
+	DefTextVector,
+	DefVector,
+	DelProperty,
+	Message,
+	PropertyPermission,
+	PropertyState,
+	SetBlobVector,
+	SetLightVector,
+	SetNumberVector,
+	SetSwitchVector,
+	SetTextVector,
+	SetVector,
+	SwitchRule,
+	VectorType,
+} from './types'
 
 // Registry of the raw INDI property vectors of every device a client reports, whether or not a device
 // manager supports its type. As an IndiClientHandler it consumes def*/set* vectors, delProperty, messages,

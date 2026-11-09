@@ -1,14 +1,38 @@
 import { expect, test, describe } from 'bun:test'
 import { nearestSolarEclipse, type SolarEclipse, type SolarEclipseType } from '../../../../../src/astronomy/bodies/sun'
-import { deg, parseAngle, type Angle } from '../../../../../src/math/units/angle'
-// oxfmt-ignore
-import { BRANCH_MAX_DRAWABLE_GAP, centralAxisIntersectsEarth, computePolynomialBesselianElements, computeRiseSetCurves, computeSolarEclipseMapGeometry, evaluateBesselian, findCentralLineExtremePoint, findCircleIntersections, findCurvePoints, findEclipseCurvePoint, findMaximumPoint, findPenumbraContactPoints, intermediateGreatCircle, projectClosestEarthLimbPoint, projectFundamentalPoint, solarAltitudeAtPoint, solarEclipseMapToSvgPaths, splitAtMaxAbsLatitude, splitCentralLineByKind, splitDisconnectedPolylines, type SolarEclipseGeoBranch, type SolarEclipseGeoPoint, type PolynomialBesselianElements, type SolarEclipseMapGeometry } from '../../../../../src/astronomy/events/eclipse/solar/map'
 import { eraGst06a } from '../../../../../src/astronomy/coordinates/erfa/erfa'
 import { DELTA_T_LONGITUDE_FACTOR, EARTH_E2, earthLimbExtremes, earthLimbOmega, sunMoonPosition, type SunMoonPosition } from '../../../../../src/astronomy/events/eclipse/eclipse'
+import {
+	BRANCH_MAX_DRAWABLE_GAP,
+	centralAxisIntersectsEarth,
+	computePolynomialBesselianElements,
+	computeRiseSetCurves,
+	computeSolarEclipseMapGeometry,
+	evaluateBesselian,
+	findCentralLineExtremePoint,
+	findCircleIntersections,
+	findCurvePoints,
+	findEclipseCurvePoint,
+	findMaximumPoint,
+	findPenumbraContactPoints,
+	intermediateGreatCircle,
+	projectClosestEarthLimbPoint,
+	projectFundamentalPoint,
+	solarAltitudeAtPoint,
+	solarEclipseMapToSvgPaths,
+	splitAtMaxAbsLatitude,
+	splitCentralLineByKind,
+	splitDisconnectedPolylines,
+	type SolarEclipseGeoBranch,
+	type SolarEclipseGeoPoint,
+	type PolynomialBesselianElements,
+	type SolarEclipseMapGeometry,
+} from '../../../../../src/astronomy/events/eclipse/solar/map'
 import { PlateCarree, type ProjectionOptions } from '../../../../../src/astronomy/projections/projection'
 import { time, Timescale, timeSubtract, timeYMD, toJulianDay } from '../../../../../src/astronomy/time/time'
 import { DEG2RAD, PI, PIOVERTWO, TAU } from '../../../../../src/core/constants'
 import { sphericalSeparation } from '../../../../../src/math/numerical/geometry'
+import { deg, parseAngle, type Angle } from '../../../../../src/math/units/angle'
 import { catalogBranchRetraces, countKinks, endpointRetraces, geometryFor, interpolateAtJulianDay, limitTangencyResidual, longestProjectedSegment, maxBranchSegment } from '../util'
 
 const JD0 = 2460409.25

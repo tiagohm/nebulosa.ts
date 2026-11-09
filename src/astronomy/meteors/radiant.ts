@@ -1,4 +1,5 @@
 import { PI, PIOVERTWO } from '../../core/constants'
+import { vecX } from '../../math/linear-algebra/vec3'
 import { brentMinimize } from '../../math/numerical/optimization'
 import { deg, normalizeAngle } from '../../math/units/angle'
 import { equatorialFromJ2000, equatorialToHorizontal } from '../coordinates/coordinate'
@@ -6,9 +7,21 @@ import { riseTransitSet, type RiseTransitSet } from '../events/horizon'
 import { localSiderealTime, type GeographicPosition } from '../observer/location'
 import { timeShift, timeSubtract, timeToDate, type Time } from '../time/time'
 import { meteorSolarLongitude, meteorSolarLongitudeDelta, timeAtMeteorSolarLongitude } from './solar'
-// oxfmt-ignore
-import type { MeteorComputationContext, MeteorHorizontalRadiant, MeteorRadiant, MeteorRadiantMaximumAltitude, MeteorRadiantMaximumAltitudeOptions, MeteorRadiantOptions, MeteorRadiantPathPoint, MeteorRadiantResult, MeteorRadiantTimePathOptions, MeteorRadiantVisibility, MeteorShowerSolution, TimedMeteorRadiantPathPoint, TimedMeteorRadiantPathSegment } from './types'
-import { vecX } from '../../math/linear-algebra/vec3'
+import type {
+	MeteorComputationContext,
+	MeteorHorizontalRadiant,
+	MeteorRadiant,
+	MeteorRadiantMaximumAltitude,
+	MeteorRadiantMaximumAltitudeOptions,
+	MeteorRadiantOptions,
+	MeteorRadiantPathPoint,
+	MeteorRadiantResult,
+	MeteorRadiantTimePathOptions,
+	MeteorRadiantVisibility,
+	MeteorShowerSolution,
+	TimedMeteorRadiantPathPoint,
+	TimedMeteorRadiantPathSegment,
+} from './types'
 
 // Radiant evaluation in the catalog's geocentric equatorial J2000 frame and its local reductions.
 // Drift is applied only with its declared unit basis, RA is wrapped after extrapolation, and a

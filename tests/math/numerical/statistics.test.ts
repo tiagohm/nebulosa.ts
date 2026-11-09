@@ -1,7 +1,28 @@
 import { expect, test } from 'bun:test'
 import { TAU } from '../../../src/core/constants'
-// oxfmt-ignore
-import { Histogram, chiSquareCdf, chiSquareQuantile, erfc, fDistributionSurvival, geometricMeanOf, geometricMedian, logGamma, maxOf, meanOf, medianAbsoluteDeviationOf, medianBySelectionOf, medianOf, minOf, pearsonCorrelationOf, percentileBySelectionOf, percentileOf, regularizedGammaP, regularizedIncompleteBeta, rmsOf, standardDeviationOf } from '../../../src/math/numerical/statistics'
+import {
+	Histogram,
+	chiSquareCdf,
+	chiSquareQuantile,
+	erfc,
+	fDistributionSurvival,
+	geometricMeanOf,
+	geometricMedian,
+	logGamma,
+	maxOf,
+	meanOf,
+	medianAbsoluteDeviationOf,
+	medianBySelectionOf,
+	medianOf,
+	minOf,
+	pearsonCorrelationOf,
+	percentileBySelectionOf,
+	percentileOf,
+	regularizedGammaP,
+	regularizedIncompleteBeta,
+	rmsOf,
+	standardDeviationOf,
+} from '../../../src/math/numerical/statistics'
 
 test('erfc keeps relative accuracy from the core into the far tail', () => {
 	// mpmath 1.3.0 erfc at 30 digits (SciPy 1.16.2 special.erfc agrees).

@@ -11,8 +11,19 @@ import { readImageFromBuffer } from '../../../src/imaging/model/image'
 import { detectStars } from '../../../src/imaging/stars/detector'
 import { mulberry32, type Random } from '../../../src/math/numerical/random'
 import { medianOf } from '../../../src/math/numerical/statistics'
-// oxfmt-ignore
-import { aggregateBacklashRuns, BacklashCalibration, backlashCompensationFromCalibration, fitBacklashBreakpoint, type BacklashCalibrationCommand, type BacklashCalibrationOptions, type BacklashCalibrationResult, type BacklashFitOptions, type BacklashProbePoint, type BacklashRunResult, type FocusAxisDirection } from '../../../src/observation/focus/backlash.calibration'
+import {
+	aggregateBacklashRuns,
+	BacklashCalibration,
+	backlashCompensationFromCalibration,
+	fitBacklashBreakpoint,
+	type BacklashCalibrationCommand,
+	type BacklashCalibrationOptions,
+	type BacklashCalibrationResult,
+	type BacklashFitOptions,
+	type BacklashProbePoint,
+	type BacklashRunResult,
+	type FocusAxisDirection,
+} from '../../../src/observation/focus/backlash.calibration'
 import { CameraFrameReceiver, isTimeConsumingTestSkipped, waitUntil } from '../../util'
 
 // Deterministic numerical and state-machine coverage for bidirectional focuser-backlash calibration.

@@ -1,7 +1,4 @@
 import { DAYSEC, DEG2RAD, PI, PIOVERTWO, RAD2DEG, TAU } from '../../../../core/constants'
-import { type Angle, normalizeAngle, normalizePI, unwrapAngles } from '../../../../math/units/angle'
-// oxfmt-ignore
-import { bisectRoot, derivativeEarthLimbOmega, earthLimbCircleIntersections, earthLimbExtremes, earthLimbOmega, earthLimbPoint, earthLimbSignedDistance, F, GEOMETRY_TANGENCY_EPSILON, geoPolylinesToSvgPathData, hourAngleFromLongitude, INV_F, longitudeFromHourAngle, normalizeLongitude, refineRoot, type EclipseGeoBranch, type EclipseGeoCurve, type EclipseGeoPoint, type SunMoonPosition, type SunMoonProvider } from '../eclipse'
 import type { Writable } from '../../../../core/types'
 import { NumberComparator } from '../../../../core/util'
 import { vecDot, vecLength, vecMinus, vecNormalizeMut } from '../../../../math/linear-algebra/vec3'
@@ -9,10 +6,33 @@ import { sphericalInterpolate, sphericalSeparation, type Point } from '../../../
 import { clamp, type NumberArray } from '../../../../math/numerical/math'
 import { brentMinimize } from '../../../../math/numerical/optimization'
 import { polynomialRegression } from '../../../../math/numerical/regression'
+import { type Angle, normalizeAngle, normalizePI, unwrapAngles } from '../../../../math/units/angle'
 import type { SolarEclipse } from '../../../bodies/sun'
 import { eraGst06a, eraS2p } from '../../../coordinates/erfa/erfa'
 import type { CylindricalProjection, ProjectionOptions } from '../../../projections/projection'
 import { timeAtJulianDay, timeShift, timeSubtract, toJulianDay, tt, type Time } from '../../../time/time'
+import {
+	bisectRoot,
+	derivativeEarthLimbOmega,
+	earthLimbCircleIntersections,
+	earthLimbExtremes,
+	earthLimbOmega,
+	earthLimbPoint,
+	earthLimbSignedDistance,
+	F,
+	GEOMETRY_TANGENCY_EPSILON,
+	geoPolylinesToSvgPathData,
+	hourAngleFromLongitude,
+	INV_F,
+	longitudeFromHourAngle,
+	normalizeLongitude,
+	refineRoot,
+	type EclipseGeoBranch,
+	type EclipseGeoCurve,
+	type EclipseGeoPoint,
+	type SunMoonPosition,
+	type SunMoonProvider,
+} from '../eclipse'
 
 // Solar eclipse Besselian map geometry from caller-supplied Sun and Moon positions. Complementary to
 // nearestSolarEclipse, which only classifies a nearby eclipse; this module does not search for one.

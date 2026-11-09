@@ -6,8 +6,27 @@ import { bodyFixedMatrix, JUPITER_ROTATION, JUPITER_SYSTEM_II } from '../bodies/
 import { GALILEAN_MOONS, GALILEAN_RADIUS_AU, type GalileanMoon, type JovianBody, type JovianEphemeris } from '../ephemeris/jovian'
 import type { Time } from '../time/time'
 import { jupiterCentralMeridian } from './jupiter'
-// oxfmt-ignore
-import { type PlanetDiskMargins, type PlanetEclipseMargins, type PlanetModel, type PlanetMoonMargins, planetMoonMargins, type PlanetShadowMargins, type PlanetShadowPoint, planetShadowPoint, planetSurfaceCosine, type PlanetSystemState, planetSystemState, type SatelliteDiskState, satelliteDiskState, type SatelliteEclipseState, satelliteEclipseState, type SkyBasis, skyBasis, skyOffset, skyPositionAngle } from './satellites.geometry'
+import {
+	type PlanetDiskMargins,
+	type PlanetEclipseMargins,
+	type PlanetModel,
+	type PlanetMoonMargins,
+	planetMoonMargins,
+	type PlanetShadowMargins,
+	type PlanetShadowPoint,
+	planetShadowPoint,
+	planetSurfaceCosine,
+	type PlanetSystemState,
+	planetSystemState,
+	type SatelliteDiskState,
+	satelliteDiskState,
+	type SatelliteEclipseState,
+	satelliteEclipseState,
+	type SkyBasis,
+	skyBasis,
+	skyOffset,
+	skyPositionAngle,
+} from './satellites.geometry'
 
 // Apparent geometry of Jupiter and its Galilean satellites for a geocentric observer: the oblate
 // planetary disk, the satellites' disks, the satellites' shadows on Jupiter, and Jupiter's shadow on the
