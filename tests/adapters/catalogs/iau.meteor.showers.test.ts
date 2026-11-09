@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { normalizeIauMeteorShowerCatalog, parseIauMeteorShowerCatalog } from '../../../src/adapters/catalogs/iau.meteor.showers'
+import { IAU_METEOR_SHOWER_CATALOG_URL, normalizeIauMeteorShowerCatalog, parseIauMeteorShowerCatalog } from '../../../src/adapters/catalogs/iau.meteor.showers'
 import { meteorRadiantPathBetween } from '../../../src/astronomy/meteors/radiant'
 import { meteorSolarLongitude, timeAtMeteorSolarLongitude } from '../../../src/astronomy/meteors/solar'
 import { meteorShowerState } from '../../../src/astronomy/meteors/state'
@@ -147,4 +147,60 @@ test('normalized IAU bounds and daily drift feed time paths and tri-state shower
 	expect(meteorShowerState({ ...solution, activityInterval: undefined }, context, options).active).toBeUndefined()
 	const future = timeAtMeteorSolarLongitude(2017, solution.referenceSolarLongitude!, { step: 7 })
 	expect(meteorShowerState(solution, { time: future, solarLongitude: meteorSolarLongitude(future) }, options).active).toBe(false)
+})
+
+test('reads slash suffixes above 12 as survey year ranges and keeps month suffixes as one year', () => {
+	const labels = ['2010/13', '1968/69', '2002/06', '1992/09', '2024/04']
+	const catalog = parseIauMeteorShowerCatalog({ source: 'IAU Meteor Data Center', version: 'survey-labels', data: [{ solution: labels.map((activity, index) => ({ AdNo: String(index), activity })) }] })
+	const activities = normalizeIauMeteorShowerCatalog(catalog).showers[0].solutions.map((solution) => solution.activity)
+
+	expect(activities).toEqual([
+		{ kind: 'yearSpecific', source: '2010/13', years: { start: 2010, end: 2013 } },
+		{ kind: 'yearSpecific', source: '1968/69', years: { start: 1968, end: 1969 } },
+		{ kind: 'yearSpecific', source: '2002/06', years: { start: 2002, end: 2002 } },
+		{ kind: 'yearSpecific', source: '1992/09', years: { start: 1992, end: 1992 } },
+		{ kind: 'yearSpecific', source: '2024/04', years: { start: 2024, end: 2024 } },
+	])
+})
+
+test('normalizes records shaped as the published MDC document and keeps the catalog count and url', () => {
+	// Shape of streamfulldata.json version 2026-11-03: zero-padded IAU numbers, status text with a
+	// leading space, "-" for an unnumbered shower, explicit nulls and reference arrays with nulls.
+	const catalog = parseIauMeteorShowerCatalog({
+		source: 'IAU Meteor Data Center',
+		version: '2026-11-03',
+		count: 2,
+		fields: {},
+		data: [
+			{
+				IAUNo: '00004',
+				Code: 'GEM',
+				s: ' 1',
+				Name: 'Geminids',
+				ProvName: '-',
+				solution: [
+					{ AdNo: '000', 'sub.date': '2003-mm-dd', s: ' 1', activity: 'annual', LoSb: null, LoSe: null, LoS: 261.6, Ra: 112.9, De: 32.3, dRa: null, dDe: null, Vg: 34.6, N: 51, 'Parent body': '', Ote: 'P', References: ['http://adsabs.harvard.edu/abs/2003MNRAS.344..665J', 'Jopek et al., 2003'] },
+					{ AdNo: '008', s: ' 1', activity: 'annual', LoSb: 225, LoSe: 273, LoS: 261.6, Ra: 113.1, De: 32.4, dRa: 1.04, dDe: -0.16, N: 104490, Ote: 'T', References: [null, 'CAMS'] },
+				],
+			},
+			{ IAUNo: '-', Code: '', s: ' 0', Name: 'M2023-D1', ProvName: 'M2023-D1', solution: [{ AdNo: '000', s: ' 0', activity: '2023', LoSb: null, LoSe: null, LoS: 10, Ra: null, De: null }] },
+		],
+	})
+	const { metadata, showers } = normalizeIauMeteorShowerCatalog(catalog, 'https://mirror.example/streamfulldata.json')
+
+	expect(metadata).toEqual({ source: 'IAU Meteor Data Center', version: '2026-11-03', count: 2, url: 'https://mirror.example/streamfulldata.json' })
+	expect(normalizeIauMeteorShowerCatalog(catalog).metadata.url).toBe(IAU_METEOR_SHOWER_CATALOG_URL)
+	expect(showers[0].number).toBe(4)
+	expect(showers[0].status).toBe('established')
+	expect(showers[0].provisionalName).toBe('-')
+	expect(showers[0].solutions[0].activityInterval).toBeUndefined()
+	expect(showers[0].solutions[0].radiantDrift).toBeUndefined()
+	expect(showers[0].solutions[0].parentBody).toBeUndefined()
+	expect(showers[0].solutions[0].reference).toBe('http://adsabs.harvard.edu/abs/2003MNRAS.344..665J\nJopek et al., 2003')
+	expect(showers[0].solutions[1].reference).toBe('CAMS')
+	expect(showers[0].solutions[1].memberCount).toBe(104490)
+	expect(showers[1].number).toBeUndefined()
+	expect(showers[1].code).toBeUndefined()
+	expect(showers[1].status).toBe('working')
+	expect(showers[1].solutions[0].rightAscension).toBeUndefined()
 })

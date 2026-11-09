@@ -20,7 +20,9 @@ export interface MeteorCatalogMetadata {
 	readonly source: string
 	// Source version or release identifier.
 	readonly version?: string
-	// Stable source URL, when supplied by the adapter.
+	// Record count the source publishes for itself, when it does.
+	readonly count?: number
+	// URL the catalog was read from, when supplied by the adapter.
 	readonly url?: string
 	// Instant at which a remote source was retrieved.
 	readonly retrievedAt?: Date
@@ -603,6 +605,59 @@ export interface MeteorObservingWindowOptions extends TimeSearchOptions {
 	readonly altitudeExponent?: number
 	// Optional provider for explicit, time-varying rate corrections.
 	readonly rateCorrection?: (time: Time, conditions: MeteorObservingConditions) => number
+}
+
+// Restrictions and numerical options of the profile-independent geometric observing planner.
+export interface MeteorGeometricObservingWindowOptions extends TimeSearchOptions {
+	// Permit a dated observation or outburst to be planned outside its catalog years.
+	readonly extrapolateYearLimitedActivity?: boolean
+	// Activity support used in place of the solution activityInterval, such as a separately sourced
+	// visual activity period. It is never merged with the catalog interval.
+	readonly support?: MeteorSolarLongitudeInterval
+	// Minimum geometric radiant altitude in radians.
+	readonly minimumRadiantAltitude?: Angle
+	// Maximum geometric solar altitude for darkness, in radians.
+	readonly maximumSolarAltitude?: Angle
+	// Optional minimum Moon-radiant separation in radians, applied while the Moon is above the horizon.
+	readonly minimumMoonRadiantSeparation?: Angle
+	// Optional maximum lunar illumination in [0, 1], applied while the Moon is above the horizon.
+	readonly maximumMoonIllumination?: number
+	// Optional maximum geometric lunar altitude in radians.
+	readonly maximumMoonAltitude?: Angle
+	// Minimum duration in hours.
+	readonly minimumDurationHours?: number
+}
+
+// Whether a geometric window lies inside a known activity support or only satisfies the geometry
+// because no support was published.
+export type MeteorGeometricWindowSupport = 'activity' | 'geometryOnly'
+
+// A continuous interval returned by the geometric planner. It carries no rate, ZHR or count: those
+// require an explicit activity profile.
+export interface MeteorGeometricObservingWindow {
+	// Window start.
+	readonly start: Time
+	// Window end.
+	readonly end: Time
+	// Duration in hours.
+	readonly durationHours: number
+	// Instant of the highest geometric radiant altitude inside the window.
+	readonly bestTime: Time
+	// Geometric radiant altitude at bestTime, in radians.
+	readonly maximumRadiantAltitude: Angle
+	// Integral of the sine of the geometric radiant altitude over the window, in hours. It is a
+	// purely geometric opportunity measure, never a meteor count.
+	readonly radiantSineHours: number
+	// Geometric solar altitude at bestTime, in radians.
+	readonly sunAltitudeAtBest: Angle
+	// Geometric lunar altitude at bestTime, in radians.
+	readonly moonAltitudeAtBest: Angle
+	// Lunar illuminated fraction at bestTime, in [0, 1].
+	readonly moonIlluminationAtBest: number
+	// Geocentric Moon-radiant separation at bestTime, in radians.
+	readonly moonRadiantSeparationAtBest: Angle
+	// Whether the window is inside a known activity support.
+	readonly support: MeteorGeometricWindowSupport
 }
 
 // One magnitude class and its observed meteor count.

@@ -6,8 +6,8 @@ import { kilometerPerSecond } from '../../math/units/velocity'
 // streamfulldata JSON document; normalization converts published degrees and km/s to the project's
 // radians and AU/day units while preserving source text, status integers, solution order and absence.
 
-// Official IAU MDC stream catalog endpoint.
-export const IAU_METEOR_SHOWER_CATALOG_URL = 'https://ceresiaumdc.ta3.sk/downloads/lists_shw_data/streamfulldata.json'
+// Official IAU MDC stream catalog endpoint, as linked from https://iaumdc.astro.sk/downloads.
+export const IAU_METEOR_SHOWER_CATALOG_URL = 'https://iaumdc.astro.sk/downloads/lists_shw_data/streamfulldata.json'
 
 // Parsed, structurally validated catalog document. Unknown source properties are intentionally not
 // copied into the normalized domain model.
@@ -68,8 +68,9 @@ export function parseIauMeteorShowerCatalog(input: unknown): IauMeteorShowerCata
 }
 
 // Normalize every IAU record into the reusable meteor-shower domain model. No activity profile is
-// inferred from MDC dates and no missing value is replaced with zero.
-export function normalizeIauMeteorShowerCatalog(input: IauMeteorShowerCatalog): { readonly metadata: MeteorCatalogMetadata; readonly showers: readonly MeteorShower[] } {
+// inferred from MDC dates and no missing value is replaced with zero. url names where the document
+// was read from and defaults to the official endpoint.
+export function normalizeIauMeteorShowerCatalog(input: IauMeteorShowerCatalog, url: string = IAU_METEOR_SHOWER_CATALOG_URL): { readonly metadata: MeteorCatalogMetadata; readonly showers: readonly MeteorShower[] } {
 	const showers = input.data.map((record) => {
 		const recordStatus = optionalNumber(record.s)
 		const solutions = (record.solution as readonly IauMeteorShowerRecord[]).map((raw) => normalizeSolution(raw, record, recordStatus))
@@ -89,7 +90,8 @@ export function normalizeIauMeteorShowerCatalog(input: IauMeteorShowerCatalog): 
 		metadata: {
 			source: input.source,
 			version: input.version,
-			url: IAU_METEOR_SHOWER_CATALOG_URL,
+			count: input.count,
+			url,
 		},
 		showers,
 	}
@@ -117,10 +119,11 @@ export async function fetchIauMeteorShowerCatalog(options: { readonly url?: stri
 	signal?.addEventListener('abort', abort, { once: true })
 
 	try {
-		const response = await fetch(options.url ?? IAU_METEOR_SHOWER_CATALOG_URL, { signal: controller.signal })
+		const url = options.url ?? IAU_METEOR_SHOWER_CATALOG_URL
+		const response = await fetch(url, { signal: controller.signal })
 		if (!response.ok) throw new Error(`IAU meteor shower catalog request failed with HTTP ${response.status}`)
 		const parsed = parseIauMeteorShowerCatalog(await response.json())
-		const normalized = normalizeIauMeteorShowerCatalog(parsed)
+		const normalized = normalizeIauMeteorShowerCatalog(parsed, url)
 		return {
 			metadata: { ...normalized.metadata, retrievedAt: new Date() },
 			showers: normalized.showers,
@@ -212,12 +215,14 @@ function activityOf(source: string): MeteorShowerActivity {
 	return { kind: 'unknown', source }
 }
 
-const SINGLE_YEAR_PATTERN = /^(\d{4})(?:\/\d{2})?$/
-const SHORT_RANGE_YEAR_PATTERN = /^(\d{4})-(\d{2})$/
+const SINGLE_YEAR_PATTERN = /^(\d{4})(?:\/(?:0[1-9]|1[0-2]))?$/
+const SHORT_RANGE_YEAR_PATTERN = /^(\d{4})[-/](\d{2})$/
 const FULL_RANGE_YEAR_PATTERN = /^(\d{4})-(\d{4})$/
 
-// Parses supported MDC single-year and inclusive multi-year labels. Month suffixes remain only in
-// source because solar-longitude bounds provide the astronomical within-year activity support.
+// Parses supported MDC single-year and inclusive multi-year labels. A slash suffix from 01 to 12 is a
+// month, as the MDC field dictionary documents (1989/12, observed in December), and remains only in
+// source because solar-longitude bounds provide the astronomical within-year activity support. A slash
+// suffix above 12 cannot be a month, so 2010/13 is the inclusive range 2010-2013 of a survey.
 function activityYears(value: string): MeteorShowerActivityYearRange | undefined {
 	const single = SINGLE_YEAR_PATTERN.exec(value)
 	if (single !== null) {

@@ -1,11 +1,12 @@
 import { expect, test } from 'bun:test'
-import { meteorObservingWindows } from '../../../src/astronomy/meteors/planner'
+import { meteorGeometricObservingWindows, meteorObservingWindows } from '../../../src/astronomy/meteors/planner'
 import { meteorSolarLongitude, timeAtMeteorSolarLongitude } from '../../../src/astronomy/meteors/solar'
 import { meteorShowerComputationContext, meteorShowerState } from '../../../src/astronomy/meteors/state'
 import type { MeteorActivityProfile, MeteorShowerSolution } from '../../../src/astronomy/meteors/types'
+import { Ellipsoid, geodeticLocation } from '../../../src/astronomy/observer/location'
 import { timeShift, timeSubtract, timeToDate, timeYMDHMS, Timescale } from '../../../src/astronomy/time/time'
 import { deg } from '../../../src/math/units/angle'
-import { BASE_SOLUTION, EXPONENTIAL_PROFILE, OBSERVER, PLANNER_END, PLANNER_MULTI_PROFILE, PLANNER_START, SITE_EPOCH, SITE_EPOCH_END, SOLAR_DRIFT_SOLUTION, ZERO_WIDTH_INTERVAL } from './util'
+import { BASE_SOLUTION, EXPONENTIAL_PROFILE, OBSERVER, PLANNER_END, PLANNER_MULTI_PROFILE, PLANNER_START, SITE_EPOCH, SITE_EPOCH_END, SOLAR_DRIFT_SOLUTION, TEST_INTERVAL, ZERO_WIDTH_INTERVAL } from './util'
 
 const DAY_OPTIONS = { maximumSolarAltitude: deg(90), minimumRadiantAltitude: 0, step: 1 / 48 } as const
 
@@ -216,4 +217,82 @@ test('planner honors an inclusive catalog year range', () => {
 	expect(hasWindows).toEqual([false, true, true, true, false])
 	const start = timeAtMeteorSolarLongitude(2017, BASE_SOLUTION.referenceSolarLongitude, { step: 7 })
 	expect(meteorObservingWindows(yearSpecific, EXPONENTIAL_PROFILE, OBSERVER, start, timeShift(start, 2 / 24), { maximumSolarAltitude: deg(90), minimumRadiantAltitude: deg(-90), extrapolateYearLimitedActivity: true, step: 1 / 48 })).toHaveLength(1)
+})
+
+test('geometric windows match the profile windows where the profile is positive over its support', () => {
+	const nightStart = timeYMDHMS(2026, 6, 29, 18, 0, 0, Timescale.UTC)
+	const nightEnd = timeYMDHMS(2026, 6, 30, 12, 0, 0, Timescale.UTC)
+	const options = { step: 1 / 48, minimumRadiantAltitude: deg(10) } as const
+	const profiled = meteorObservingWindows(BASE_SOLUTION, EXPONENTIAL_PROFILE, OBSERVER, nightStart, nightEnd, options)
+	const geometric = meteorGeometricObservingWindows(BASE_SOLUTION, OBSERVER, nightStart, nightEnd, options)
+
+	expect(geometric).toHaveLength(profiled.length)
+	expect(geometric.length).toBeGreaterThan(0)
+	const sorted = [...profiled].sort((a, b) => timeSubtract(a.start, b.start))
+	for (let i = 0; i < geometric.length; i++) {
+		expect(timeSubtract(geometric[i].start, sorted[i].start) * 86400).toBeCloseTo(0, 0)
+		expect(timeSubtract(geometric[i].end, sorted[i].end) * 86400).toBeCloseTo(0, 0)
+		expect(geometric[i].support).toBe('activity')
+		expect(geometric[i].sunAltitudeAtBest).toBeLessThanOrEqual(deg(-18) + 1e-5)
+		expect(geometric[i].maximumRadiantAltitude).toBeGreaterThanOrEqual(deg(10) - 1e-5)
+		expect(geometric[i].radiantSineHours).toBeGreaterThan(0)
+		expect(geometric[i].radiantSineHours).toBeLessThanOrEqual(geometric[i].durationHours)
+		expect(geometric[i].moonIlluminationAtBest).toBeGreaterThanOrEqual(0)
+		expect(geometric[i].moonRadiantSeparationAtBest).toBeGreaterThan(0)
+		expect('expectedCount' in geometric[i]).toBe(false)
+	}
+	// Chronological order, never best-first.
+	for (let i = 1; i < geometric.length; i++) expect(timeSubtract(geometric[i].start, geometric[i - 1].end)).toBeGreaterThan(0)
+	// The best instant is the highest radiant: no sample of the window is higher.
+	const best = geometric[0]
+	for (let k = 0; k <= 20; k++) {
+		const time = timeShift(best.start, (timeSubtract(best.end, best.start) * k) / 20)
+		const state = meteorShowerState(BASE_SOLUTION, meteorShowerComputationContext(time, OBSERVER, { includeMoon: false }), { includeMoon: false })
+		expect(state.horizontal!.altitude).toBeLessThanOrEqual(best.maximumRadiantAltitude + 1e-7)
+	}
+})
+
+test('geometric windows need no profile and label windows without a known support', () => {
+	const nightStart = timeYMDHMS(2026, 6, 29, 18, 0, 0, Timescale.UTC)
+	const nightEnd = timeYMDHMS(2026, 6, 30, 12, 0, 0, Timescale.UTC)
+	const unsupported = { ...BASE_SOLUTION, activityInterval: undefined }
+	const geometryOnly = meteorGeometricObservingWindows(unsupported, OBSERVER, nightStart, nightEnd, { minimumRadiantAltitude: deg(10) })
+	expect(geometryOnly.length).toBeGreaterThan(0)
+	for (const window of geometryOnly) expect(window.support).toBe('geometryOnly')
+
+	// A separately sourced support replaces the missing catalog interval and gates the activity.
+	const supported = meteorGeometricObservingWindows(unsupported, OBSERVER, nightStart, nightEnd, { minimumRadiantAltitude: deg(10), support: TEST_INTERVAL })
+	expect(supported.map((window) => window.support)).toEqual(geometryOnly.map(() => 'activity'))
+	expect(meteorGeometricObservingWindows(unsupported, OBSERVER, nightStart, nightEnd, { support: { start: deg(200), end: deg(210) } })).toEqual([])
+})
+
+test('geometric windows are empty for a radiant that never rises, a night without darkness, a dated outburst out of its year, and an empty span', () => {
+	const nightStart = timeYMDHMS(2026, 6, 29, 18, 0, 0, Timescale.UTC)
+	const nightEnd = timeYMDHMS(2026, 6, 30, 12, 0, 0, Timescale.UTC)
+	// Declination +80° never rises at latitude -23.55°.
+	expect(meteorGeometricObservingWindows({ ...BASE_SOLUTION, declination: deg(80) }, OBSERVER, nightStart, nightEnd)).toEqual([])
+	// Midsummer at latitude 78° N has no astronomical darkness.
+	const svalbard = geodeticLocation(deg(15.6), deg(78.2), 0, Ellipsoid.WGS84)
+	expect(meteorGeometricObservingWindows({ ...BASE_SOLUTION, declination: deg(60) }, svalbard, nightStart, nightEnd)).toEqual([])
+	const outburst = { ...BASE_SOLUTION, activity: { kind: 'outburst', source: '2024out', years: { start: 2024, end: 2024 } } } satisfies MeteorShowerSolution
+	expect(meteorGeometricObservingWindows(outburst, OBSERVER, nightStart, nightEnd)).toEqual([])
+	expect(meteorGeometricObservingWindows(outburst, OBSERVER, nightStart, nightEnd, { extrapolateYearLimitedActivity: true }).length).toBeGreaterThan(0)
+	expect(meteorGeometricObservingWindows(BASE_SOLUTION, OBSERVER, nightStart, nightStart)).toEqual([])
+})
+
+test('geometric windows of a narrow support stay inside it over a long search', () => {
+	// A one-day support (October Draconids-like, 194.7°-195.8°) searched over a month with a southern
+	// radiant visible from the site.
+	const narrow = { ...BASE_SOLUTION, activityInterval: { start: deg(194.7), end: deg(195.8) }, referenceSolarLongitude: deg(195.4), rightAscension: deg(300), declination: deg(-30) } satisfies MeteorShowerSolution
+	const start = timeYMDHMS(2026, 9, 25, 0, 0, 0, Timescale.UTC)
+	const end = timeYMDHMS(2026, 10, 25, 0, 0, 0, Timescale.UTC)
+	const windows = meteorGeometricObservingWindows(narrow, OBSERVER, start, end)
+	const supportStart = timeAtMeteorSolarLongitude(2026, deg(194.7), { step: 7 })
+	const supportEnd = timeAtMeteorSolarLongitude(2026, deg(195.8), { step: 7 })
+
+	expect(windows.length).toBeGreaterThan(0)
+	for (const window of windows) {
+		expect(timeSubtract(window.start, supportStart)).toBeGreaterThan(-1e-6)
+		expect(timeSubtract(supportEnd, window.end)).toBeGreaterThan(-1e-6)
+	}
 })

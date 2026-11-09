@@ -123,3 +123,24 @@ test('computation context caches the solar value and retains observer LST', () =
 	expect(context.localSiderealTime).toBe(deg(123))
 	expect(context.solarLongitude).toBe(meteorSolarLongitude(REFERENCE_UTC))
 })
+
+test('an occurrence crossing the new year keeps its reference and maximum after its start', () => {
+	// Quadrantids (IAU 10, CAMS solution 008): activity 271°-294°, reference 283.1°.
+	const quadrantids = { ...BASE_SOLUTION, activityInterval: { start: deg(271), end: deg(294) }, referenceSolarLongitude: deg(283.1) } satisfies MeteorShowerSolution
+	const profile = { type: 'exponential', support: { start: deg(271), end: deg(294) }, solarLongitude: deg(283.15), zhr: 110, slopeBefore: 0.4, slopeAfter: 0.4 } as const
+	const dates = meteorShowerDates(quadrantids, 2025, { profile, step: 7, tolerance: TOLERANCE.time })
+
+	expect(timeToDate(dates.start!).slice(0, 3)).toEqual([2025, 12, 22])
+	expect(timeToDate(dates.reference!).slice(0, 3)).toEqual([2026, 1, 3])
+	expect(timeToDate(dates.maximum!).slice(0, 3)).toEqual([2026, 1, 3])
+	expect(timeToDate(dates.end!).slice(0, 3)).toEqual([2026, 1, 14])
+
+	// A reference published just before the start is the crossing of the same year, not of the next.
+	const early = { ...BASE_SOLUTION, activityInterval: { start: deg(100), end: deg(150) }, referenceSolarLongitude: deg(99) } satisfies MeteorShowerSolution
+	const earlyDates = meteorShowerDates(early, 2025, { step: 7, tolerance: TOLERANCE.time })
+	expect(timeSubtract(earlyDates.start!, earlyDates.reference!)).toBeCloseTo(1, 0)
+
+	// Without an interval the reference stays in the requested year.
+	const referenceOnly = meteorShowerDates({ ...BASE_SOLUTION, activityInterval: undefined, referenceSolarLongitude: deg(283.1) }, 2025, { step: 7, tolerance: TOLERANCE.time })
+	expect(timeToDate(referenceOnly.reference!).slice(0, 3)).toEqual([2025, 1, 3])
+})

@@ -4,15 +4,16 @@ import { deg, normalizeAngle } from '../../math/units/angle'
 import { searchExtrema, searchRoots } from '../events/search'
 import type { GeographicPosition } from '../observer/location'
 import { type Time, timeShift, timeSubtract, timeToDate, utc } from '../time/time'
-import { isMeteorShowerActivityYearLimited, meteorActivityMaximumZhr } from './activity'
+import { isMeteorShowerActive, isMeteorShowerActivityYearLimited, meteorActivityMaximumZhr, meteorShowerActivityYearApplies } from './activity'
 import { meteorSolarLongitudeTimes } from './solar'
 import { meteorShowerComputationContext, meteorShowerState } from './state'
-import type { MeteorActivityProfile, MeteorObservingConditions, MeteorObservingWindow, MeteorObservingWindowOptions, MeteorShowerSolution, MeteorShowerState, MeteorSolarLongitudeInterval } from './types'
+import type { MeteorActivityProfile, MeteorGeometricObservingWindow, MeteorGeometricObservingWindowOptions, MeteorObservingConditions, MeteorObservingWindow, MeteorObservingWindowOptions, MeteorShowerSolution, MeteorShowerState, MeteorSolarLongitudeInterval } from './types'
 
-// Local observing-window planner. It intersects catalog/profile support, solar darkness, radiant
-// altitude and opt-in lunar constraints, refines every detected boundary, evaluates endpoints and
-// orders surviving windows by integrated expected local count. All returned lunar values are tied to
-// their best-time instant through the condition object used during evaluation.
+// Local observing-window planner. It intersects activity support, solar darkness, radiant altitude
+// and opt-in lunar constraints, and refines every detected boundary. The profile planner orders its
+// windows by integrated expected local count, with all returned lunar values tied to their best-time
+// instant through the condition object used during evaluation. The geometric planner needs no
+// activity profile, returns no rate or count, and orders its windows chronologically.
 
 // Plans observing windows for one shower, one explicit activity profile and one observer.
 export function meteorObservingWindows(solution: MeteorShowerSolution, profile: MeteorActivityProfile, observer: GeographicPosition, start: Time, end: Time, options?: MeteorObservingWindowOptions): readonly MeteorObservingWindow[]
@@ -24,11 +25,87 @@ export function meteorObservingWindows(first: MeteorShowerSolution | MeteorActiv
 	if (!(duration > 0)) return []
 	const solution = isSolution(first) ? first : (second as MeteorShowerSolution)
 	const profile = isSolution(first) ? (second as MeteorActivityProfile) : first
-	const step = chooseStep(profile, solution.activityInterval, options.step)
-	const candidates = plannerCandidateIntervals(profile, solution.activity, solution.activityInterval, start, end, step, options)
+	const step = chooseStep([...profileSupports(profile), ...(solution.activityInterval === undefined ? [] : [solution.activityInterval])], options.step)
+	const candidates = plannerCandidateIntervals(profileSupports(profile), solution.activity, solution.activityInterval, start, end, step, options)
 	const windows: MeteorObservingWindow[] = []
 	for (const candidate of candidates) windows.push(...meteorObservingWindowsInInterval(solution, profile, observer, candidate.start, candidate.end, step, options))
 	return windows.sort((a, b) => b.expectedCount - a.expectedCount)
+}
+
+// Plans the geometric observing windows of one shower for one observer without an activity profile:
+// the stretches where the shower is inside its activity support, the Sun is below
+// maximumSolarAltitude, the geometric radiant is above minimumRadiantAltitude, and the opt-in lunar
+// constraints hold. The support is options.support when given, else the catalog activityInterval;
+// without either, the activity cannot be judged, so the windows only satisfy the geometry and are
+// labelled geometryOnly. A dated outburst outside its years yields no windows unless
+// extrapolateYearLimitedActivity is set. Windows carry no ZHR, rate or count and are returned in
+// chronological order; the Sun and Moon at bestTime are evaluated once per window. A non-positive
+// span returns an empty array.
+export function meteorGeometricObservingWindows(solution: MeteorShowerSolution, observer: GeographicPosition, start: Time, end: Time, options: MeteorGeometricObservingWindowOptions = {}): readonly MeteorGeometricObservingWindow[] {
+	if (!(timeSubtract(end, start) > 0)) return []
+	const support = options.support ?? solution.activityInterval
+	const step = chooseStep(support === undefined ? [] : [support], options.step)
+	const candidates = support === undefined ? [{ start, end }] : plannerCandidateIntervals([support], solution.activity, undefined, start, end, step, options)
+	const includeMoon = needsMoon(options)
+	const extrapolate = options.extrapolateYearLimitedActivity === true
+	const windows: MeteorGeometricObservingWindow[] = []
+
+	for (const candidate of candidates) {
+		const evaluate = cachedByTime((time): GeometricEvaluation => {
+			const context = meteorShowerComputationContext(time, observer, { includeHorizontal: true, includeSun: true, includeMoon })
+			const state = meteorShowerState(solution, context, { includeRadiantOfDate: false, includeHorizontal: true, includeSun: true, includeMoon, includeActivity: false, extrapolateYearLimitedActivity: extrapolate })
+			const yearApplies = extrapolate || meteorShowerActivityYearApplies(solution.activity, time)
+			const active = yearApplies && (support === undefined || isMeteorShowerActive(support, context.solarLongitude) === true)
+			return { state, active }
+		})
+
+		const score = (time: Time) => {
+			const evaluation = evaluate(time)
+			return evaluation.active ? constraintMargin(evaluation.state, options) : -1
+		}
+
+		const sineAt = (time: Time) => {
+			const horizontal = evaluate(time).state.horizontal
+			return horizontal === undefined ? 0 : Math.max(0, Math.sin(horizontal.altitude))
+		}
+
+		for (const [left, right] of qualifyingSegments(score, candidate.start, candidate.end, step, options)) {
+			const summary = summarizeRate(sineAt, left, right, step, options.tolerance)
+			const best = meteorShowerState(solution, meteorShowerComputationContext(summary.bestTime, observer, { includeHorizontal: true, includeSun: true, includeMoon: true }), {
+				includeRadiantOfDate: false,
+				includeHorizontal: true,
+				includeSun: true,
+				includeMoon: true,
+				includeActivity: false,
+				extrapolateYearLimitedActivity: extrapolate,
+			})
+			// The window qualified, so the radiant, Sun and Moon of its best instant are all defined.
+			windows.push({
+				start: left,
+				end: right,
+				durationHours: timeSubtract(right, left) * 24,
+				bestTime: summary.bestTime,
+				maximumRadiantAltitude: best.horizontal!.altitude,
+				radiantSineHours: summary.expectedCount,
+				sunAltitudeAtBest: best.sunAltitude!,
+				moonAltitudeAtBest: best.moonAltitude!,
+				moonIlluminationAtBest: best.moonIllumination!,
+				moonRadiantSeparationAtBest: best.moonSeparation!,
+				support: support === undefined ? 'geometryOnly' : 'activity',
+			})
+		}
+	}
+
+	return windows.sort((a, b) => timeSubtract(a.start, b.start))
+}
+
+// One sample of the geometric planner: the shower state without activity, and whether the shower is
+// inside its support and its years at the sample instant.
+interface GeometricEvaluation {
+	// Radiant, Sun and optional Moon state at the sample instant.
+	readonly state: MeteorShowerState
+	// Whether the sample lies inside the known support and the dated years; true when no support is known.
+	readonly active: boolean
 }
 
 // Plans one already-bounded candidate interval at the chosen resolution.
@@ -39,39 +116,8 @@ function meteorObservingWindowsInInterval(solution: MeteorShowerSolution, profil
 		altitudeExponent: options.altitudeExponent ?? 1,
 	}
 
-	const evaluations = new Map<number, Map<number, Map<number, PlannerEvaluation>>>()
-	const evaluate = (time: Time) => {
-		let scales = evaluations.get(time.day)
-		if (scales === undefined) {
-			scales = new Map()
-			evaluations.set(time.day, scales)
-		}
-		let fractions = scales.get(time.scale)
-		if (fractions === undefined) {
-			fractions = new Map()
-			scales.set(time.scale, fractions)
-		}
-		const cached = fractions.get(time.fraction)
-		if (cached !== undefined) return cached
-		const evaluation = plannerEvaluationAt(solution, profile, observer, time, options, activityMaximumZhr, rateModel)
-		fractions.set(time.fraction, evaluation)
-		return evaluation
-	}
-
-	const qualifies = (time: Time) => scoreAt(evaluate(time), options) >= 0
+	const evaluate = cachedByTime((time) => plannerEvaluationAt(solution, profile, observer, time, options, activityMaximumZhr, rateModel))
 	const score = (time: Time) => scoreAt(evaluate(time), options)
-	const boundaries: Time[] = [start, end]
-	for (const root of searchRoots(score, start, end, { step, tolerance: options.tolerance })) boundaries.push(root)
-	for (const extremum of searchExtrema(score, start, end, { step, tolerance: options.tolerance })) {
-		const before = timeShift(extremum.time, -step)
-		const after = timeShift(extremum.time, step)
-		if (timeSubtract(before, start) > 0) addRootIfBracketed(boundaries, score, before, extremum.time, options.tolerance)
-		if (timeSubtract(end, after) > 0) addRootIfBracketed(boundaries, score, extremum.time, after, options.tolerance)
-	}
-
-	boundaries.sort((a, b) => timeSubtract(a, b))
-	const unique: Time[] = []
-	for (const boundary of boundaries) if (unique.length === 0 || timeSubtract(boundary, unique.at(-1)!) > 1e-8) unique.push(boundary)
 	const windows: MeteorObservingWindow[] = []
 
 	const metrics: PlannerMetrics = {}
@@ -81,14 +127,8 @@ function meteorObservingWindowsInInterval(solution: MeteorShowerSolution, profil
 		return evaluation.rate
 	}
 
-	for (let i = 0; i + 1 < unique.length; i++) {
-		const left = unique[i]
-		const right = unique[i + 1]
-		if (!qualifies(timeShift(left, timeSubtract(right, left) * 0.5))) continue
-
-		const durationDays = timeSubtract(right, left)
-		const durationHours = durationDays * 24
-		if (durationHours < (options.minimumDurationHours ?? 0)) continue
+	for (const [left, right] of qualifyingSegments(score, start, end, step, options)) {
+		const durationHours = timeSubtract(right, left) * 24
 
 		metrics.maximumActivityFraction = undefined
 		metrics.maximumMoonAltitude = undefined
@@ -125,7 +165,15 @@ function meteorObservingWindowsInInterval(solution: MeteorShowerSolution, profil
 // selected constraint; the profile itself supplies the activity support when catalog bounds are absent.
 function scoreAt(evaluation: PlannerEvaluation, options: MeteorObservingWindowOptions): number {
 	const state = evaluation.state
-	if (state.active !== true || !(state.zhr !== undefined && state.zhr > 0) || state.horizontal === undefined || state.sunAltitude === undefined) return -1
+	if (state.active !== true || !(state.zhr !== undefined && state.zhr > 0)) return -1
+	return constraintMargin(state, options)
+}
+
+// Computes the smallest margin of the darkness, radiant-altitude and selected lunar constraints, in
+// radians or illuminated fraction; non-negative values satisfy all of them, and a state without the
+// radiant or the Sun gives -1.
+function constraintMargin(state: MeteorShowerState, options: MeteorGeometricObservingWindowOptions): number {
+	if (state.horizontal === undefined || state.sunAltitude === undefined) return -1
 	let margin = (options.maximumSolarAltitude ?? deg(-18)) - state.sunAltitude
 	margin = Math.min(margin, state.horizontal.altitude - (options.minimumRadiantAltitude ?? 0))
 	if (options.maximumMoonAltitude !== undefined && state.moonAltitude !== undefined) margin = Math.min(margin, options.maximumMoonAltitude - state.moonAltitude)
@@ -151,8 +199,62 @@ function plannerEvaluationAt(solution: MeteorShowerSolution, profile: MeteorActi
 }
 
 // Returns whether any selected behavior needs lunar altitude, phase or separation.
-function needsMoon(options: MeteorObservingWindowOptions): boolean {
+function needsMoon(options: MeteorGeometricObservingWindowOptions & Pick<MeteorObservingWindowOptions, 'rateCorrection'>): boolean {
 	return options.maximumMoonAltitude !== undefined || options.minimumMoonRadiantSeparation !== undefined || options.maximumMoonIllumination !== undefined || options.rateCorrection !== undefined
+}
+
+// Memoizes one evaluation per exact instant (day, scale and fraction), so the root search, the
+// extremum search and the window summary never evaluate the same sample twice. The cache lives as long
+// as the returned function.
+function cachedByTime<T>(compute: (time: Time) => T): (time: Time) => T {
+	const evaluations = new Map<number, Map<number, Map<number, T>>>()
+	return (time: Time) => {
+		let scales = evaluations.get(time.day)
+		if (scales === undefined) {
+			scales = new Map()
+			evaluations.set(time.day, scales)
+		}
+		let fractions = scales.get(time.scale)
+		if (fractions === undefined) {
+			fractions = new Map()
+			scales.set(time.scale, fractions)
+		}
+		const cached = fractions.get(time.fraction)
+		if (cached !== undefined) return cached
+		const evaluation = compute(time)
+		fractions.set(time.fraction, evaluation)
+		return evaluation
+	}
+}
+
+// Finds the chronological segments of [start, end] where score is non-negative. The boundaries are
+// the scan roots plus the roots bisected next to every extremum, which catches tangent and double
+// crossings between coarse samples; a segment qualifies by its midpoint and is kept when it lasts at
+// least minimumDurationHours.
+function qualifyingSegments(score: (time: Time) => number, start: Time, end: Time, step: number, options: Pick<MeteorGeometricObservingWindowOptions, 'tolerance' | 'minimumDurationHours'>): readonly (readonly [Time, Time])[] {
+	const boundaries: Time[] = [start, end]
+	for (const root of searchRoots(score, start, end, { step, tolerance: options.tolerance })) boundaries.push(root)
+	for (const extremum of searchExtrema(score, start, end, { step, tolerance: options.tolerance })) {
+		const before = timeShift(extremum.time, -step)
+		const after = timeShift(extremum.time, step)
+		if (timeSubtract(before, start) > 0) addRootIfBracketed(boundaries, score, before, extremum.time, options.tolerance)
+		if (timeSubtract(end, after) > 0) addRootIfBracketed(boundaries, score, extremum.time, after, options.tolerance)
+	}
+
+	boundaries.sort((a, b) => timeSubtract(a, b))
+	const unique: Time[] = []
+	for (const boundary of boundaries) if (unique.length === 0 || timeSubtract(boundary, unique.at(-1)!) > 1e-8) unique.push(boundary)
+	const segments: (readonly [Time, Time])[] = []
+
+	for (let i = 0; i + 1 < unique.length; i++) {
+		const left = unique[i]
+		const right = unique[i + 1]
+		if (!(score(timeShift(left, timeSubtract(right, left) * 0.5)) >= 0)) continue
+		if (timeSubtract(right, left) * 24 < (options.minimumDurationHours ?? 0)) continue
+		segments.push([left, right])
+	}
+
+	return segments
 }
 
 // Restores the legacy full condition object only for the explicit correction callback seam.
@@ -281,15 +383,19 @@ function bisect(f: (time: Time) => number, left: Time, right: Time, tolerance: n
 	return timeShift(a, timeSubtract(b, a) * 0.5)
 }
 
-function chooseStep(profile: MeteorActivityProfile, activityInterval: MeteorShowerSolution['activityInterval'], requested: number | undefined): number {
+// Chooses the scan step in days: the requested one (1/24 by default), shortened to a quarter of the
+// narrowest support so a short activity period is sampled several times.
+function chooseStep(supports: readonly MeteorSolarLongitudeInterval[], requested: number | undefined): number {
 	const step = requested ?? 1 / 24
 	if (!(step > 0) || !Number.isFinite(step)) throw new Error('meteor observing-window step must be finite and positive')
 	let smallestSupport = Number.POSITIVE_INFINITY
-	if (profile.type === 'exponential') smallestSupport = supportDays(profile.support)
-	else if (profile.type === 'sampled') smallestSupport = supportDays(profile.support)
-	else for (const component of profile.components) smallestSupport = Math.min(smallestSupport, supportDays(component.support))
-	if (activityInterval !== undefined) smallestSupport = Math.min(smallestSupport, supportDays(activityInterval))
+	for (const support of supports) smallestSupport = Math.min(smallestSupport, supportDays(support))
 	return smallestSupport > 0 ? Math.min(step, smallestSupport / 4) : step
+}
+
+// Lists the activity supports of a profile: its own, or those of every multi-peak component.
+function profileSupports(profile: MeteorActivityProfile): readonly MeteorSolarLongitudeInterval[] {
+	return profile.type === 'multiPeak' ? profile.components.map((component) => component.support) : [profile.support]
 }
 
 function supportDays(support: MeteorSolarLongitudeInterval): number {
@@ -297,15 +403,22 @@ function supportDays(support: MeteorSolarLongitudeInterval): number {
 	return (((support.end - support.start + TAU) % TAU) / TAU) * DAYSPERJY
 }
 
-// Restricts long, highly oversampled searches to the temporal intersection of catalog and profile
-// support. Short searches retain their original interval to avoid unnecessary annual inversions.
-function plannerCandidateIntervals(profile: MeteorActivityProfile, activity: MeteorShowerSolution['activity'], activityInterval: MeteorShowerSolution['activityInterval'], start: Time, end: Time, step: number, options: MeteorObservingWindowOptions): readonly PlannerCandidateInterval[] {
+// Restricts long, highly oversampled searches to the temporal intersection of the given supports and
+// the catalog support. Short searches retain their original interval to avoid unnecessary annual inversions.
+function plannerCandidateIntervals(
+	supports: readonly MeteorSolarLongitudeInterval[],
+	activity: MeteorShowerSolution['activity'],
+	activityInterval: MeteorShowerSolution['activityInterval'],
+	start: Time,
+	end: Time,
+	step: number,
+	options: Pick<MeteorObservingWindowOptions, 'tolerance' | 'extrapolateYearLimitedActivity'>,
+): readonly PlannerCandidateInterval[] {
 	const duration = timeSubtract(end, start)
 	if (duration / step <= 512) return [{ start, end }]
 
-	const profileSupports = profile.type === 'multiPeak' ? profile.components.map((component) => component.support) : [profile.support]
 	let spans: SolarLongitudeSpan[] = []
-	for (const support of profileSupports) spans.push(...linearSolarLongitudeSpans(support))
+	for (const support of supports) spans.push(...linearSolarLongitudeSpans(support))
 
 	if (activityInterval !== undefined) {
 		const catalog = linearSolarLongitudeSpans(activityInterval)
