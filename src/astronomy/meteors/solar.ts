@@ -49,10 +49,31 @@ export function meteorSolarLongitudeTimes(year: number, longitudes: readonly Ang
 	return longitudes.map(solve)
 }
 
+// Converts several solar longitudes within one civil UTC year like meteorSolarLongitudeTimes, but
+// answers undefined, in place of throwing, for a longitude the year never reaches (the few hours of
+// longitude a 365-day year leaves out at its turn), which then occurs only in a neighboring year.
+export function meteorSolarLongitudeCrossingTimes(year: number, longitudes: readonly Angle[], options?: MeteorSolarLongitudeSearchOptions<Timescale>): readonly (Time | undefined)[] {
+	if (longitudes.length === 0) return []
+	const crossing = meteorSolarLongitudeCrossings(year, options)
+	return longitudes.map(crossing)
+}
+
 // Prepares one annual inversion context. The seven-day mean-motion bracket is wider than the
 // VSOP87E seasonal equation-of-center displacement; a full-year fallback retains correctness at a
 // civil-year endpoint or when a caller supplies an unusually coarse search step.
 function meteorSolarLongitudeSolver(year: number, options?: MeteorSolarLongitudeSearchOptions<Timescale>): (longitude: Angle) => Time {
+	const crossing = meteorSolarLongitudeCrossings(year, options)
+	return (longitude: Angle) => {
+		const root = crossing(longitude)
+		if (root === undefined) throw new Error(`solar longitude ${longitude} does not occur in calendar year ${year}`)
+		return root
+	}
+}
+
+// Prepares one annual inversion context answering undefined for a longitude the civil year never
+// reaches: a 365-day year is shorter than the orbit, so the few hours of longitude between the end of
+// the year and its start occur only in a neighboring year.
+function meteorSolarLongitudeCrossings(year: number, options?: MeteorSolarLongitudeSearchOptions<Timescale>): (longitude: Angle) => Time | undefined {
 	const start = timeYMD(year, 1, 1, 0, Timescale.UTC)
 	const stop = timeYMD(year + 1, 1, 1, 0, Timescale.UTC)
 	const duration = timeSubtract(stop, start, Timescale.UTC)
@@ -77,45 +98,75 @@ function meteorSolarLongitudeSolver(year: number, options?: MeteorSolarLongitude
 		let roots = searchRoots((time) => unwrapped(time) - target, bracketStart, bracketEnd, options)
 		if (roots.length === 0) roots = searchRoots((time) => unwrapped(time) - target, start, stop, options)
 		const root = roots[0]
-		if (root === undefined) throw new Error(`solar longitude ${longitude} does not occur in calendar year ${year}`)
-		return convertScale(root, options?.scale)
+		return root === undefined ? undefined : convertScale(root, options?.scale)
 	}
 }
 
 // Derives activity dates from the two catalog bounds and mean reference longitude. LoS is exposed as
 // `reference`; `maximum` is populated only when an external profile supplies a maximum longitude.
 // The dates describe one occurrence: the one whose start falls in the civil UTC year, or, without an
-// activity interval, the one whose reference or maximum falls in it. The end and, for an occurrence
-// that crosses into the next year (the Quadrantids starting in late December), the reference and
-// maximum may therefore fall in year + 1; each is the crossing nearest to the start.
+// activity interval, the one whose reference or maximum falls in it. The end is the first crossing
+// after the start, and the reference and maximum are the crossings nearest to the start, so for an
+// occurrence that crosses into the next year (the Quadrantids starting in late December) they may fall
+// in year + 1. A start the civil year never reaches (a longitude of the few hours a 365-day year leaves
+// out at its turn, such as 280.04° in 2026) starts no occurrence in that year and returns {}; the
+// occurrence is the previous or next year's. Without an interval, a reference or maximum the year never
+// reaches is left out.
 export function meteorShowerDates(solution: MeteorShowerSolution, year: number, options?: MeteorShowerDateOptions<Timescale>): MeteorShowerDates {
 	if (!meteorShowerActivityYearApplies(solution.activity, year) && !options?.extrapolateYearLimitedActivity) return {}
+
+	const solvers = new Map<number, (longitude: Angle) => Time | undefined>()
+	const crossingIn = (civilYear: number, longitude: Angle) => {
+		let solver = solvers.get(civilYear)
+		if (solver === undefined) {
+			solver = meteorSolarLongitudeCrossings(civilYear, options)
+			solvers.set(civilYear, solver)
+		}
+		return solver(longitude)
+	}
 
 	const interval = solution.activityInterval
 	const profile = options?.profile
 	const maximumLongitude = profile === undefined ? undefined : meteorActivityMaximumSolarLongitude(profile)
-	const longitudes: Angle[] = []
-	const startIndex = interval === undefined ? undefined : longitudes.push(interval.start) - 1
-	const endIndex = interval === undefined || interval.fullCircle ? undefined : longitudes.push(interval.end) - 1
-	const referenceIndex = solution.referenceSolarLongitude === undefined ? undefined : longitudes.push(solution.referenceSolarLongitude) - 1
-	const maximumIndex = maximumLongitude === undefined ? undefined : longitudes.push(maximumLongitude) - 1
-	const times = meteorSolarLongitudeTimes(year, longitudes, options)
-	const start = startIndex === undefined ? undefined : times[startIndex]
-	let end = endIndex === undefined ? undefined : times[endIndex]
-	if (interval?.fullCircle) end = meteorSolarLongitudeTimes(year + 1, [interval.start], options)[0]
-	else if (interval !== undefined && start !== undefined && end !== undefined && timeSubtract(end, start, Timescale.UTC) < 0) end = meteorSolarLongitudeTimes(year + 1, [interval.end], options)[0]
-	const reference = referenceIndex === undefined ? undefined : nearestToStart(times[referenceIndex], longitudes[referenceIndex], start, year, options)
-	const maximum = maximumIndex === undefined ? undefined : nearestToStart(times[maximumIndex], longitudes[maximumIndex], start, year, options)
-	return { start, reference, end, maximum }
-}
 
-// Moves a crossing found in the civil year to the next year when that one is nearer to the start of
-// the occurrence, so an occurrence crossing the new year keeps its reference and maximum after its
-// start. Without a start the crossing of the requested year is kept.
-function nearestToStart(time: Time, longitude: Angle, start: Time | undefined, year: number, options: MeteorShowerDateOptions<Timescale> | undefined): Time {
-	if (start === undefined || timeSubtract(time, start, Timescale.UTC) >= 0) return time
-	const next = meteorSolarLongitudeTimes(year + 1, [longitude], options)[0]
-	return timeSubtract(next, start, Timescale.UTC) < timeSubtract(start, time, Timescale.UTC) ? next : time
+	if (interval === undefined) {
+		const reference = solution.referenceSolarLongitude === undefined ? undefined : crossingIn(year, solution.referenceSolarLongitude)
+		const maximum = maximumLongitude === undefined ? undefined : crossingIn(year, maximumLongitude)
+		return { reference, maximum }
+	}
+
+	const start = crossingIn(year, interval.start)
+	if (start === undefined) return {}
+
+	// The first crossing strictly after the start; a full circle ends at the next crossing of its start.
+	const firstAfter = (longitude: Angle) => {
+		for (let civilYear = year; civilYear <= year + 2; civilYear++) {
+			const time = crossingIn(civilYear, longitude)
+			if (time !== undefined && timeSubtract(time, start, Timescale.UTC) > 0) return time
+		}
+		return undefined
+	}
+
+	// The crossing of the previous, same or next year nearest to the start.
+	const nearest = (longitude: Angle) => {
+		let best: Time | undefined
+		let distance = Number.POSITIVE_INFINITY
+		for (let civilYear = year - 1; civilYear <= year + 1; civilYear++) {
+			const time = crossingIn(civilYear, longitude)
+			if (time === undefined) continue
+			const offset = Math.abs(timeSubtract(time, start, Timescale.UTC))
+			if (offset < distance) {
+				best = time
+				distance = offset
+			}
+		}
+		return best
+	}
+
+	const end = interval.fullCircle ? firstAfter(interval.start) : firstAfter(interval.end)
+	const reference = solution.referenceSolarLongitude === undefined ? undefined : nearest(solution.referenceSolarLongitude)
+	const maximum = maximumLongitude === undefined ? undefined : nearest(maximumLongitude)
+	return { start, reference, end, maximum }
 }
 
 // Creates the shared context values that avoid repeating solar ephemeris work in batch callers.

@@ -5,7 +5,7 @@ import { searchExtrema, searchRoots } from '../events/search'
 import type { GeographicPosition } from '../observer/location'
 import { type Time, timeShift, timeSubtract, timeToDate, utc } from '../time/time'
 import { isMeteorShowerActive, isMeteorShowerActivityYearLimited, meteorActivityMaximumZhr, meteorShowerActivityYearApplies } from './activity'
-import { meteorSolarLongitudeTimes } from './solar'
+import { meteorSolarLongitudeCrossingTimes } from './solar'
 import { meteorShowerComputationContext, meteorShowerState } from './state'
 import type { MeteorActivityProfile, MeteorGeometricObservingWindow, MeteorGeometricObservingWindowOptions, MeteorObservingConditions, MeteorObservingWindow, MeteorObservingWindowOptions, MeteorShowerSolution, MeteorShowerState, MeteorSolarLongitudeInterval } from './types'
 
@@ -456,10 +456,14 @@ function plannerCandidateIntervals(
 		for (const span of spans) {
 			const startLongitude = span.start === TAU ? 0 : span.start
 			const endLongitude = span.end === TAU ? 0 : span.end
-			const times = meteorSolarLongitudeTimes(year, [startLongitude, endLongitude], { step: 7, tolerance: options.tolerance, scale: start.scale })
-			let candidateEnd = times[1]
-			if (timeSubtract(candidateEnd, times[0]) <= 0) candidateEnd = meteorSolarLongitudeTimes(year + 1, [endLongitude], { step: 7, tolerance: options.tolerance, scale: start.scale })[0]
-			const candidateStart = timeSubtract(times[0], start) < 0 ? start : times[0]
+			const search = { step: 7, tolerance: options.tolerance, scale: start.scale }
+			// A longitude the civil year never reaches belongs to a neighboring year's candidate, which the loop also visits.
+			const [spanStart, spanEnd] = meteorSolarLongitudeCrossingTimes(year, [startLongitude, endLongitude], search)
+			if (spanStart === undefined) continue
+			let candidateEnd = spanEnd
+			for (let next = year + 1; next <= year + 2 && (candidateEnd === undefined || timeSubtract(candidateEnd, spanStart) <= 0); next++) candidateEnd = meteorSolarLongitudeCrossingTimes(next, [endLongitude], search)[0]
+			if (candidateEnd === undefined) continue
+			const candidateStart = timeSubtract(spanStart, start) < 0 ? start : spanStart
 			candidateEnd = timeSubtract(candidateEnd, end) > 0 ? end : candidateEnd
 			if (timeSubtract(candidateEnd, candidateStart) > 0) candidates.push({ start: candidateStart, end: candidateEnd })
 		}

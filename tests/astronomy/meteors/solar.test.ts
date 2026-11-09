@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test'
-import { meteorComputationContext, meteorShowerDates, meteorSolarLongitude, meteorSolarLongitudeDelta, meteorSolarLongitudeForwardDelta, meteorSolarLongitudeTimes, meteorSolarRelativeState, meteorSolarState, timeAtMeteorSolarLongitude } from '../../../src/astronomy/meteors/solar'
+import { meteorRadiantJ2000 } from '../../../src/astronomy/meteors/radiant'
+import { meteorComputationContext, meteorShowerDates, meteorSolarLongitude, meteorSolarLongitudeCrossingTimes, meteorSolarLongitudeDelta, meteorSolarLongitudeForwardDelta, meteorSolarLongitudeTimes, meteorSolarRelativeState, meteorSolarState, timeAtMeteorSolarLongitude } from '../../../src/astronomy/meteors/solar'
 import type { MeteorShowerSolution } from '../../../src/astronomy/meteors/types'
 import { Timescale, timeSubtract, timeToDate, timeYMDHMS } from '../../../src/astronomy/time/time'
 import { deg, normalizeAngle, toDeg } from '../../../src/math/units/angle'
@@ -143,4 +144,22 @@ test('an occurrence crossing the new year keeps its reference and maximum after 
 	// Without an interval the reference stays in the requested year.
 	const referenceOnly = meteorShowerDates({ ...BASE_SOLUTION, activityInterval: undefined, referenceSolarLongitude: deg(283.1) }, 2025, { step: 7, tolerance: TOLERANCE.time })
 	expect(timeToDate(referenceOnly.reference!).slice(0, 3)).toEqual([2025, 1, 3])
+})
+
+test('a start the civil year never reaches starts no occurrence in that year', () => {
+	// Quadrantids (IAU 10, CAMS solution 007): activity 280.043°-289.761°. The UTC year 2026 runs from
+	// λ☉ 280.21° to 279.95°, so 280.043° occurs on 2025 December 31 and 2027 January 1 but never in 2026.
+	const solution = { ...BASE_SOLUTION, activityInterval: { start: deg(280.043), end: deg(289.761) }, referenceSolarLongitude: deg(283.4) } satisfies MeteorShowerSolution
+
+	const before = meteorShowerDates(solution, 2025, { step: 7, tolerance: TOLERANCE.time })
+	expect(timeToDate(before.start!).slice(0, 3)).toEqual([2025, 12, 31])
+	expect(timeToDate(before.reference!).slice(0, 3)).toEqual([2026, 1, 4])
+	expect(timeToDate(before.end!).slice(0, 3)).toEqual([2026, 1, 10])
+	expect(meteorShowerDates(solution, 2026, { step: 7, tolerance: TOLERANCE.time })).toEqual({})
+	expect(timeToDate(meteorShowerDates(solution, 2027, { step: 7, tolerance: TOLERANCE.time }).start!).slice(0, 3)).toEqual([2027, 1, 1])
+	expect(meteorSolarLongitudeCrossingTimes(2026, [deg(280.043), deg(290)], { step: 7 }).map((time) => time === undefined)).toEqual([true, false])
+	// The daily-drift reference of the radiant falls back to the neighboring years.
+	const drifting = { ...solution, referenceSolarLongitude: deg(280.05), rightAscension: deg(230), declination: deg(49), radiantDrift: { basis: 'day', rightAscensionRate: deg(0.8), declinationRate: deg(-0.2) } } satisfies MeteorShowerSolution
+	const time = timeYMDHMS(2026, 6, 1, 0, 0, 0, Timescale.UTC)
+	expect(meteorRadiantJ2000(drifting, { time, solarLongitude: meteorSolarLongitude(time) })).toBeDefined()
 })

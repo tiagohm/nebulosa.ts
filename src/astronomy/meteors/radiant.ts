@@ -6,7 +6,7 @@ import { equatorialFromJ2000, equatorialToHorizontal } from '../coordinates/coor
 import { riseTransitSet, type RiseTransitSet } from '../events/horizon'
 import { localSiderealTime, type GeographicPosition } from '../observer/location'
 import { timeShift, timeSubtract, timeToDate, type Time } from '../time/time'
-import { meteorSolarLongitude, meteorSolarLongitudeDelta, timeAtMeteorSolarLongitude } from './solar'
+import { meteorSolarLongitude, meteorSolarLongitudeCrossingTimes, meteorSolarLongitudeDelta } from './solar'
 import type {
 	MeteorComputationContext,
 	MeteorHorizontalRadiant,
@@ -29,7 +29,7 @@ import type {
 
 // Per-solution daily-drift caches retain the three adjacent occurrences for each calendar-year/search
 // variant. Weak ownership follows catalog solutions and bounded entries prevent unbounded histories.
-const DAILY_DRIFT_REFERENCE_CACHE = new WeakMap<MeteorShowerSolution, Map<string, readonly [Time, Time, Time]>>()
+const DAILY_DRIFT_REFERENCE_CACHE = new WeakMap<MeteorShowerSolution, Map<string, readonly Time[]>>()
 const DAILY_DRIFT_REFERENCE_CACHE_LIMIT = 6
 
 // Evaluates a shower solution's radiant at a context instant.
@@ -222,14 +222,15 @@ function nearestDailyDriftReference(solution: MeteorShowerSolution, referenceSol
 	if (cached !== undefined) return nearestDailyDriftReferenceAt(time, cached)
 
 	const search = { step: 7, ...options.solarLongitudeSearch, scale: time.scale }
-	const references = [timeAtMeteorSolarLongitude(year - 1, referenceSolarLongitude, search), timeAtMeteorSolarLongitude(year, referenceSolarLongitude, search), timeAtMeteorSolarLongitude(year + 1, referenceSolarLongitude, search)] as const
+	// A reference longitude the civil year never reaches occurs in both neighboring years, so at least two remain.
+	const references = [year - 1, year, year + 1].flatMap((civilYear) => meteorSolarLongitudeCrossingTimes(civilYear, [referenceSolarLongitude], search).filter((reference) => reference !== undefined))
 	cacheDailyDriftReference(solution, key, references)
 	return nearestDailyDriftReferenceAt(time, references)
 }
 
-// Selects the closest of one cached year-boundary triplet, allowing the reference to change at the
+// Selects the closest of the cached year-boundary occurrences (two or three), allowing the reference to change at the
 // midpoint between annual occurrences without repeating the solar inversion.
-function nearestDailyDriftReferenceAt(time: Time, references: readonly [Time, Time, Time]): Time {
+function nearestDailyDriftReferenceAt(time: Time, references: readonly Time[]): Time {
 	let nearest = references[0]
 	let smallestDistance = Math.abs(timeSubtract(time, nearest, time.scale))
 
@@ -253,7 +254,7 @@ function dailyDriftReferenceKey(year: number, time: Time, options: MeteorRadiant
 }
 
 // Stores one reference while evicting the oldest entry after the fixed per-solution capacity.
-function cacheDailyDriftReference(solution: MeteorShowerSolution, key: string, references: readonly [Time, Time, Time]): void {
+function cacheDailyDriftReference(solution: MeteorShowerSolution, key: string, references: readonly Time[]): void {
 	let cache = DAILY_DRIFT_REFERENCE_CACHE.get(solution)
 
 	if (cache === undefined) {
