@@ -59,6 +59,39 @@ test('reports the transfer formats the driver defines', () => {
 	expect(device.transferFormats).toEqual(DEFAULT_CAMERA.transferFormats)
 })
 
+test('ignores a countdown tick published after the exposure ended', () => {
+	const manager = new CameraManager()
+	const device = setupDevice(structuredClone(DEFAULT_CAMERA))
+	manager.add(device)
+
+	const exposure = (state: PropertyState, value: number): SetNumberVector => ({ device: device.name, name: 'CCD_EXPOSURE', state, elements: { CCD_EXPOSURE_VALUE: { name: 'CCD_EXPOSURE_VALUE', value } } })
+
+	manager.startExposure(device, 5)
+	manager.numberVector(client, exposure('Busy', 5), 'setNumberVector')
+	expect(device.exposuring).toBeTrue()
+
+	manager.stopExposure(device)
+	manager.numberVector(client, exposure('Idle', 0), 'setNumberVector')
+	manager.numberVector(client, exposure('Busy', 0), 'setNumberVector')
+	expect(device.exposuring).toBeFalse()
+	expect(device.exposure.state).toBe('Idle')
+
+	// A Busy with time left is an exposure, whoever started it.
+	manager.numberVector(client, exposure('Busy', 3), 'setNumberVector')
+	expect(device.exposuring).toBeTrue()
+
+	// A Busy with no time left is the readout of the running exposure.
+	manager.numberVector(client, exposure('Busy', 0), 'setNumberVector')
+	expect(device.exposuring).toBeTrue()
+	expect(device.exposure.state).toBe('Busy')
+	manager.numberVector(client, exposure('Ok', 0), 'setNumberVector')
+	expect(device.exposuring).toBeFalse()
+	expect(device.exposure.state).toBe('Ok')
+	manager.numberVector(client, exposure('Alert', 0), 'setNumberVector')
+	expect(device.exposuring).toBeFalse()
+	expect(device.exposure.state).toBe('Alert')
+})
+
 test('reports every answer to the cooling target with the reading published with it', () => {
 	const manager = new CameraManager()
 	const device = setupDevice(structuredClone(DEFAULT_CAMERA))

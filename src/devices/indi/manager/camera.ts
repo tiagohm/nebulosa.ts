@@ -181,9 +181,16 @@ export class CameraManager extends DeviceManager<Camera> {
 				return
 			}
 			case 'CCD_EXPOSURE': {
+				const exposure = message.elements.CCD_EXPOSURE_VALUE?.value ?? 0
+				const exposuring = message.state === 'Busy'
+
+				if (exposure <= 0 && exposuring && device.exposure.state !== 'Busy') {
+					return
+				}
+
 				let exposuringHasChanged = false
 
-				if (handleSwitchValue(device, 'exposuring', message.state === 'Busy')) {
+				if (handleSwitchValue(device, 'exposuring', exposuring)) {
 					this.updated(device, 'exposuring', message.state)
 					exposuringHasChanged = true
 				}
@@ -192,7 +199,7 @@ export class CameraManager extends DeviceManager<Camera> {
 					if (handleMinMaxValue(device.exposure, message.elements.CCD_EXPOSURE_VALUE, tag)) {
 						this.updated(device, 'exposure', message.state)
 					}
-				} else if (handleNumberValue(device.exposure, 'value', message.elements.CCD_EXPOSURE_VALUE?.value, message.state) || exposuringHasChanged || (message.state !== undefined && device.exposure.state !== message.state)) {
+				} else if (handleNumberValue(device.exposure, 'value', exposure, message.state) || exposuringHasChanged || (message.state !== undefined && device.exposure.state !== message.state)) {
 					device.exposure.state = message.state ?? device.exposure.state
 					this.updated(device, 'exposure', message.state)
 				}
