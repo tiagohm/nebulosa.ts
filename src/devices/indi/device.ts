@@ -288,9 +288,15 @@ export interface MountAlignmentState {
 // side, and the current equatorial coordinate (radians). Also a guide output and GPS/site source.
 export interface Mount extends GuideOutput, GPS, Parkable {
 	readonly type: 'mount'
+	// True while any command moves the mount's coordinate: a goto or a flip, a manual axis motion, and,
+	// with drivers that report them this way, parking and homing. It mirrors a Busy EQUATORIAL_EOD_COORD
+	// in INDI and Slewing in ASCOM Alpaca, so it does not name the cause; `moving`, `parking`, and
+	// `homing` do, and a slewing mount with none of them set is running a goto or a flip.
 	slewing: boolean
+	// True while a manual axis motion (INDI TELESCOPE_MOTION_NS/WE, Alpaca MoveAxis) is running.
 	moving: boolean
 	tracking: boolean
+	// True while the mount seeks or returns to its home position.
 	homing: boolean
 	canAbort: boolean
 	canSync: boolean
