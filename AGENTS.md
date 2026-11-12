@@ -161,11 +161,11 @@ Tests do not need production-style documentation comments. Add test comments onl
 
 Public documentation lives in `docs/README.md` and is governed by `docs/AGENTS.md`.
 
-For every code change, assess documentation impact before finishing. If the change affects a public API or any user-visible/scientific contract — including behavior, inputs/outputs, units, coordinate frames, time scales, signs/wrapping, models/accuracy, failure behavior, mutation/ownership, protocol representation, device lifecycle, or a supported workflow — read and follow `docs/AGENTS.md` and update the owning topic in the same change.
+Each topic explains the scientific or technical context of a capability and shows its use in a single short example; the API contract (options, defaults, result fields, failure behavior, mutation) lives in the source documentation comments, not in `docs/README.md`.
+
+Update the owning topic, following `docs/AGENTS.md`, only when a change adds, removes, or renames a capability, changes the name, import path, or signature of an entry point used by its example, or changes its science (quantity, model, frame, time scale, unit, sign convention, or a limitation that changes correct use). New options, fields, diagnostics, defaults, internal steps, and refactors do not change the documentation.
 
 Search for an existing topic before creating a new one. Create a new topic only for a distinct user-facing capability; otherwise update the topic that already owns the behavior.
-
-Internal refactors that preserve the public and scientific contract do not require documentation changes.
 
 ## Validation Policy
 
