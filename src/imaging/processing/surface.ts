@@ -207,6 +207,14 @@ export const MIN_SAMPLE_SPREAD = 0.02
 // factor is generous so genuine smooth surfaces are never rejected; only gross blow-ups are caught.
 export const MAX_SURFACE_MAGNITUDE_FACTOR = 100
 
+// Multiple of the machine epsilon, relative to the largest sampled magnitude, below which a residual
+// scale is floating-point roundoff rather than dispersion. An exact fit (noiseless samples a degree can
+// represent) leaves residuals of a few ulps whose MAD and standard deviation are both roundoff, so sigma
+// thresholds built on them would reject good samples on every pass until the surviving set is too sparse
+// to constrain the surface. The factor covers the QR roundoff of the well-conditioned Chebyshev basis
+// and still sits about eight orders of magnitude below the quantization of 16-bit samples.
+const ROUNDOFF_RESIDUAL_FACTOR = 4096
+
 // Coarse-grid node spacing for spline materialization, as a fraction of the mean control-point
 // spacing. A spline is smooth at the control-point scale, so evaluating it on nodes this much finer
 // and bilinearly upsampling keeps the interpolation error well below the fit accuracy (~0.5% of the
@@ -354,6 +362,15 @@ export function computeResidualDispersion(values: Float64Array, scratch: Float64
 	for (let i = 0; i < count; i++) scratch[i] = Math.abs(values[i] - median)
 	scratch.subarray(0, count).sort()
 	return STANDARD_DEVIATION_SCALE * medianOf(scratch, count)
+}
+
+// Smallest residual scale that rejection may use for `set`: ROUNDOFF_RESIDUAL_FACTOR ulps of the largest
+// active sample magnitude, in the unit of the samples. Zero when every active value is zero.
+function residualRoundoffFloor(set: SurfaceSampleSet) {
+	const { value, active, count } = set
+	let magnitude = 0
+	for (let i = 0; i < count; i++) if (active[i] !== 0) magnitude = Math.max(magnitude, Math.abs(value[i]))
+	return ROUNDOFF_RESIDUAL_FACTOR * Number.EPSILON * magnitude
 }
 
 // Number of active samples to use for a TPS residual diagnostic with `k` controls.
@@ -835,6 +852,7 @@ export function fitPolynomialSurfaceWithRejection(set: SurfaceSampleSet, degree:
 	// Samples rejected during the current pass. Tracked so they can be reinstated if the subsequent
 	// refit turns out to be unsolvable, keeping the reported accepted set consistent with the kept fit.
 	const rejectedThisPass: number[] = []
+	const roundoff = residualRoundoffFloor(set)
 
 	for (let iteration = 0; iteration <= iterations; iteration++) {
 		let n = 0
@@ -853,10 +871,13 @@ export function fitPolynomialSurfaceWithRejection(set: SurfaceSampleSet, degree:
 		// failed refit — leaving the outliers active and the surface pulled toward them. Compare it to the
 		// overall standard deviation (scale-invariant): when the MAD is negligible but real spread exists
 		// the bulk is degenerate, so fall back to the non-robust std to keep the thresholds meaningful.
-		// When the std is 0 too the residuals are genuinely constant and there is nothing to reject.
+		// When the std is 0 too the residuals are genuinely constant and there is nothing to reject. Both
+		// collapse to roundoff once the fit is exact, so the scale never drops below the roundoff floor:
+		// residuals of a few ulps then fall inside the thresholds and the loop stops instead of rejecting
+		// good samples until the surface is unconstrained.
 		const spread = standardDeviationOf(residuals, n)
 		if (spread === 0 || Number.isNaN(spread)) break
-		const scale = residualDispersion > 1e-6 * spread ? residualDispersion : spread
+		const scale = Math.max(residualDispersion > 1e-6 * spread ? residualDispersion : spread, roundoff)
 
 		const highLimit = highLimitSigma * scale
 		const lowLimit = lowLimitSigma * scale
@@ -911,6 +932,7 @@ function fitCappedPolynomialSurfaceWithRejection(set: SurfaceSampleSet, maxSampl
 	const lowLimitSigma = rejection.mode === 'symmetric' ? rejection.high : rejection.low
 	const iterations = rejection.mode === 'none' ? 0 : rejection.iterations
 	const rejectedThisPass: number[] = []
+	const roundoff = residualRoundoffFloor(set)
 
 	for (let iteration = 0; iteration <= iterations; iteration++) {
 		let n = 0
@@ -925,7 +947,7 @@ function fitCappedPolynomialSurfaceWithRejection(set: SurfaceSampleSet, maxSampl
 
 		const spread = standardDeviationOf(residuals, n)
 		if (spread === 0 || Number.isNaN(spread)) break
-		const scale = residualDispersion > 1e-6 * spread ? residualDispersion : spread
+		const scale = Math.max(residualDispersion > 1e-6 * spread ? residualDispersion : spread, roundoff)
 		const highLimit = highLimitSigma * scale
 		const lowLimit = lowLimitSigma * scale
 		rejectedThisPass.length = 0

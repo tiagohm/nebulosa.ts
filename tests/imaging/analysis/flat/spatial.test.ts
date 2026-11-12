@@ -13,8 +13,11 @@ test('measures a uniform flat without inventing an illumination center', () => {
 	expect(spatial.cornerLevel).toBeCloseTo(1000, 12)
 	expect(spatial.edgeFalloff).toBeCloseTo(0, 12)
 	expect(spatial.cornerFalloff).toBeCloseTo(0, 12)
-	expect(spatial.gradient).toEqual({ x: 0, y: 0 })
+	expect(spatial.gradient?.x).toBeCloseTo(0, 12)
+	expect(spatial.gradient?.y).toBeCloseTo(0, 12)
 	expect(spatial.model).toBeDefined()
+	// An exact fit leaves roundoff residuals; rejection must not drop clean tiles against them.
+	expect(spatial.model?.rejectedSamples).toBe(0)
 	expect(spatial.illuminationCenter).toBeUndefined()
 	expect(spatial.illuminationMap).toBeUndefined()
 	expect(spatial.residualMap).toBeUndefined()

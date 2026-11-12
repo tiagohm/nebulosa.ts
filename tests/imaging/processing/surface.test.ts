@@ -249,6 +249,21 @@ describe('polynomial fit', () => {
 		for (let k = 0; k < without.coefficients.length; k++) expect(withOutlier.coefficients[k]).toBeCloseTo(without.coefficients[k], 6)
 	})
 
+	test('rejection stops at an exact fit instead of rejecting roundoff residuals', () => {
+		// Noiseless plane: once the outlier is gone the refit is exact and the residuals are a few ulps,
+		// whose MAD and std must not become sigma thresholds that reject the clean samples.
+		const field = (x: number, y: number) => 0.2 + 0.002 * x + 0.001 * y
+		const samples = sampleGrid(64, 48, 8, 8, field)
+		samples[13] = { ...samples[13], value: samples[13].value + 1 }
+
+		const model = fitOrThrow(samples, 64, 48, { degree: 2, rejection: { mode: 'symmetric', high: 3, low: 3, iterations: 3 } })
+		const at = createScalarSurfacePointEvaluator(model)
+
+		expect(model.rejectedSamples).toBe(1)
+		expect(model.samples[13].accepted).toBe(false)
+		for (const [x, y] of [[0, 0], [63, 0], [0, 47], [63, 47], [31.5, 23.5]]) expect(at.at(x, y)).toBeCloseTo(field(x, y), 9)
+	})
+
 	test('asymmetric rejection is tight above and loose below', () => {
 		// A realistic scatter so the robust MAD is meaningful; the outlier then sits at a known sigma.
 		const jitter = (x: number, y: number) => 0.2 + 0.001 * ((((Math.round(x) + Math.round(y)) % 5) - 2) / 2)
