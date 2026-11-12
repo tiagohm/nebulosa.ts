@@ -36,7 +36,8 @@ export function binarySearch(a: Readonly<NumberArray>, key: number, { from = 0, 
 	return positive ? from : -(from + 1)
 }
 
-// Comparator returning <0 when the target ordered before `value`, >0 when after, and 0 on a match.
+// Comparator returning <0 when `value` is ordered before the target, >0 when after, and 0 on a match,
+// like `value - target` for an ascending numeric key.
 export type BinarySearchComparator<T> = (value: T) => number
 
 // Binary-searches the range [from, to) of `a` using `comparator` to locate the target element.
