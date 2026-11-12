@@ -63,7 +63,7 @@ Affine frames move absolute positions (AU) or full `[position, velocity]` states
 The heliocentric ecliptic frame has the orientation of the J2000 ecliptic with the origin at the Sun. Its Sun state is supplied by the caller, so the frame works with any ephemeris. The Galactic-center and Local Standard of Rest origins are covered by [Galactocentric Frame](#galactocentric-frame) and [Local Standard of Rest Frames](#local-standard-of-rest-frames).
 
 ```ts
-import { affineFromBase, affineToBase, BARYCENTRIC_ECLIPTIC, heliocentricEclipticFrame } from 'nebulosa/src/astronomy/coordinates/affine'
+import { affineFromBase, affineToAffine, affineToBase, BARYCENTRIC_ECLIPTIC, heliocentricEclipticFrame } from 'nebulosa/src/astronomy/coordinates/affine'
 import type { PositionAndVelocity } from 'nebulosa/src/astronomy/coordinates/astrometry'
 import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
 
@@ -91,8 +91,11 @@ console.log(v) // [0.0019965, -0.000604, 0.001132] — AU/day
 // BARYCENTRIC_ECLIPTIC only rotates the axes; the origin stays at the barycenter.
 console.log(affineFromBase(state, BARYCENTRIC_ECLIPTIC, time)[0]) // [1.2, 0.076356, -0.578074] — AU
 
-// Exact inverse, frame -> base. affineToAffine(state, from, to, time) converts between two frames through the base.
+// Exact inverse, frame -> base.
 console.log(affineToBase([p, v], helio, time)[0]) // [1.2, 0.3, -0.5] — AU, the original position
+
+// Frame -> frame through the base: the heliocentric state back at the barycenter, in ecliptic axes.
+console.log(affineToAffine([p, v], helio, BARYCENTRIC_ECLIPTIC, time)[0]) // [1.2, 0.076356, -0.578074] — AU
 ```
 
 ### Airmass and Extinction
@@ -123,6 +126,7 @@ An alt-az mount keeps the optical axis on the target but not the sky orientation
 The rate decides how long a sub-exposure can be before stars far from the rotation center trail by more than a chosen budget, and the derotator angle is what an instrument rotator must follow to cancel the rotation. Angles are radians, azimuth is measured north through east, and rates are radians per SI second. The rate is undefined at the zenith. Nothing here moves hardware, and the derotator track follows the sidereal hour angle only, ignoring the target's own motion.
 
 ```ts
+import { parallacticAngle } from 'nebulosa/src/astronomy/coordinates/astrometry'
 import { derotatorAngle, derotatorTrack, fieldRotation, fieldRotationRate } from 'nebulosa/src/astronomy/coordinates/field'
 import { deg, hour } from 'nebulosa/src/math/units/angle'
 
@@ -134,13 +138,41 @@ const rotation = fieldRotation(deg(45), deg(30), deg(40), 1, 2000)
 
 console.log(rotation?.maxExposureSeconds) // 8.58 — seconds
 
-// Rotator command from hour angle (positive west), declination, and latitude.
+// Parallactic angle q from hour angle (positive west), declination, and latitude.
+console.log(parallacticAngle(hour(2), deg(20), deg(45))) // 0.6606 — radians
+
+// Rotator command, offset − q, for the same target.
 console.log(derotatorAngle(hour(2), deg(20), deg(45))) // -0.6606 — radians in (-PI, PI]
 
 // Rotator commands sampled every 300 s over 600 s.
 const track = derotatorTrack(hour(2), deg(20), deg(45), 600, 300)
 
 console.log(track.map((s) => s.angle)) // [-0.6606, -0.6757, -0.6899] — radians at 0, 300, 600 s
+```
+
+### Angular Separation and Position Angle
+
+Two sky positions are separated by the great-circle angle between them, and the position angle says in which direction one lies from the other, measured from celestial north toward east: 0° is north, 90° east, 180° south, 270° west. Together they describe double stars, offsets from a guide star, and the orientation of a target relative to a reference.
+
+The separation is computed in an `atan2` form that keeps tiny separations accurate, where the classical cosine formula loses precision; a haversine variant exists but is less stable. The position angle is that of the second point as seen from the first, in `[0, 2π)`. For two Cartesian direction vectors instead of equatorial coordinates, use the vector separation. All angles are radians.
+
+```ts
+import { separationFrom } from 'nebulosa/src/astronomy/coordinates/astrometry'
+import { angularDistance, angularDistanceHaversine, positionAngleBetween } from 'nebulosa/src/astronomy/coordinates/coordinate'
+import { deg, toDeg } from 'nebulosa/src/math/units/angle'
+
+// Right ascension and declination of point 0 and point 1 (radians).
+console.log(toDeg(angularDistance(deg(10), deg(20), deg(10), deg(21)))) // 1.0 — degrees
+
+// The same separation with the haversine formula.
+console.log(toDeg(angularDistanceHaversine(deg(10), deg(20), deg(10), deg(21)))) // 1.0 — degrees
+
+// Position angle of point 1 from point 0, north through east.
+console.log(toDeg(positionAngleBetween(deg(10), deg(20), deg(10), deg(21)))) // 0 — north
+console.log(toDeg(positionAngleBetween(deg(10), deg(20), deg(11), deg(20)))) // 89.83 — nearly east
+
+// Angle between two direction vectors (need not be unit length).
+console.log(toDeg(separationFrom([1, 0, 0], [0, 1, 0]))) // 90 — degrees
 ```
 
 ### Angular Size and Surface Brightness Estimates
@@ -161,28 +193,6 @@ console.log(toArcmin(theta)) // 31.974 — arcminutes
 
 // Total magnitude 10 spread over 3600 arcsec² (one square arcminute).
 console.log(surfaceBrightness(10, 3600)) // 18.8908 — mag/arcsec²
-```
-
-### Angular Separation and Position Angle
-
-Two sky positions are separated by the great-circle angle between them, and the position angle says in which direction one lies from the other, measured from celestial north toward east: 0° is north, 90° east, 180° south, 270° west. Together they describe double stars, offsets from a guide star, and the orientation of a target relative to a reference.
-
-The separation is computed in an `atan2` form that keeps tiny separations accurate, where the classical cosine formula loses precision; a haversine variant exists but is less stable. The position angle is that of the second point as seen from the first, in `[0, 2π)`. For two Cartesian direction vectors instead of equatorial coordinates, use the vector separation. All angles are radians.
-
-```ts
-import { separationFrom } from 'nebulosa/src/astronomy/coordinates/astrometry'
-import { angularDistance, positionAngleBetween } from 'nebulosa/src/astronomy/coordinates/coordinate'
-import { deg, toDeg } from 'nebulosa/src/math/units/angle'
-
-// Right ascension and declination of point 0 and point 1 (radians).
-console.log(toDeg(angularDistance(deg(10), deg(20), deg(10), deg(21)))) // 1.0 — degrees
-
-// Position angle of point 1 from point 0, north through east.
-console.log(toDeg(positionAngleBetween(deg(10), deg(20), deg(10), deg(21)))) // 0 — north
-console.log(toDeg(positionAngleBetween(deg(10), deg(20), deg(11), deg(20)))) // 89.83 — nearly east
-
-// Angle between two direction vectors (need not be unit length).
-console.log(toDeg(separationFrom([1, 0, 0], [0, 1, 0]))) // 90 — degrees
 ```
 
 ### Annual Aberration
@@ -215,7 +225,8 @@ import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
 const time = timeYMDHMS(2025, 9, 28, 12, 0, 0, Timescale.TDB)
 
 // target, observer, sun: providers of a barycentric [position (AU), velocity (AU/day)], such as ephemeris lookups.
-// Light time, then deflection by the Sun, then the observer's aberration.
+// Light time, then deflection by the Sun, then the observer's aberration. JUPITER_ and SATURN_LIGHT_DEFLECTOR_MASS
+// and _LIMITER describe the giant planets as further deflectors.
 const result = apparentDirection(target, observer, time, {
 	sun,
 	deflectors: [{ mass: SUN_LIGHT_DEFLECTOR_MASS, limiter: SUN_LIGHT_DEFLECTOR_LIMITER, state: sun }],
@@ -276,7 +287,7 @@ A small body's orbit is described by classical elements referred to a plane and 
 The elements are heliocentric and referred to the ecliptic and equinox of J2000, as in the MPC files, and the gravitational parameter is the Sun's. The comet constructor takes the semi-latus rectum `p = q(1 + e)`, which stays finite for every conic, rather than the perihelion distance `q`. The state at the epoch is kept in that ecliptic frame, while a propagated state is rotated to equatorial J2000. Orbits can also be built from parsed MPC records (see [MPCORB Parsing](#mpcorb-parsing)), whose epochs are TT, or from a Cartesian state. A hyperbolic orbit has a negative semi-major axis and an infinite period.
 
 ```ts
-import { asteroid, comet, mpcAsteroid } from 'nebulosa/src/astronomy/orbits/asteroid'
+import { asteroid, comet, KeplerOrbit, mpcAsteroid } from 'nebulosa/src/astronomy/orbits/asteroid'
 import { mpcorb } from 'nebulosa/src/astronomy/orbits/mpcorb'
 import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
 import { deg } from 'nebulosa/src/math/units/angle'
@@ -296,6 +307,11 @@ const [position, velocity] = ceres.at(timeYMDHMS(2026, 1, 1, 0, 0, 0, Timescale.
 const halley = comet(0.583972 * (1 + 0.967311), 0.967311, deg(162.2146), deg(59.6368), deg(112.547), timeYMDHMS(2061, 8, 31, 19, 50, 18, Timescale.TT))
 
 console.log(halley.periodInDays / 365.25) // 75.5 — years
+
+// The underlying constructors take the semi-latus rectum p = a(1 − e²) and an anomaly: KeplerOrbit.meanAnomaly (used by asteroid),
+// KeplerOrbit.periapsis (used by comet, the epoch being the perihelion time), and KeplerOrbit.trueAnomaly.
+const e = 0.0794013
+console.log(KeplerOrbit.meanAnomaly(2.7660512 * (1 - e * e), e, deg(10.5878), deg(80.25221), deg(73.27343), deg(188.70269), epoch).position) // [2.7711, -0.96407, -0.54103] — AU, Ceres again
 
 // line: the MPCORB.DAT record of Ceres (epoch K2555 = 2025-05-05). mpcComet(mpcorbComet(line)) does the same for CometEls.txt.
 console.log(mpcAsteroid(mpcorb(line)!).position) // [2.7711, -0.96407, -0.54103] — AU, the same orbit
@@ -382,12 +398,17 @@ A `Time` is an instant stored as an integer Julian Date `day`, a `fraction` of a
 Astronomy writes instants in several epoch conventions, and each has a constructor: the Julian Date, the Modified Julian Date (`JD − 2400000.5`), Julian epoch years such as J2000.0 (365.25-day years, on TT by default), Besselian epoch years such as B1950.0 of the older catalogs, counts of units after a reference instant, and GPS seconds (a TAI instant). The tag only labels the instant; converting between scales is a separate step, see [Astronomical Time-Scale Conversion](#astronomical-time-scale-conversion), and calendar construction is under [Civil UTC Timestamps](#civil-utc-timestamps).
 
 ```ts
-import { time, timeBesselianYear, timeFromEpoch, timeGPS, timeJulianYear, timeMJD, Timescale, toJulianDay, toJulianEpoch } from 'nebulosa/src/astronomy/time/time'
+import { time, timeBesselianYear, timeFromEpoch, timeGPS, timeJulianYear, timeMJD, timeNormalize, Timescale, toJulianDay, toJulianEpoch } from 'nebulosa/src/astronomy/time/time'
 
 // day: integer Julian Date. fraction: days. Normalized so the fraction is within [-0.5, 0.5); UTC by default.
 const t = time(2451545, 0.25)
 
 console.log(t.day, t.fraction) // 2451545 0.25
+
+// The normalization alone: day and fraction re-split so the fraction is within [-0.5, 0.5).
+const normalized = timeNormalize(2451545, 0.75)
+
+console.log(normalized.day, normalized.fraction) // 2451546 -0.25
 
 // Epoch conventions.
 console.log(toJulianDay(timeMJD(51544.5))) // 2451545 — J2000.0 as a JD
@@ -408,14 +429,14 @@ Astronomy uses several time scales. UTC is the civil scale with leap seconds; TA
 Each conversion returns a new instant in the target scale. Without loaded IERS tables `UT1 − UTC` is 0, so UT1 silently equals UTC; load them first (see [Earth Orientation Parameters](#earth-orientation-parameters)). TDB − TT is the ERFA model and includes a topocentric term when the instant carries a location. The offsets come from replaceable providers, which an instant can override for itself.
 
 ```ts
-import { dut1, taiMinusUtc, tdb, tdbMinusTt, timeConvert, timeToDate, Timescale, timeYMDHMS, tt, utc } from 'nebulosa/src/astronomy/time/time'
+import { dut1, taiMinusUtc, tdb, tdbMinusTt, tdbMinusTtByFairheadAndBretagnon1990, timeConvert, timeToDate, Timescale, timeYMDHMS, tt, ut1MinusTai, utc } from 'nebulosa/src/astronomy/time/time'
 
 const instant = timeYMDHMS(2026, 6, 29, 0, 0, 0, Timescale.UTC)
 
 // One function per target scale (utc, ut1, tai, tt, tcg, tdb, tcb), or timeConvert for any.
 const terrestrial = tt(instant)
 
-console.log(timeToDate(terrestrial)) // [2026, 6, 29, 0, 1, 9, 183] — TT clock reading, 69.184 s ahead
+console.log(timeToDate(terrestrial)) // [2026, 6, 29, 0, 1, 9, 184] — TT clock reading, 69.184 s ahead
 console.log(utc(terrestrial).day === instant.day) // true — round trip
 console.log(timeConvert(instant, Timescale.TDB).scale === tdb(instant).scale) // true
 
@@ -423,6 +444,11 @@ console.log(timeConvert(instant, Timescale.TDB).scale === tdb(instant).scale) //
 console.log(taiMinusUtc(instant)) // 37 — leap seconds in force
 console.log(tdbMinusTt(terrestrial)) // 0.000174 — TDB - TT
 console.log(dut1(instant)) // 0 — UT1 - UTC, 0 when no IERS data is loaded
+console.log(ut1MinusTai(instant)) // -37 — UT1 - TAI
+
+// The defaults are in TIME_PROVIDERS. An alternative TDB - TT series (USNO Circular 179), usable as an
+// instant's providers.tdbMinusTt.
+console.log(tdbMinusTtByFairheadAndBretagnon1990(terrestrial)) // 0.000178 — seconds
 ```
 
 ### B-Plane
@@ -626,7 +652,7 @@ A rotating frame also needs the term `W = dR/dt · Rᵀ`, so that a full state t
 
 ```ts
 import { eraS2c } from 'nebulosa/src/astronomy/coordinates/erfa/erfa'
-import { ecliptic, frameAt, frameRotationAt, frameToBase, frameToFrame, galactic, GALACTIC, ICRS, ITRS, ECLIPTIC_J2000 } from 'nebulosa/src/astronomy/coordinates/frame'
+import { cirs, ECLIPTIC_J2000, ecliptic, frameAt, frameRotationAt, frameToBase, frameToFrame, GALACTIC, galactic, ICRS, ITRS, supergalactic } from 'nebulosa/src/astronomy/coordinates/frame'
 import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
 import { deg, hour } from 'nebulosa/src/math/units/angle'
 
@@ -639,7 +665,17 @@ const direction = eraS2c(hour(10), deg(20))
 console.log(galactic(direction)) // [-0.5312, -0.3556, 0.7690]
 console.log(ecliptic(direction, time)) // unit vector in ecliptic-of-date axes
 
-// Generic conversions: between two frames through the base, and back to the base.
+// Other fixed wrappers: icrs, fk4, fk5, eclipticJ2000, eclipticB1950, meanEquatorAndEquinoxAtB1950.
+console.log(supergalactic(direction)) // [0.1500, 0.8327, -0.5330]
+
+// Other time-dependent wrappers: meanEquatorAndEquinoxOfDate, trueEquatorAndEquinoxOfDate, meanEclipticOfDate,
+// tirs, teme, itrs, itrsInstantaneous.
+console.log(cirs(direction, time)) // [-0.8147, 0.4698, 0.3399] — CIRS axes
+
+// Generic conversions: between two frames through the base, and back to the base. The Frame constants are ICRS, FK4,
+// FK5, GALACTIC, SUPERGALACTIC, ECLIPTIC_J2000, ECLIPTIC_B1950, MEAN_EQUATOR_AND_EQUINOX_AT_B1950,
+// MEAN_EQUATOR_AND_EQUINOX_OF_DATE, TRUE_EQUATOR_AND_EQUINOX_OF_DATE, MEAN_ECLIPTIC_OF_DATE, ECLIPTIC, CIRS, TIRS,
+// TEME, ITRS, and ITRS_INSTANTANEOUS.
 console.log(frameToFrame(direction, ICRS, ECLIPTIC_J2000)) // unit vector in ecliptic J2000 axes
 console.log(frameToBase(galactic(direction), GALACTIC, time)) // [-0.8138, 0.4698, 0.3420] — the original direction
 
@@ -665,7 +701,7 @@ Civil time is a calendar date and clock reading in UTC, and Unix time counts sec
 Unix time follows POSIX: every day has 86400 labelled seconds, so on a leap-second day a Unix value maps to the same civil clock reading as `Date.UTC`, and the inserted second 23:59:60.x converts to the Unix value of the next midnight. Conversions to Unix time convert the instant to UTC first.
 
 ```ts
-import { timeNow, timeToDate, timeToUnix, timeUnix, timeYMD, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { timeNow, timeToDate, timeToUnix, timeToUnixMillis, timeUnix, timeYMD, timeYMDHMS, utcLeapSeconds } from 'nebulosa/src/astronomy/time/time'
 
 // Year, month, day, hour, minute, and second (fractional allowed), UTC by default.
 const instant = timeYMDHMS(2026, 6, 29, 12, 30, 15.25)
@@ -676,9 +712,13 @@ console.log(timeToDate(timeYMD(2026, 6, 29, 0.75))) // [2026, 6, 29, 18, 0, 0, 0
 // Unix seconds since 1970-01-01 00:00:00 UTC, both ways.
 console.log(timeToDate(timeUnix(946684800))) // [2000, 1, 1, 0, 0, 0, 0]
 console.log(timeToUnix(timeYMDHMS(2000, 1, 1))) // 946684800 — seconds
+console.log(timeToUnixMillis(timeYMDHMS(2000, 1, 1, 0, 0, 0.25))) // 946684800250 — milliseconds
 
 // A positive leap second: 2016-12-31 23:59:60.
 console.log(timeToDate(timeYMDHMS(2016, 12, 31, 23, 59, 60.5))) // [2016, 12, 31, 23, 59, 60, 500]
+
+// Extra length of a UTC civil day in seconds (year, month, day).
+console.log(utcLeapSeconds(2016, 12, 31), utcLeapSeconds(2016, 12, 30)) // 1 0
 
 // Current instant from the system clock, UTC.
 const now = timeNow()
@@ -691,7 +731,7 @@ The IAU divides the sky into 88 constellations with boundaries defined along lin
 The lookup precesses the position from its equinox (J2000 by default) to B1875 and searches the boundary table. The result is the three-letter uppercase key, which indexes a table of display names, IAU abbreviations, Latin genitives, and short descriptions.
 
 ```ts
-import { constellation, CONSTELLATIONS } from 'nebulosa/src/astronomy/coordinates/constellation'
+import { CONSTELLATION_LIST, constellation, CONSTELLATIONS } from 'nebulosa/src/astronomy/coordinates/constellation'
 import { deg, hour } from 'nebulosa/src/math/units/angle'
 
 // J2000 right ascension 5h30m, declination -5° (radians).
@@ -702,6 +742,9 @@ console.log(CONSTELLATIONS[key].name, CONSTELLATIONS[key].genitive) // Orion Ori
 
 // Coordinates already on the B1875 equinox: no precession is applied.
 console.log(constellation(hour(5.5), deg(-5), false)) // ORI
+
+// All keys, in table order.
+console.log(CONSTELLATION_LIST.length) // 88
 ```
 
 ### DAF Binary Containers
@@ -736,14 +779,18 @@ Delta T is `TT − UT1`: the gap between the uniform Terrestrial Time scale and 
 One model is used per era: the Stephenson, Morrison and Hohenkerk 2016 parabola before year −720, their S15 cubic spline from there to 2019, and the Espenak and Meeus 2006 expressions after 2019. A step of about 1.8 s exists at 2019, where observations hand over to forward prediction, so values after 2019 are model predictions rather than measurements. The Espenak-Meeus polynomial alone is also available.
 
 ```ts
-import { deltaT, deltaTByEspenakMeeus2006 } from 'nebulosa/src/astronomy/time/deltat'
+import { deltaT, deltaTByEspenakMeeus2006, parabolaOfStephensonMorrisonHohenkerk2016, s15 } from 'nebulosa/src/astronomy/time/deltat'
 
 // year: decimal calendar year, e.g. 2000.5 is mid-2000. Result in seconds.
 console.log(deltaT(2000)) // 63.81 — seconds, from the S15 spline
 console.log(deltaT(1900)) // -1.98 — seconds
 console.log(deltaT(2100)) // 202.74 — seconds, predicted
 
-console.log(deltaTByEspenakMeeus2006(2000)) // 63.86 — seconds, Espenak-Meeus polynomial only
+// Each model alone: the Espenak-Meeus polynomial, the S15 spline segment of a year, and the long-term
+// parabola (parabolaOfStephensonMorrison2004 is the older one).
+console.log(deltaTByEspenakMeeus2006(2000)) // 63.86 — seconds
+console.log(s15(2000).compute(2000)) // 63.81 — seconds, what deltaT uses here
+console.log(parabolaOfStephensonMorrisonHohenkerk2016.compute(-1000)) // 25049.16 — seconds, what deltaT uses before -720
 ```
 
 ### Dew Point and Frost
@@ -753,7 +800,7 @@ The dew point is the temperature at which air saturates and water condenses on a
 Temperatures are °C within the Magnus domain of −100 to 100 °C, and humidity is relative, in percent. The frost point expects the humidity relative to ice, not the water-relative value weather stations report; above freezing the dew point is the relevant temperature. The relative humidity is the inverse of the dew point, and the dew risk is a planning scale from 1 at or below the dew point down to 0 at a clear margin.
 
 ```ts
-import { dewMargin, dewPoint, dewRisk, frostPoint, relativeHumidity } from 'nebulosa/src/astronomy/formulas'
+import { dewMargin, dewPoint, dewRisk, dewRiskFromMargin, frostPoint, relativeHumidity } from 'nebulosa/src/astronomy/formulas'
 
 // temperature: °C. humidity: percent over water, in (0, 100].
 const td = dewPoint(20, 60)
@@ -765,6 +812,9 @@ console.log(frostPoint(-10, 50)) // -17.58 — °C, humidity relative to ice
 // Margin above the dew point (T - Tdew) and the risk on a 0..1 scale.
 console.log(dewMargin(20, 60)) // 8.0 — °C
 console.log(dewRisk(10, 90, 10)) // 0.8435 — margin of 1.57 °C against a 10 °C clear margin
+
+// The same risk from a margin measured directly (°C), against the default clear margin.
+console.log(dewRiskFromMargin(2)) // 0.6
 ```
 
 ### Differential Orbit Correction
@@ -813,6 +863,50 @@ console.log(toDeg(dispersion!.positionAngle!)) // 149.2 — degrees, parallactic
 console.log(dispersion?.pixels) // 1.1357 — pixels
 ```
 
+### Digital Elevation Model Terrain
+
+A digital elevation model (DEM) is a grid of surface heights, such as the LOLA topography of the Moon. On an airless body, relief decides the look of the surface near the terminator: a crater floor stays dark while its rim is lit, and a peak casts a shadow whose length grows as the Sun drops, roughly `L ≈ h / tan(altitude)` on level ground, the basis of the classical shadow-length measurement of lunar heights. A smooth reference ellipsoid predicts none of this.
+
+The terrain functions work on a caller-supplied grid in body-fixed planetocentric longitude and latitude, with heights in AU above the same reference ellipsoid as the feature's location (for LOLA, a 1737.4 km sphere). They stand a feature on the terrain, march the DEM to build its horizon mask and its facet slope for [Surface Feature Illumination](#surface-feature-illumination), trace a ray toward a direction to tell whether relief blocks it, and find the tip of the shadow a summit or rim casts. The Sun is treated as a point; to bracket the penumbra, offset the solar altitude by its angular radius. All results are only as good as the DEM: ridges and peaks narrower than its spacing can be missed or smoothed.
+
+```ts
+import { bodyFixedFrame, MOON_ROTATION } from 'nebulosa/src/astronomy/bodies/orientation'
+import { moon } from 'nebulosa/src/astronomy/ephemeris/models/analytical/elpmpp02'
+import { earth, sun } from 'nebulosa/src/astronomy/ephemeris/models/analytical/vsop87e'
+import { surfaceFeature, surfaceFeatureIllumination } from 'nebulosa/src/astronomy/events/surface'
+import { type ElevationGrid, terrainElevation, terrainHorizon, terrainModel, terrainOcclusion, terrainShadowTip, terrainSlope, terrainSurfaceLocation } from 'nebulosa/src/astronomy/events/surface.terrain'
+import { bodyShape } from 'nebulosa/src/astronomy/observer/body'
+import { type Time, Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { vecMinus } from 'nebulosa/src/math/linear-algebra/vec3'
+import { deg } from 'nebulosa/src/math/units/angle'
+import { kilometer } from 'nebulosa/src/math/units/distance'
+
+// grid: ElevationGrid — heights in AU above the 1737.4 km sphere on a planetocentric longitude/latitude grid around Copernicus.
+declare const grid: ElevationGrid
+const dem = terrainModel(grid)
+
+// Interpolated terrain height (AU) at 20.08° W, 9.62° N; undefined off the grid or next to missing data.
+console.log(terrainElevation(dem, deg(-20.08), deg(9.62)))
+
+// A feature standing on the terrain, then with the horizon mask and facet the DEM implies.
+const radius = kilometer(1737.4)
+const floor = surfaceFeature(terrainSurfaceLocation(dem, deg(-20.08), deg(9.62), bodyShape([radius, radius, radius]), bodyFixedFrame(MOON_ROTATION))!)
+const feature = surfaceFeature(floor.location, { ...terrainSlope(dem, floor), horizon: terrainHorizon(dem, floor) })
+
+// The local Sun at one instant (Moon-centre to Sun and to the geocenter, AU).
+const sunAt = (time: Time) => vecMinus(vecMinus(sun(time)[0], earth(time)[0]), moon(time)[0])
+const earthAt = (time: Time) => vecMinus([0, 0, 0], moon(time)[0])
+const light = surfaceFeatureIllumination(feature, sunAt, earthAt, timeYMDHMS(2024, 1, 20, 12, 0, 0, Timescale.TDB))
+
+// The first terrain crossing of the ray toward the Sun, or undefined when it is clear of relief.
+const blocker = terrainOcclusion(dem, feature, light.solarAltitude, light.solarAzimuth)
+
+console.log(blocker === undefined ? 'sunlit' : 'in a cast shadow')
+
+// The tip of the shadow the feature casts down-Sun: its length along the surface (AU).
+console.log(terrainShadowTip(dem, feature, light.solarAltitude, light.solarAzimuth)?.distance)
+```
+
 ### Earth Occultation of a Finite Target
 
 A satellite or spacecraft can be hidden behind the solid Earth as seen from another one, which decides when an inter-satellite link, a relay, or an observation of one spacecraft from another is possible. The question is whether the straight segment from an observer to a target at a finite distance touches the Earth's reference ellipsoid, and where. This is a geometric test only: there is no atmosphere, terrain, or shadow of the Sun, so it says nothing about visibility under illumination.
@@ -843,7 +937,7 @@ The Earth does not rotate uniformly, and its rotation axis wanders slightly insi
 The library has no built-in tables. You load one of two IERS files into a shared provider, and the time module reads them automatically: the IERS Bulletin A `finals2000A` file (rapid and predicted values extending into the future) or the IERS EOP 14 C04 `eopc04` series (final values); where both cover a date, C04 is preferred. Values are linearly interpolated between daily samples, with the leap-second jump removed from `UT1 − UTC` so it stays continuous, and clamp to the nearest edge outside the table. With nothing loaded they are 0, which silently turns UT1 into UTC, so load a table before computing UT1-dependent results. To use other data for a single instant, replace the providers described in [Astronomical Time-Scale Conversion](#astronomical-time-scale-conversion).
 
 ```ts
-import { dut1, iersa, xy } from 'nebulosa/src/astronomy/time/iers'
+import { dut1, iersa, iersab, xy } from 'nebulosa/src/astronomy/time/iers'
 import { Timescale, timeYMDHMS, ut1 } from 'nebulosa/src/astronomy/time/time'
 import { readableStreamSource } from 'nebulosa/src/io/io'
 import { toArcsec } from 'nebulosa/src/math/units/angle'
@@ -858,9 +952,17 @@ const time = timeYMDHMS(2020, 10, 7, 12, 34, 56, Timescale.UTC)
 console.log(dut1(time)) // -0.17181 — seconds, UT1 - UTC
 console.log(xy(time).map(toArcsec)) // [0.18781, 0.31804] — arcseconds, polar motion x and y (returned in radians)
 console.log(iersa.covers(time)) // true
+console.log(iersa.distance(time)) // 0 — days outside the table's coverage
+
+// iersab, the C04-first combination of iersa and iersb, is what dut1 and xy read; it has the same
+// dut1, xy, and covers methods. new IersA(), new IersB(), and new IersAB(a, b) build private tables.
+console.log(iersab.dut1(time)) // -0.17181 — seconds
 
 // The time module now applies UT1 - UTC.
 const instant = ut1(time)
+
+// Drop the loaded table; lookups fall back to 0.
+iersa.clear()
 ```
 
 ### Elliptic Elements to Rectangular State
@@ -870,7 +972,7 @@ The analytical satellite theories describe each orbit by slowly varying elliptic
 The element array is `[a or n, L, K, H, Q, P]` with the angles in radians, and the state is evaluated a time offset `dt` in days after the elements' epoch. The first element is either the semi-major axis in AU, with the mean motion derived from the gravitational parameter `mu` (AU³/day²), or the mean motion in radians per day, with the semi-major axis derived. Position is in AU and velocity in AU/day, in the frame the elements are referred to. The orbit must be elliptic (`K² + H² < 1`); for hyperbolic or parabolic orbits see [Two-Body Kepler Propagation](#two-body-kepler-propagation).
 
 ```ts
-import { ellipticToRectangularA, ellipticToRectangularN } from 'nebulosa/src/astronomy/ephemeris/ephemeris'
+import { ellipticToRectangular, ellipticToRectangularA, ellipticToRectangularN } from 'nebulosa/src/astronomy/ephemeris/ephemeris'
 import { GM_SUN_PITJEVA_2005, TAU } from 'nebulosa/src/core/constants'
 
 const mu = GM_SUN_PITJEVA_2005 // AU³/day²
@@ -884,6 +986,9 @@ console.log(velocity) // [-0.017202, 0, 0] — AU/day, counter-clockwise
 
 // The same orbit with the mean motion (radians/day) in place of a.
 console.log(ellipticToRectangularN(mu, [n, 0, 0, 0, 0, 0], TAU / n / 4)[0]) // [0, 1, 0] — AU
+
+// The general form takes both a (AU) and n (radians/day), and ignores the first element.
+console.log(ellipticToRectangular(1, n, [1, 0, 0, 0, 0, 0], TAU / n / 4)[0]) // [0, 1, 0] — AU
 ```
 
 ### ELP/MPP02 Lunar Theory
@@ -912,10 +1017,11 @@ Observing a body from another moves through stages, each a distinct kind of posi
 This is the path-based counterpart of [Apparent Direction](#apparent-direction): the observer and target are barycentric ephemeris paths (see [Ephemeris Path Composition](#ephemeris-path-composition)), aberration needs a barycentric Sun path, and deflection applies only to the bodies you list. A stage can be read as right ascension, declination, and distance, rotated into another frame, or, for a geometric state, converted to spherical coordinates and rates (see [Spherical State Rates](#spherical-state-rates)). Right ascension and declination here are ICRS, not of date: no precession, nutation, or refraction is applied, and for an observed place use [Topocentric Observed Place](#topocentric-observed-place).
 
 ```ts
+import { ECLIPTIC_J2000 } from 'nebulosa/src/astronomy/coordinates/frame'
 import { Naif } from 'nebulosa/src/astronomy/ephemeris/kernels/naif'
 import { earth, mars, sun } from 'nebulosa/src/astronomy/ephemeris/models/analytical/vsop87e'
 import { ephemerisPath, naifEphemerisEndpoint, SOLAR_SYSTEM_BARYCENTER } from 'nebulosa/src/astronomy/ephemeris/path'
-import { apparentPosition, ephemerisAt, equatorialPosition, observeEphemeris } from 'nebulosa/src/astronomy/ephemeris/position'
+import { apparentPosition, directionPositionInFrame, ephemerisAt, equatorialPosition, geometricPositionInFrame, geometricSphericalPositionAndVelocity, observeEphemeris } from 'nebulosa/src/astronomy/ephemeris/position'
 import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
 import { toDeg, toHour } from 'nebulosa/src/math/units/angle'
 
@@ -927,7 +1033,15 @@ const marsPath = ephemerisPath(SOLAR_SYSTEM_BARYCENTER, naifEphemerisEndpoint(49
 const sunPath = ephemerisPath(SOLAR_SYSTEM_BARYCENTER, naifEphemerisEndpoint(Naif.SUN, 'Sun'), sun)
 
 // Geometric: Earth's owned barycentric state.
-console.log(ephemerisAt(earthPath, time).position) // [0.12079, -0.93081, -0.40337] — AU
+const geometric = ephemerisAt(earthPath, time)
+
+console.log(geometric.position) // [0.12079, -0.93081, -0.40337] — AU
+
+// The geometric state rotated into another frame, and as spherical coordinates with their rates.
+console.log(geometricPositionInFrame(geometric, ECLIPTIC_J2000)[0]) // [0.12079, -1.01445, 0.00016925] — AU, ecliptic J2000
+const spherical = geometricSphericalPositionAndVelocity(geometric, ECLIPTIC_J2000)!
+
+console.log(toDeg(spherical.longitude), toDeg(spherical.longitudeRate!)) // 276.79 0.94891 — degrees and degrees/day
 
 // Astrometric: Mars as seen from Earth, with light time.
 const astrometric = observeEphemeris(earthPath, marsPath, time)!
@@ -939,6 +1053,9 @@ const apparent = apparentPosition(astrometric, { sun: sunPath })
 const [ra, dec, distance] = equatorialPosition(apparent)
 
 console.log(toHour(ra), toDeg(dec), distance) // 3.8430 19.780 2.1124 — hours, degrees, AU (ICRS, not of date)
+
+// The unit direction of an astrometric or apparent stage rotated into another frame.
+console.log(directionPositionInFrame(apparent, ECLIPTIC_J2000)) // [0.50360, 0.86392, -0.0057048] — unit vector, ecliptic J2000
 ```
 
 ### Ephemeris Path Adapters
@@ -997,7 +1114,7 @@ An endpoint is a NAIF body code or a caller-defined identifier; its name is only
 import { Naif } from 'nebulosa/src/astronomy/ephemeris/kernels/naif'
 import { moon } from 'nebulosa/src/astronomy/ephemeris/models/analytical/elpmpp02'
 import { earth, sun } from 'nebulosa/src/astronomy/ephemeris/models/analytical/vsop87e'
-import { composeEphemerisPaths, ephemerisPath, naifEphemerisEndpoint, relativeEphemerisPath, reverseEphemerisPath, SOLAR_SYSTEM_BARYCENTER } from 'nebulosa/src/astronomy/ephemeris/path'
+import { composeEphemerisPaths, ephemerisPath, naifEphemerisEndpoint, relativeEphemerisPath, reverseEphemerisPath, sameEphemerisEndpoint, SOLAR_SYSTEM_BARYCENTER } from 'nebulosa/src/astronomy/ephemeris/path'
 import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
 
 const time = timeYMDHMS(2026, 6, 29, 0, 0, 0, Timescale.TDB)
@@ -1017,6 +1134,9 @@ console.log(relativeEphemerisPath(sunPath, earthPath).stateAt(time)[0]) // [-0.1
 
 // Earth -> barycenter: center and target swapped, state negated.
 console.log(reverseEphemerisPath(earthPath).stateAt(time)[0]) // [-0.12079, 0.93081, 0.40337] — AU
+
+// Endpoints compare by NAIF code or identifier, never by name.
+console.log(sameEphemerisEndpoint(earthPath.target, naifEphemerisEndpoint(Naif.EARTH, 'Terra'))) // true
 ```
 
 ### Equation of Time
@@ -1061,10 +1181,21 @@ const at = (days: number) => time(start.day, start.fraction + days, Timescale.TT
 // Daily samples over 4 days: { time, rightAscension, declination } in radians.
 const points = [0, 1, 2, 3, 4].map((d) => ({ time: at(d), rightAscension: hour(10) + deg(0.5) * d + deg(0.02) * d * d, declination: deg(20) - deg(0.1) * d }))
 
-// Linear interpolation: [ra, dec] in radians at any instant of the span.
-const [ra, dec] = linearInterpolator(points).compute(at(1.5))
+// Linear interpolation: [ra, dec] in radians at any instant of the span. The factories return
+// LinearEphemerisInterpolator, SplineEphemerisInterpolator, and ChebyshevEphemerisInterpolator instances.
+const linear = linearInterpolator(points)
+const [ra, dec] = linear.compute(at(1.5))
 
 console.log(toHour(ra), toDeg(dec)) // 10.0533 19.85 — hours, degrees
+
+// The same evaluation written into a caller-owned [ra, dec] pair.
+const out: [number, number] = [0, 0]
+linear.computeInto(at(1.5), out)
+
+// Refit the same interpolator to new samples, here every declination 1° higher.
+linear.update(points.map((p) => ({ ...p, declination: p.declination + deg(1) })))
+
+console.log(toDeg(linear.compute(at(1.5))[1])) // 20.85 — degrees
 
 // Natural cubic spline (default type) and a degree-4 Chebyshev fit.
 console.log(toHour(splineInterpolator(points).compute(at(1.5))[0])) // 10.0530 — hours
@@ -1086,7 +1217,7 @@ An equatorial mount that is not perfectly built or aligned points slightly away 
 `[ΔH, Δδ]` is the amount to add to the mechanical hour angle and declination to get where the optical axis really points; in right ascension, with `H = LST − RA`, the true pointing is `[RA − ΔH, δ + Δδ]`. A polar axis misaligned by knob errors is the special case `MA = azimuth·cos(latitude)` and `ME = −altitude`, plus a constant hour-angle term `azimuth·sin(latitude)`; a positive altitude error means the polar axis points above the true pole. All coefficients are radians. The `sec δ` and `tan δ` terms diverge at the pole, so near it the raw `ΔH` grows large without meaning an on-sky error of that size; the corrected right ascension and declination remain well defined there. Add tube flexure separately with [Tube Flexure Pointing Error](#tube-flexure-pointing-error).
 
 ```ts
-import { applyEquatorialPointingError, equatorialPointingError, type EquatorialPointingModel, IDENTITY_EQUATORIAL_POINTING_MODEL, polarAlignmentPointingModel } from 'nebulosa/src/astronomy/coordinates/pointing'
+import { applyEquatorialPointingError, equatorialPointingError, type EquatorialPointingModel, IDENTITY_EQUATORIAL_POINTING_MODEL, isIdentityEquatorialPointingModel, polarAlignmentPointingModel } from 'nebulosa/src/astronomy/coordinates/pointing'
 import { arcsec, deg, hour, toArcsec, toDeg, toHour } from 'nebulosa/src/math/units/angle'
 
 const model: EquatorialPointingModel = {
@@ -1098,6 +1229,9 @@ const model: EquatorialPointingModel = {
 	polarAzimuthError: arcsec(60), // MA
 	polarAltitudeError: arcsec(-60), // ME
 }
+
+// Whether every term is zero, so the correction can be skipped.
+console.log(isIdentityEquatorialPointingModel(IDENTITY_EQUATORIAL_POINTING_MODEL), isIdentityEquatorialPointingModel(model)) // true false
 
 // [ΔH, Δδ] at hour angle 3 h, declination +45°.
 const [deltaHourAngle, deltaDeclination] = equatorialPointingError(hour(3), deg(45), model)
@@ -1142,7 +1276,34 @@ The routines come in families named after ERFA: `Tt`, `Tai`, `Utc`, `Ut1`, `Tdb`
 
 ```ts
 import { eraEpv00 } from 'nebulosa/src/astronomy/coordinates/erfa/earth'
-import { eraAnpm, eraApco13, eraAtciq, eraAtco13, eraAtoc13, eraBp06, eraC2s, eraC2t06a, eraCalToJd, eraDat, eraEra00, eraFk425, eraGd2Gce, eraGmst06, eraHd2ae, eraIcrs2g, eraNut06a, eraObl06, eraRefco, eraStarpm, eraTaiTt, eraTpxes, eraUtcTai, eraUtcUt1, eraXys06a } from 'nebulosa/src/astronomy/coordinates/erfa/erfa'
+import {
+	eraAnpm,
+	eraApco13,
+	eraAtciq,
+	eraAtco13,
+	eraAtoc13,
+	eraBp06,
+	eraC2s,
+	eraC2t06a,
+	eraCalToJd,
+	eraDat,
+	eraEra00,
+	eraFk425,
+	eraGd2Gce,
+	eraGmst06,
+	eraHd2ae,
+	eraIcrs2g,
+	eraLtpequ,
+	eraNut06a,
+	eraObl06,
+	eraRefco,
+	eraStarpm,
+	eraTaiTt,
+	eraTpxes,
+	eraUtcTai,
+	eraUtcUt1,
+	eraXys06a,
+} from 'nebulosa/src/astronomy/coordinates/erfa/erfa'
 import { eraMoon98 } from 'nebulosa/src/astronomy/coordinates/erfa/moon'
 import { arcsec, deg } from 'nebulosa/src/math/units/angle'
 import { meter } from 'nebulosa/src/math/units/distance'
@@ -1151,10 +1312,12 @@ import { kilometerPerSecond } from 'nebulosa/src/math/units/velocity'
 // Angles and vectors: normalize to [-π, π), and Cartesian to spherical.
 console.log(eraAnpm(deg(190))) // -2.96705972839036 (-170°)
 console.log(eraC2s(1, 1, 1)) // [0.7853981633974483, 0.6154797086703873]
+// Also: eraS2c, eraP2s, eraS2p, eraPv2s, eraS2pv, eraPpsp, eraSeps, eraSepp.
 
 // Calendars: the MJD of 2008-02-29, and TAI - UTC on 2017-01-01 in seconds.
 console.log(eraCalToJd(2008, 2, 29)) // 54525
 console.log(eraDat(2017, 1, 1, 0.5)) // 37
+// Also: eraJdToCal, and the Besselian and Julian epochs eraEpb, eraEpj, eraEpb2jd, eraEpj2jd.
 
 // Time scales: UTC to TAI, TT, and UT1 (with UT1 - UTC = 0.1550675 s); each result is a two-part date.
 const tai = eraUtcTai(2456384.5, 0.969254051).slice()
@@ -1162,21 +1325,34 @@ const tt = eraTaiTt(tai[0], tai[1]).slice()
 const ut1 = eraUtcUt1(2456384.5, 0.969254051, 0.1550675).slice()
 
 console.log(tt) // [2456384.5, 0.9700316435925925]
+// Also: eraTaiUtc, eraTtTai, eraTtTdb, eraTdbTt, eraTdbTcb, eraTcbTdb, eraTtTcg, eraTcgTt, eraTtUt1, eraUt1Tt,
+// eraTaiUt1, eraUt1Tai, eraUt1Utc, and TDB - TT eraDtDb.
 
 // Earth rotation angle and GMST 2006 (radians).
 console.log(eraEra00(ut1[0], ut1[1]), eraGmst06(ut1[0], ut1[1], tt[0], tt[1])) // 3.1454097152192517 3.14837320809816
+// Also: eraGmst00, eraGmst82, eraGst06a, eraGst06, eraGst00a, eraGst00b, eraGst94, the equation of the equinoxes
+// eraEe06a, eraEe00, eraEe00a, eraEe00b, eraEect00, eraEqeq94, and the equation of the origins eraEo06a, eraEors.
 
 // Nutation (Δψ, Δε), mean obliquity, and the bias-precession matrices (row-major 3×3).
 console.log(eraNut06a(tt[0], tt[1])) // [0.0000621963812079798, -0.000027249381174917327]
 console.log(eraObl06(tt[0], tt[1])) // 0.40906250804962774
 const [bias, precession, biasPrecession] = eraBp06(tt[0], tt[1])
+// Also nutation and obliquity: eraNut00a, eraNut00b, eraNut80, eraNutm80, eraNumat, eraNum06a, eraNum00a, eraNum00b, eraObl80.
+// Also precession and bias: eraBp00, eraBi00, eraPmat06, eraPmat00, eraPmat76, eraPrec76, eraPr00, eraPb06, eraP06e,
+// eraPfw06, eraFw2m, eraFw2xy, eraBpn2xy, eraPn06, eraPn06a, eraPn00, eraPn00a, eraPn00b, eraPnm06a, eraPnm00a,
+// eraPnm00b, eraPnm80.
+// Also the fundamental arguments: eraFal03, eraFalp03, eraFaf03, eraFad03, eraFaom03, eraFame03, eraFave03, eraFae03,
+// eraFama03, eraFaju03, eraFasa03, eraFaur03, eraFane03, eraFapa03.
 
 // CIP X, Y and the CIO locator s; the celestial-to-terrestrial matrix with polar motion xp, yp and s'.
 console.log(eraXys06a(tt[0], tt[1])) // [0.0013122272008502932, -0.000029280862309744027, 3.0574946809250636e-8]
+// Also: eraXys00a, eraXys00b, eraXy06, eraS06, eraS06a, eraS00, eraS00a, eraS00b, and the TIO locator eraSp00.
 const xp = 2.47230737e-7
 const yp = 1.82640464e-6
 const sp = -3.01974337e-11
 console.log(eraC2t06a(tt[0], tt[1], ut1[0], ut1[1], xp, yp, sp)[0]) // -0.9999918539305882
+// Also: eraC2t00a, eraC2t00b, eraC2txy, eraC2tpe, eraC2tcio, eraC2teqx, eraC2i06a, eraC2i00a, eraC2i00b, eraC2ixys,
+// eraC2ixy, eraC2ibpn, and the polar-motion matrix eraPom00.
 
 // Refraction constants A and B (radians) for 731 hPa, 12.8 °C, 59 % humidity, and 0.55 µm.
 console.log(eraRefco(731, 12.8, 0.59, 0.55)) // [0.0002014187785940397, -2.3614083149436963e-7]
@@ -1194,26 +1370,40 @@ console.log(aob, zob, hob) // 0.09251774485486736 1.4076614052564997 -0.09265154
 // The inverse, observed azimuth/zenith distance ('A') to ICRS; and the two stages: parameters, then ICRS to CIRS.
 console.log(eraAtoc13('A', aob, zob, tt[0], tt[1], ut1[0], ut1[1], ...site, [pb, vb], ph).slice(0, 2)) // [2.710132222988453, 0.17406641381551874]
 console.log(eraAtciq(2.71, 0.174, 1e-5, 5e-6, arcsec(0.1), kilometerPerSecond(55), eraApco13(tt[0], tt[1], ut1[0], ut1[1], ...site, [pb, vb], ph))) // [2.7102974865123404, 0.17283379216905348]
+// Also parameters: eraApci13, eraApci, eraApcg, eraApcs, eraApco, eraApio13, eraApio, eraPvtob.
+// Also transformations: eraAtci13, eraAtciqz, eraAtciqn, eraAtccq, eraAtcc13, eraAtic13, eraAticq, eraAticqn,
+// eraAtio13, eraAtioq, eraAtoi13, eraAtoiq; aberration eraAb and light deflection eraLd, eraLdn, eraLdSun.
 
 // Horizontal: azimuth and elevation from hour angle, declination, and latitude.
 console.log(eraHd2ae(1.1, 1.2, 0.3)) // [5.916889243730066, 0.4472186304990486]
+// Also: eraAe2hd, and the parallactic angle eraHd2pa.
 
 // Frames: ICRS to Galactic, and FK4 B1950 to FK5 J2000 (position, proper motion, parallax, radial velocity).
 console.log(eraIcrs2g(0, 0)) // [1.6814025947831113, -1.0504884265315022]
 console.log(eraFk425(0.1, 0.2, 1e-6, 2e-6, 0.1, 10)) // [0.11128743449126417, 0.20483107183314778, 5.1259e-9, -9.7198e-9, 5.4752e-6, 10.000213636167985]
+// Also: eraG2icrs, eraFk524, eraFk45z, eraFk54z, eraFk5hz, eraFk52h, eraH2fk5, eraHfk5z, and the ecliptic eraEqec06,
+// eraEceq06, eraEcm06.
+
+// Long-term precession: the mean pole of the equator at Julian epoch -11000, in J2000 axes.
+console.log(eraLtpequ(-11000)) // [-0.0011076, -0.75567, 0.65495] — 49° from the J2000 pole
+// Also: eraLtp, eraLtpb, eraLtpecl, eraLtecm, eraLteqec, eraLteceq.
 
 // Proper motion of a star from one epoch to another (two-part dates).
 console.log(eraStarpm(0.01, 0.02, 1e-6, 2e-6, 0.05, 10, 2451545, 0, 2460000, 0)) // [0.010000005637155604, 0.020000011274311204, ...]
+// Also: eraStarpv, eraStarpmpv, eraPvstar, eraPmpx.
 
 // Geodetic to geocentric [x, y, z] in meters for radius 6378136.6 m and flattening 1/298.25642.
 console.log(eraGd2Gce(6378136.6, 1 / 298.25642, 3, -0.5, 1000)) // [-5546462.988430975, 790629.1252902636, -3040190.092955975]
+// Also the inverse eraGc2Gde.
 
 // Tangent plane: status and standard coordinates ξ, η of a star relative to a tangent point.
 console.log(eraTpxes(1.2, 0.5, 1.0, 0.4)) // [0, 0.17810827845499125, 0.10894523228859818]
+// Also: eraTpxev, eraTpsts, eraTpstv, eraTpors, eraTporv.
 
 // Barycentric Earth position and the geocentric Moon (AU).
 console.log(eraEpv00(2400000.5, 53411.52501161)[0][0]) // [-0.7714104440491069, 0.5598412061824241, 0.24259962777224825]
 console.log(eraMoon98(2400000.5, 54282.5)[0]) // [0.0008944441964973188, -0.002147741375955652, -0.0011168576496977227]
+// Also the planets eraPlan94.
 ```
 
 ### Exoplanet Transit Light Curves
@@ -1225,7 +1415,7 @@ The forward model is the analytic solution of Mandel & Agol (2002) for a dark di
 The fit adjusts the epoch, radius ratio, impact parameter, `a/R*`, and the out-of-transit baseline to photometry by weighted least squares, starting from an initial guess such as a [Box Least Squares Transit Search](#box-least-squares-transit-search) candidate; the search is local, so a poor initial epoch or duration can converge elsewhere. The period and limb darkening are fixed by default, because a single transit does not constrain the period and the limb darkening is degenerate with `p` and `b` at modest signal-to-noise. The uncertainties are first-order (from the Fisher matrix) and describe a well-constrained minimum; for grazing or shallow transits, or the strong `b`–`a/R*` correlation, resampling or a Markov chain gives better intervals. The fit infers geometry only: a planet radius or mass needs an independent stellar radius and radial velocities.
 
 ```ts
-import { fitTransit, quadraticTransitFlux, transitFlux, transitFullDuration, transitInclination, transitLightCurve, transitTotalDuration } from 'nebulosa/src/astronomy/events/exoplanet.lightcurve'
+import { fitTransit, quadraticTransitFlux, scaledSemiMajorAxisFromDuration, transitFlux, transitFullDuration, transitInclination, transitLightCurve, transitSeparation, transitTotalDuration } from 'nebulosa/src/astronomy/events/exoplanet.lightcurve'
 
 // A hot Jupiter (BJD_TDB days): Rp/R* = 0.1, b = 0.3, a/R* = 9, P = 3.5 d and Sun-like limb darkening [u1, u2].
 const planet = { epoch: 2460000.5, period: 3.5, radiusRatio: 0.1, impactParameter: 0.3, scaledSemiMajorAxis: 9, limbDarkening: [0.4, 0.26] } as const
@@ -1236,7 +1426,13 @@ console.log(quadraticTransitFlux(0.3, 0.1, planet.limbDarkening)) // 0.98810
 // T14, T23 (days), and the inclination (radians).
 console.log(transitTotalDuration(planet), transitFullDuration(planet), transitInclination(planet)) // 0.13138 0.10525 1.53746
 
-// Flux in ingress: an instantaneous sample and a 29.4-minute (0.0204-day) exposure.
+// a/R* from a measured T14 (days), the period, Rp/R*, and b: the inverse of transitTotalDuration.
+console.log(scaledSemiMajorAxisFromDuration(3.5, transitTotalDuration(planet), 0.1, 0.3)) // 9
+
+// Projected separation z (stellar radii) 0.05 days before mid-transit, just inside second contact; undefined behind the star.
+console.log(transitSeparation(2460000.45, planet)) // 0.86031
+
+// Flux at that time: an instantaneous sample and a 29.4-minute (0.0204-day) exposure, which also averages part of the ingress.
 console.log(transitFlux(2460000.45, planet), transitFlux(2460000.45, planet, { exposureTime: 0.0204 })) // 0.99112 0.99198
 
 // Model fluxes for an array of times (days).
@@ -1339,8 +1535,8 @@ FK5 is the J2000 mean-equator-and-equinox catalog frame. ICRS differs from it by
 Precession uses the IAU 2006 model (Capitaine), with equinoxes given as instants interpreted in TT. The frame bias between ICRS and FK5 is constant, so an FK5 position at another equinox must be precessed to J2000 before the bias is applied. The FK5 equinox-of-date `Frame` combines bias and precession for use with the frame functions, so it differs slightly from precession alone.
 
 ```ts
-import { fk5, precessFk5FromJ2000 } from 'nebulosa/src/astronomy/coordinates/fk5'
-import { icrsToFk5 } from 'nebulosa/src/astronomy/coordinates/frame'
+import { fk5, precessFk5, precessFk5FromJ2000 } from 'nebulosa/src/astronomy/coordinates/fk5'
+import { fk5Frame, frameAt, icrsToFk5 } from 'nebulosa/src/astronomy/coordinates/frame'
 import { icrs } from 'nebulosa/src/astronomy/coordinates/icrs'
 import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
 import { vecAngle } from 'nebulosa/src/math/linear-algebra/vec3'
@@ -1352,12 +1548,20 @@ const position = fk5(deg(10.625), deg(41.2), 1)
 console.log(position) // [0.73951, 0.13873, 0.65869]
 
 // Mean place at the equinox of 1975.0 (TT); precessFk5ToJ2000 is the inverse.
-console.log(precessFk5FromJ2000(position, timeYMDHMS(1975, 1, 1, 12, 0, 0, Timescale.TT))) // [0.74188, 0.13459, 0.65689]
+const equinox = timeYMDHMS(1975, 1, 1, 12, 0, 0, Timescale.TT)
+
+console.log(precessFk5FromJ2000(position, equinox)) // [0.74188, 0.13459, 0.65689]
+
+// Between two arbitrary equinoxes (TT).
+console.log(precessFk5(position, equinox, timeYMDHMS(2050, 1, 1, 12, 0, 0, Timescale.TT))) // [0.73226, 0.15107, 0.66405]
 
 // The frame bias moves an ICRS direction by a few tens of milliarcseconds; fk5ToIcrs is the inverse.
 const direction = icrs(deg(10.625), deg(41.2), 1)
 
 console.log(toArcsec(vecAngle(direction, icrsToFk5(direction)))) // 0.0317 — arcseconds for this direction
+
+// The FK5 equinox-of-date Frame (frame bias plus precession) applied to the ICRS direction.
+console.log(frameAt(direction, fk5Frame(equinox), equinox)) // [0.74188, 0.13459, 0.65689] — mean place of 1975.0
 ```
 
 ### Galactocentric Frame
@@ -1424,7 +1628,7 @@ L1.2 (Lainey, Vienne, and Duriez) is the IMCCE analytical theory of the four Gal
 The states are Jovicentric, in AU and AU/day, in J2000 equatorial axes, at any time scale (converted to TT). The long-period corrections apply only inside the theory's validity window of about the years 1140 to 2760; outside it they are omitted, matching the official approximate-ephemeris path. The returned vectors are internal buffers overwritten by the next computation, so copy them before computing another state. Add the result to Jupiter's barycentric state for an inertial position; for the Great Red Spot and the central meridian see [Jupiter Central Meridian](#jupiter-central-meridian).
 
 ```ts
-import { callisto, europa, ganymede, io } from 'nebulosa/src/astronomy/ephemeris/models/analytical/l12'
+import { callisto, compute, europa, ganymede, io } from 'nebulosa/src/astronomy/ephemeris/models/analytical/l12'
 import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
 import { toKilometer } from 'nebulosa/src/math/units/distance'
 
@@ -1439,6 +1643,9 @@ console.log(toKilometer(Math.hypot(...position))) // 422475 — km, close to Io'
 
 // The other satellites have the same contract.
 console.log(europa(instant)[0], ganymede(instant)[0], callisto(instant)[0]) // AU, Jovicentric positions
+
+// The shared function: index 0 Io, 1 Europa, 2 Ganymede, 3 Callisto.
+console.log(compute(instant, 0)[0]) // [-0.0028234, -0.000024337, -0.000055447] — AU, Io again
 ```
 
 ### Gauss Angles-Only Orbit Determination
@@ -1491,10 +1698,10 @@ A site is built from geodetic coordinates or from an Earth-centered Cartesian (I
 
 ```ts
 import { itrs } from 'nebulosa/src/astronomy/coordinates/itrs'
-import { geocentricLocation, geodeticLocation, localSiderealTime, rhoCosPhi, rhoSinPhi } from 'nebulosa/src/astronomy/observer/location'
+import { Ellipsoid, geocentricLocation, geodeticLocation, localSiderealTime, polarRadius, rhoCosPhi, rhoSinPhi } from 'nebulosa/src/astronomy/observer/location'
 import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
 import { deg, toHour } from 'nebulosa/src/math/units/angle'
-import { meter } from 'nebulosa/src/math/units/distance'
+import { meter, toKilometer } from 'nebulosa/src/math/units/distance'
 
 // longitude, latitude, elevation (radians and AU): La Silla Observatory on the IERS2010 ellipsoid.
 const site = geodeticLocation(deg(-70.7313), deg(-29.2563), meter(2400))
@@ -1511,6 +1718,9 @@ console.log(toHour(localSiderealTime(time, site.longitude, true))) // 17.7683 �
 
 // Geocentric parallax terms ρ·cos φ′ and ρ·sin φ′, in Earth equatorial radii.
 console.log(rhoCosPhi(site), rhoSinPhi(site))
+
+// Polar radius of an ellipsoid, in AU.
+console.log(toKilometer(polarRadius(Ellipsoid.IERS2010))) // 6356.752 — km
 ```
 
 ### Geographic Sub-point
@@ -1645,13 +1855,32 @@ index.add('a', hour(10), deg(20), { name: 'A' })
 index.add(2, hour(10) + deg(0.5), deg(20.2))
 index.add(3n, hour(11), deg(-30), { name: 'C' })
 
-// Region queries return the matching entries.
-console.log(index.queryCone(hour(10), deg(20), deg(1)).map((entry) => entry.id)) // ['a', 2]
-console.log(index.queryBox(hour(9.9), hour(10.2), deg(19), deg(21)).map((entry) => entry.id)) // ['a', 2]
+// A batch insert, then the count and a lookup by id.
+index.addMany([{ id: 4, rightAscension: hour(10.02), declination: deg(20.1) }])
 
-// Moving an object updates its bucket; removing returns whether it existed.
+console.log(index.size, index.get('a')?.metadata) // 4 { name: 'A' }
+
+// The pixel of a position at the index resolution; pixelToBoundary gives its corners.
+console.log(index.coordToPixel(hour(10), deg(20)), index.pixelToCenter(4455)) // 4455, and its center [ra, dec] in radians
+
+// Region queries return the matching entries; queryRegion takes a catalog query object.
+console.log(index.queryCone(hour(10), deg(20), deg(1)).map((entry) => entry.id)) // ['a', 2, 4]
+console.log(index.queryBox(hour(9.9), hour(10.2), deg(19), deg(21)).map((entry) => entry.id)) // ['a', 2, 4]
+console.log(index.queryTriangle([hour(9.9), deg(19)], [hour(10.3), deg(19)], [hour(10), deg(22)]).length) // 3
+console.log(
+	index.queryPolygon([
+		[hour(9.9), deg(19)],
+		[hour(10.2), deg(19)],
+		[hour(10.2), deg(21)],
+		[hour(9.9), deg(21)],
+	]).length,
+) // 3
+console.log(index.queryRegion({ kind: 'cone', centerRA: hour(11), centerDEC: deg(-30), radius: deg(1) }).map((entry) => entry.id)) // [3n]
+
+// Moving an object updates its bucket; removing returns whether it existed; clear empties the index.
 index.update('a', hour(12), deg(0))
 console.log(index.remove(2)) // true
+index.clear()
 ```
 
 ### HEALPix Pixelization and Covers
@@ -1661,7 +1890,7 @@ HEALPix (Hierarchical Equal Area isoLatitude Pixelization) divides the sphere in
 A cover is the set of pixels that intersects a region (a cone, a spherical triangle, or a convex polygon), used to prune a catalog search. Covers are conservative: they can include pixels that only touch the region, never fewer. Angles are radians and nested ordering is the default. For a ready-made object index built on these, see [HEALPix Object Index](#healpix-object-index).
 
 ```ts
-import { circleToPixels, coordToPixel, nestedToRing, pixelToBoundary, pixelToCenter, polygonToPixels } from 'nebulosa/src/astronomy/sky/spatial/healpix'
+import { circleToPixels, coordToPixel, nestedToRing, pixelToBoundary, pixelToCenter, polygonToPixels, ringToNested, triangleToPixels } from 'nebulosa/src/astronomy/sky/spatial/healpix'
 import { deg, hour, toDeg } from 'nebulosa/src/math/units/angle'
 
 const nside = 64 // 12 · 64² = 49152 pixels of about 0.84 square degrees
@@ -1671,13 +1900,15 @@ const nested = coordToPixel(nside, hour(10), deg(20))
 
 console.log(nested, coordToPixel(nside, hour(10), deg(20), 'ring')) // 4455 16107
 console.log(nestedToRing(nside, nested)) // 16107 — the orderings convert exactly
+console.log(ringToNested(nside, 16107)) // 4455
 
 // The pixel's center and four corners, as [ra, dec] in radians.
 console.log(pixelToCenter(nside, nested).map(toDeg)) // [150.47, 20.106] — degrees
 console.log(pixelToBoundary(nside, nested).length) // 4
 
-// Conservative covers of a 1° cone and of a convex polygon.
+// Conservative covers of a 1° cone, a spherical triangle, and a convex polygon.
 console.log(circleToPixels(nside, hour(10), deg(20), deg(1)).length) // 21
+console.log(triangleToPixels(nside, [hour(10), deg(20)], [hour(10) + deg(2), deg(20)], [hour(10), deg(22)]).length) // 20
 console.log(
 	polygonToPixels(nside, [
 		[hour(10), deg(20)],
@@ -1860,12 +2091,14 @@ Jupiter is an oblate spheroid with the IAU 1-bar radii, so its outline is an ell
 
 ```ts
 import { analyticalJovianEphemeris } from 'nebulosa/src/astronomy/ephemeris/jovian'
-import { jovianView, projectJovianSurfacePoint } from 'nebulosa/src/astronomy/events/jupiter.geometry'
+import { jovianMoonMargins, jovianShadowPoint, jovianSystemState, jovianView, projectJovianSurfacePoint } from 'nebulosa/src/astronomy/events/jupiter.geometry'
 import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
 import { deg, toDeg } from 'nebulosa/src/math/units/angle'
 
+const time = timeYMDHMS(2026, 6, 29, 0, 0, 0, Timescale.UTC)
+
 // Apparent geometry of Jupiter and its moons at a geocentric instant.
-const view = jovianView(analyticalJovianEphemeris, timeYMDHMS(2026, 6, 29, 0, 0, 0, Timescale.UTC))
+const view = jovianView(analyticalJovianEphemeris, time)
 
 console.log(toDeg(view.centralMeridian.II), toDeg(view.poleAngle)) // degrees, System II and the projected pole from north through east
 
@@ -1876,6 +2109,16 @@ for (const moon of view.moons) console.log(moon.moon, moon.east, moon.north, moo
 const spot = projectJovianSurfacePoint(view, deg(50), deg(-22))
 
 console.log(spot.visible, spot.east, spot.north)
+
+// The cheaper scanning steps behind the view: the state shared by all moons, then one moon's
+// disk, shadow, and eclipse margins (signed distances to contact, in Jupiter equatorial radii).
+const state = jovianSystemState(analyticalJovianEphemeris, time)
+const io = jovianMoonMargins(analyticalJovianEphemeris, state, 'io')
+
+console.log(io.disk.distance) // 4.887 — Io's centre outside the limb (negative inside)
+
+// The centre of the moon's shadow on Jupiter, or undefined when the shadow misses the planet.
+console.log(jovianShadowPoint(state, io.shadow)) // undefined — Io is about 5.9 radii off the disk as seen from the Sun
 ```
 
 ### Jupiter Central Meridian
@@ -1916,7 +2159,7 @@ t − T = M / n      (time since periapsis T)
 All angles are radians, the mean motion is radians per day, and the gravitational parameter AU³/day². The same quantities are available as properties of an orbit (see [Osculating Orbital Elements](#osculating-orbital-elements)); these functions are the building blocks for code that propagates or fits orbits itself.
 
 ```ts
-import { eccentricAnomaly, eccentricAnomalyFromMean, meanAnomaly, meanMotion, timeSincePeriapsis, trueAnomalyClosed, trueAnomalyHyperbolic } from 'nebulosa/src/astronomy/orbits/asteroid'
+import { eccentricAnomaly, eccentricAnomalyFromMean, meanAnomaly, meanMotion, stumpff, timeSincePeriapsis, trueAnomalyClosed, trueAnomalyHyperbolic, trueAnomalyParabolic } from 'nebulosa/src/astronomy/orbits/asteroid'
 import { GM_SUN_PITJEVA_2005 } from 'nebulosa/src/core/constants'
 
 // An ellipse with e = 0.3 at eccentric anomaly E = 0.7 rad: mean and true anomalies.
@@ -1931,6 +2174,12 @@ console.log(eccentricAnomalyFromMean(M, e), eccentricAnomaly(v, e)) // 0.7 0.7
 
 // A hyperbola with e = 1.5 and hyperbolic anomaly H = 4.
 console.log(trueAnomalyHyperbolic(1.5, 4)) // 2.2729 — radians
+
+// A parabola: true anomaly from its semi-latus rectum p (AU), GM (AU³/day²), and mean anomaly M (radians).
+console.log(trueAnomalyParabolic(2, GM_SUN_PITJEVA_2005, 0.1)) // 0.53831 — radians
+
+// Stumpff functions c0..c3 of a dimensionless argument, the series of universal-variable propagation.
+console.log(stumpff(0.5)) // [0.76024, 0.91873, 0.47951, 0.16255]
 
 // Days since periapsis for a 1 AU, e = 0.3 solar orbit: mean motion (rad/day) and semi-latus rectum (AU).
 const n = meanMotion(1, GM_SUN_PITJEVA_2005)
@@ -2042,7 +2291,7 @@ A real observing site rarely has a flat, clear horizon: trees, buildings, and hi
 Angles are radians, with azimuth north through east. Besides point tests, the mask finds where a sampled altitude-azimuth path of a target goes behind it (a set) or emerges from it (a rise); the path must be sampled densely enough that each step is a short azimuth arc. To build such a path from an ephemeris, sample the target with [Local Horizon Coordinates](#local-horizon-coordinates).
 
 ```ts
-import { horizonCrossings, horizonMinimumAltitude, type HorizonSample, type HorizontalPathSample, isAboveHorizon } from 'nebulosa/src/astronomy/observer/horizon'
+import { horizonCrossings, horizonMinimumAltitude, horizonMinimumAltitudeLookup, type HorizonSample, type HorizontalPathSample, isAboveHorizon } from 'nebulosa/src/astronomy/observer/horizon'
 import { deg, toDeg } from 'nebulosa/src/math/units/angle'
 
 // Obstructions: 10° to the north, 25° to the east, 5° to the south, 15° to the west.
@@ -2056,6 +2305,11 @@ const mask: HorizonSample[] = [
 // The interpolated minimum altitude at an azimuth, and a visibility test.
 console.log(toDeg(horizonMinimumAltitude(mask, deg(45)))) // 17.5 — degrees
 console.log(isAboveHorizon(mask, deg(20), deg(45))) // true — 20° is above the 17.5° there
+
+// The mask prepared once as a reusable lookup by azimuth, for many queries.
+const minimumAltitude = horizonMinimumAltitudeLookup(mask)
+
+console.log(toDeg(minimumAltitude(deg(200)))) // 7.22 — degrees
 
 // path: samples of { time, altitude, azimuth } — a target rising in the east-northeast.
 const rising: HorizontalPathSample[] = [0, 1, 2, 3, 4, 5, 6].map((i) => ({ time: i, altitude: deg(5 + 10 * i), azimuth: deg(60 + 20 * i) }))
@@ -2225,7 +2479,7 @@ The Local Standard of Rest (LSR) is the reference frame that moves with the aver
 Several definitions coexist, differing in the adopted solar motion: the standard LSR uses (U, V, W) = (11.1, 12.24, 7.25) km/s of Schönrich, Binney and Dehnen (2010), the dynamical LSRD the Delhaye (1965) motion (9, 12, 7) km/s, and the kinematic LSRK the classical solar-apex motion of about 20 km/s. The frames are affine (see [Affine Origin Frames](#affine-origin-frames)) and take full `[position, velocity]` states in AU and AU/day.
 
 ```ts
-import { affineFromBase, galacticLsrFrame, lsrFrame, lsrkFrame } from 'nebulosa/src/astronomy/coordinates/affine'
+import { affineFromBase, galacticLsrFrame, lsrdFrame, lsrFrame, lsrkFrame } from 'nebulosa/src/astronomy/coordinates/affine'
 import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
 import { ONE_PARSEC } from 'nebulosa/src/core/constants'
 import { kilometerPerSecond, toKilometerPerSecond } from 'nebulosa/src/math/units/velocity'
@@ -2241,7 +2495,8 @@ const state = [
 // The state in the standard LSR: position unchanged, the Sun's peculiar motion added to the velocity.
 console.log(affineFromBase(state, lsrFrame(), time)[1].map(toKilometerPerSecond)) // [9.148, -36.576, 12.078] — km/s
 
-// The kinematic LSR, and the LSR in Galactic axes.
+// The dynamical and kinematic LSR, and the LSR in Galactic axes.
+console.log(affineFromBase(state, lsrdFrame(), time)[1].map(toKilometerPerSecond)) // [9.362, -34.585, 12.801] — km/s
 console.log(affineFromBase(state, lsrkFrame(), time)[1].map(toKilometerPerSecond)) // [10.290, -37.317, 15.001] — km/s
 console.log(affineFromBase(state, galacticLsrFrame(), time)[1].map(toKilometerPerSecond)) // [25.601, 29.813, 4.815] — km/s, Galactic axes
 ```
@@ -2344,7 +2599,7 @@ The Moon's orbit is an ellipse of mean eccentricity 0.055, so its distance from 
 The search uses the series of Meeus's chapter 50, with the periodic corrections for the true apsis; the mean apsis, without them, can differ from the true one by up to about a day. Results are accurate to a few minutes near the modern epoch. Each apsis is returned with the geocentric distance in AU and the Moon's apparent angular diameter in radians, and its time is TT: convert with `utc` for a civil clock time. The distance converts to a parallax with `moonParallax` (see [Lunar Parallax and Semidiameter](#lunar-parallax-and-semidiameter)).
 
 ```ts
-import { nearestLunarApsis } from 'nebulosa/src/astronomy/bodies/moon'
+import { nearestLunarApsis, nearestMeanLunarApsis } from 'nebulosa/src/astronomy/bodies/moon'
 import { Timescale, timeToDate, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
 import { toArcsec } from 'nebulosa/src/math/units/angle'
 import { toKilometer } from 'nebulosa/src/math/units/distance'
@@ -2361,6 +2616,9 @@ console.log(toKilometer(distance), toArcsec(diameter)) // 360347 1989.6 — km, 
 const [apogee, apogeeDistance] = nearestLunarApsis(start, 'APOGEE', true)
 
 console.log(timeToDate(apogee).slice(0, 5), toKilometer(apogeeDistance)) // [2026, 1, 13, 20, 48] 405436
+
+// The mean apogee, without the periodic corrections: a TT instant only, here about 10 hours after the true one.
+console.log(timeToDate(nearestMeanLunarApsis(start, 'APOGEE', true)).slice(0, 5)) // [2026, 1, 14, 6, 24]
 ```
 
 ### Lunar Declination Extrema and Standstills
@@ -2399,7 +2657,7 @@ The local circumstances are computed from a `LunarEclipse` (see [Lunar Eclipse S
 ```ts
 import { nearestLunarEclipse } from 'nebulosa/src/astronomy/bodies/moon'
 import { sunMoonPosition } from 'nebulosa/src/astronomy/events/eclipse/eclipse'
-import { computeLocalLunarEclipseCircumstances } from 'nebulosa/src/astronomy/events/eclipse/lunar/local'
+import { computeLocalLunarEclipseCircumstances, moonAltitudeAt } from 'nebulosa/src/astronomy/events/eclipse/lunar/local'
 import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
 import { deg, toDeg } from 'nebulosa/src/math/units/angle'
 
@@ -2416,6 +2674,9 @@ const max = perth.events.MAX!
 
 console.log(toDeg(max.altitude), toDeg(max.azimuth)) // 51.72 307.32
 console.log(toDeg(max.positionAngle), toDeg(max.zenithAngle)) // 330.93 193.62
+
+// The topocentric Moon altitude (radians) at any instant, such as the last penumbral contact P4.
+console.log(toDeg(moonAltitudeAt(eclipse.lastContactPenumbraTime, deg(115.86), deg(-31.95), sunMoonPosition))) // 20.04 — degrees
 
 // Greenwich: the Moon rises during the eclipse, so only the last part is seen.
 const greenwich = computeLocalLunarEclipseCircumstances(eclipse, 0, deg(51.48), sunMoonPosition)
@@ -2545,6 +2806,27 @@ for (const e of lunarLibrationExtrema(moonToObserver, start, stop, { step: 0.25 
 // latitude maximum [2025, 9, 28, 9, 53] 6.83
 ```
 
+### Lunar Nodes
+
+The lunar nodes are the two points where the Moon's orbit, inclined about 5.1° to the ecliptic, crosses it: the ascending node, where the Moon passes from south to north, and the descending node, where it passes north to south. Eclipses can happen only when a new or full moon falls near a node. The nodes regress westward along the ecliptic, completing a turn in 18.6 years, which sets the eclipse seasons and the cycle of the lunar standstills (see [Lunar Declination Extrema and Standstills](#lunar-declination-extrema-and-standstills)).
+
+The node passages come from the series of Meeus's chapter 51, a truncated series with minute-level accuracy near the modern epoch, as TT instants. The longitude of the mean ascending node, in the mean ecliptic and equinox of date, is Meeus's equation 47.7, without the periodic terms of the true node, which oscillates around it.
+
+```ts
+import { moonMeanAscendingNode, nearestLunarNode } from 'nebulosa/src/astronomy/bodies/moon'
+import { Timescale, timeToDate, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { toDeg } from 'nebulosa/src/math/units/angle'
+
+const time = timeYMDHMS(2025, 9, 28, 0, 0, 0, Timescale.UTC)
+
+// The next passages through the ascending and descending nodes (pass false for the previous ones).
+console.log(timeToDate(nearestLunarNode(time, 'ASCENDING', true)).slice(0, 5)) // [2025, 10, 5, 9, 21] — TT
+console.log(timeToDate(nearestLunarNode(time, 'DESCENDING', true)).slice(0, 5)) // [2025, 10, 18, 4, 34] — TT
+
+// Longitude of the mean ascending node, radians in [0, 2π).
+console.log(toDeg(moonMeanAscendingNode(time))) // 347.20 — degrees
+```
+
 ### Lunar Parallax and Semidiameter
 
 The Moon is close enough that its position and size depend on where you stand. Its equatorial horizontal parallax is the angle that the Earth's equatorial radius subtends at the Moon, about 57′ (0.95°), so the Moon seen on the horizon is displaced by nearly two of its own diameters from its geocentric direction. Its semidiameter, the angular radius of the disk, ranges from about 14.7′ to 16.7′ between apogee and perigee. Both scale inversely with the distance:
@@ -2595,42 +2877,6 @@ console.log(timeToDate(utc(nearestLunarPhase(time, 'NEW', true))).slice(0, 5)) /
 console.log(lunation(time), lunation(time, 'MEEUS')) // 1271 318
 ```
 
-### Lunar Nodes
-
-The lunar nodes are the two points where the Moon's orbit, inclined about 5.1° to the ecliptic, crosses it: the ascending node, where the Moon passes from south to north, and the descending node, where it passes north to south. Eclipses can happen only when a new or full moon falls near a node. The nodes regress westward along the ecliptic, completing a turn in 18.6 years, which sets the eclipse seasons and the cycle of the lunar standstills (see [Lunar Declination Extrema and Standstills](#lunar-declination-extrema-and-standstills)).
-
-The node passages come from the series of Meeus's chapter 51, a truncated series with minute-level accuracy near the modern epoch, as TT instants. The longitude of the mean ascending node, in the mean ecliptic and equinox of date, is Meeus's equation 47.7, without the periodic terms of the true node, which oscillates around it.
-
-```ts
-import { moonMeanAscendingNode, nearestLunarNode } from 'nebulosa/src/astronomy/bodies/moon'
-import { Timescale, timeToDate, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
-import { toDeg } from 'nebulosa/src/math/units/angle'
-
-const time = timeYMDHMS(2025, 9, 28, 0, 0, 0, Timescale.UTC)
-
-// The next passages through the ascending and descending nodes (pass false for the previous ones).
-console.log(timeToDate(nearestLunarNode(time, 'ASCENDING', true)).slice(0, 5)) // [2025, 10, 5, 9, 21] — TT
-console.log(timeToDate(nearestLunarNode(time, 'DESCENDING', true)).slice(0, 5)) // [2025, 10, 18, 4, 34] — TT
-
-// Longitude of the mean ascending node, radians in [0, 2π).
-console.log(toDeg(moonMeanAscendingNode(time))) // 347.20 — degrees
-```
-
-### Lunar Saros Index
-
-A saros is a period of about 6585.3 days (18 years 11⅓ days), equal to 223 synodic months, 242 draconic months, and very nearly 239 anomalistic months. After one saros the Sun, the Moon, and the lunar node return to nearly the same geometry, so an eclipse is followed by a very similar one; the extra third of a day shifts it about 120° west in longitude. Eclipses separated by whole saroses are grouped into numbered saros series, each of which typically lasts more than a thousand years.
-
-`lunarSaros` returns the saros series number, from 1 to 223, for the lunation that contains a time, counting from the full moon of 18 January 2003 (series 192) and advancing by 38 (modulo 223) per lunation. It is a numbering of the lunation, not a test that an eclipse occurs: not every lunation belongs to a series that produces one, so check with [Lunar Eclipse Search](#lunar-eclipse-search). For the solar series see [Solar Saros Index](#solar-saros-index).
-
-```ts
-import { lunarSaros } from 'nebulosa/src/astronomy/bodies/moon'
-import { timeYMD } from 'nebulosa/src/astronomy/time/time'
-
-// The saros series of the lunation containing a date.
-console.log(lunarSaros(timeYMD(2025, 9, 7))) // 128 — the total lunar eclipse of 7 September 2025
-console.log(lunarSaros(timeYMD(2026, 3, 3))) // 133 — the total lunar eclipse of 3 March 2026
-```
-
 ### Martian Satellite Theory (MARSSAT)
 
 Mars has two small moons close to the planet: Phobos, orbiting about 9400 km from the center in 7.65 hours, faster than Mars rotates, and Deimos, about 23,500 km out in 30.3 hours. Their positions are needed to predict their elongations, transits, and eclipses, and for spacecraft imaging; at Mars's oppositions they are faint targets close to a bright planet.
@@ -2638,7 +2884,7 @@ Mars has two small moons close to the planet: Phobos, orbiting about 9400 km fro
 MARSSAT (Lainey) is an analytical theory of both moons fitted to observations from 1877 to 2005. Trigonometric series perturb each satellite's equinoctial elements, which are converted to rectangular coordinates and rotated through the slowly precessing Laplace-plane node and inclination into the equatorial frame. The result is the Mars-centered position in AU and velocity in AU/day; add it to Mars's barycentric state for an inertial position.
 
 ```ts
-import { deimos, phobos } from 'nebulosa/src/astronomy/ephemeris/models/analytical/marssat'
+import { deimos, marssat, phobos } from 'nebulosa/src/astronomy/ephemeris/models/analytical/marssat'
 import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
 import { toKilometer } from 'nebulosa/src/math/units/distance'
 
@@ -2653,6 +2899,9 @@ console.log(toKilometer(Math.hypot(...position))) // 9313 — km from Mars's cen
 
 // Deimos, the outer moon.
 console.log(toKilometer(Math.hypot(...deimos(time)[0]))) // 23451 — km
+
+// The shared function: index 0 Phobos, 1 Deimos.
+console.log(toKilometer(Math.hypot(...marssat(time, 1)[0]))) // 23451 — km, Deimos again
 ```
 
 ### Meeus Algorithms
@@ -2662,8 +2911,8 @@ Jean Meeus' _Astronomical Algorithms_ (2nd edition) is the standard practical re
 Unless a function says otherwise, angles are radians and distances AU, and a Julian Day argument named `jde` is on the dynamical (TT) scale while `jd` is UT. Sidereal times are in seconds of time. The longitudes of `Rise` and `Sunrise` are west-positive, as in the book.
 
 ```ts
-import { AngularSeparation, Base, Easter, Elliptic, Julian, MoonPosition, Nutation, PlanetPosition, Precession, Sidereal, Solar } from 'nebulosa/src/astronomy/ephemeris/meeus'
-import { hms, signedDms, toDeg } from 'nebulosa/src/math/units/angle'
+import { AngularSeparation, Base, Easter, Elliptic, Julian, Kepler, MoonPosition, Nutation, PlanetPosition, Precession, SaturnRing, Sidereal, Solar } from 'nebulosa/src/astronomy/ephemeris/meeus'
+import { deg, hms, signedDms, toDeg } from 'nebulosa/src/math/units/angle'
 
 // Calendars: the Julian Day of 2000-01-01 12:00, and Easter Sunday of 1991.
 console.log(Julian.calendarGregorianToJD(2000, 1, 1.5)) // 2451545
@@ -2671,6 +2920,20 @@ console.log(Easter.gregorian(1991)) // [ 1991, 3, 31 ] — year, month, day
 
 // Mean and apparent sidereal time at 0h UT of 1987-04-10, in seconds of time.
 console.log(Sidereal.mean(2446895.5), Sidereal.apparent(2446895.5)) // 47446.36683 47446.13514
+// Also: Julian (calendarJulianToJD, calendarToJD, jdToCalendar, jdToCalendarGregorian, jdToCalendarJulian, jdToDate,
+// dateToJD, jdeToDate, dateToJDE, mjdToJD, jdToMJD, dayOfWeek, dayOfYear, dayOfYearGregorian, dayOfYearJulian,
+// dayOfYearToCalendar, dayOfYearToCalendarGregorian, dayOfYearToCalendarJulian, isLeapYearJulian, isLeapYearGregorian,
+// isJDCalendarGregorian, isCalendarGregorian, deltaTSeconds, setDeltaTProvider, Calendar, CalendarJulian,
+// CalendarGregorian), Easter.julian, Sidereal (mean0UT, apparent0UT, jdToCFrac), Base (julianYearToJDE,
+// besselianYearToJDE, jdeToBesselianYear, j2000Century, lightTime, illuminated, limb, horner, sincos, sincos2), and
+// Sundial (general, equatorial, horizontal, vertical).
+
+// Kepler's equation for e = 0.1 and M = 5° (example 30.b), to 11 decimal places.
+console.log(toDeg(Kepler.kepler2(0.1, deg(5), 11))) // 5.554589254 — eccentric anomaly in degrees
+// Also: Kepler (kepler1, kepler2a, kepler2b, kepler3, kepler4, trueAnomaly, radius), Interpolation (Len3, Len5,
+// iterate, len4Half, len3ForInterpolateX, lagrange, lagrangePoly, linear), Fit (linear, quadratic, func1, func3,
+// correlationCoefficient), Iteration (decimalPlaces, fullPrecision, binaryRoot), Line (time, angle, error,
+// angleError), and Circle.smallest.
 
 // Nutation in longitude and obliquity (radians), and the mean obliquity.
 console.log(Nutation.nutation(2446895.5), toDeg(Nutation.meanObliquity(2446895.5))) // [Δψ, Δε] 23.44094649
@@ -2682,17 +2945,50 @@ console.log(toDeg(AngularSeparation.sep(arcturus, spica))) // 32.79301034 — de
 
 const precessor = new Precession.Precessor(2000, Base.jdeToJulianYear(Julian.calendarGregorianToJD(2028, 11, 13.19)))
 console.log(precessor.precess(hms(2, 44, 11.986), signedDms(false, 49, 13, 42.48)).map(toDeg)) // [ 41.5430861, 49.3492074 ] — degrees
+// Also: Coords (eclipticToEquatorial, equatorialToEcliptic, equatorialToHorizontal, horizontalToEquatorial,
+// equatorialToGalactic, galacticToEquatorial), AngularSeparation (minSep, minSepRect, hav, sepHav, minSepHav,
+// sepPauwels, minSepPauwels, relativePosition), Precession (approxAnnualPrecession, mn, approxPosition, position,
+// EclipticPrecessor, eclipticPosition, properMotion, properMotion3D), Nutation (approxNutation, meanObliquityLaskar,
+// nutationInRA), Apparent (nutation, perihelion, aberration, eclipticAberration, aberrationRonVondrak, position,
+// positionRonVondrak), ElementEquinox (reduceB1950ToJ2000, reduceB1950FK4ToJ2000FK5), Refraction (bennett, bennett2,
+// saemundsson, gt15True, gt15Apparent), Rise (refraction, stdh0Stellar, stdh0Solar, stdh0Lunar, stdh0LunarMean,
+// hourAngle, approxTimes, times, PlanetRise), Parallactic (parallacticAngle, parallacticAngleOnHorizon,
+// eclipticAtHorizon, eclipticAtEquator, diurnalPathAtHorizon), Parallax (horizontal, topocentric, topocentric2,
+// topocentric3, topocentricEcliptical), Globe (Ellipsoid, oneDegreeOfLongitude, oneDegreeOfLatitude,
+// geocentricLatitudeDifference, approxAngularDistance, approxLinearDistance), Stellar (sum, sumN, ratio, difference,
+// absoluteByParallax, absoluteByDistance), and BinaryStars (meanAnomaly, position, apparentEccentricity).
 
 // The Sun on 1992-10-13 0h TT (example 25.a): apparent RA and Dec.
 console.log(Solar.apparentEquatorial(2448908.5).map(toDeg)) // [ 198.3808252, -7.7850698 ] — degrees
+// Also: Solar (trueLongitude, apparentLongitude, meanAnomaly, eccentricity, radius, true2000, trueEquatorial,
+// trueVSOP87, apparentVSOP87, apparentEquatorialVSOP87, aberration), EquationOfTime (e, eSmart), Solstice (march,
+// june, september, december, march2, june2, september2, december2, longitude), SolarXYZ (position, positionJ2000,
+// positionB1950, positionEquinox, longitudeJ2000, xyz), and Sunrise.Sunrise.
 
 // Venus on 1992-12-20 0h TT (example 33.a): heliocentric ecliptic position and apparent RA and Dec.
 console.log(PlanetPosition.position('venus', 2448976.5).map(toDeg)) // [ 26.1141192, -2.6206030, 41.5166177 ] — lon, lat in degrees, then the range
 console.log(Elliptic.position('venus', 2448976.5).map(toDeg)) // [ 316.1727242, -18.8880108 ] — degrees
+// Also: PlanetPosition (position2000, toFK5), Elliptic (astrometricJ2000, velocity, vPerihelion, vAphelion, length1,
+// length2, length4), PlanetElements (mean, inc, node), Planetary (mean, sum, ms, sumA, msa, el, mercuryInfConj,
+// mercurySupConj, venusInfConj, marsOpp, jupiterOpp, saturnOpp, saturnConj, uranusOpp, neptuneOpp,
+// mercuryEastElongation, mercuryWestElongation, marsStation2), Perihelion (perihelion, aphelion, perihelion2,
+// aphelion2), Conjunction (planetary, stellar), Node (ellipticAscending, ellipticDescending, elliptic,
+// parabolicAscending, parabolicDescending, parabolic), Parabolic.Elements, NearParabolic.Elements, Illuminated
+// (phaseAngle, phaseAngle2, phaseAngle3, fraction, fractionVenus, mercury, venus, mars, jupiter, saturn, uranus,
+// neptune, mercury84, venus84, mars84, jupiter84, saturn84, uranus84, neptune84, pluto84), and Semidiameter
+// (semidiameter, saturnApparentPolar, asteroidDiameter, asteroid).
+
+// Saturn's rings on 1992-12-16 0h TT (example 45.a): B, B', ΔU, P (radians), then the major and minor axes a, b.
+console.log(SaturnRing.ring(2448972.50068).slice(0, 4).map(toDeg)) // [ 16.442, 14.679, 4.198, 6.741 ] — degrees
+// Also: SaturnRing.ub, SolarDisk (ephemeris, cycle), Mars.physical, Jupiter (physical, physical2), JupiterMoons
+// (positions, e5), and SaturnMoons.positions.
 
 // The Moon on 1992-04-12 0h TT (example 47.a): ecliptic longitude, latitude (radians) and distance (AU).
 const [lon, lat, distance] = MoonPosition.position(2448724.5)
 console.log(toDeg(lon), toDeg(lat), distance) // 133.1626547 -3.2291264 0.0024627
+// Also: MoonPosition (perigee, trueNode), Moon (physical, PhysicalEphemeris, selenographic, sunAltitude, sunrise,
+// sunset), and MoonIlluminated (phaseAngleEquatorial, phaseAngleEquatorial2, phaseAngleEcliptic,
+// phaseAngleEcliptic2, phaseAngle3).
 ```
 
 ### Meteor Activity Profiles
@@ -2706,21 +3002,46 @@ ZHR(λ☉) = ZHRmax · 10^(−b · |λ☉ − λmax|)   (b in decades per degree
 A catalog solution only carries the interval of solar longitude where the shower is active. The ZHR curve itself is explicit, caller-supplied data: a single exponential peak with separate rise and decay slopes, interpolated samples, or a sum of exponential components for showers with several peaks; it is zero outside its support. All longitudes are geocentric solar longitudes in radians (see [Meteor Solar Longitude](#meteor-solar-longitude)), and intervals advance in increasing longitude, so a window such as 350°–20° wraps through 0. Integrated over time, the ZHR gives the meteors an ideal observer would see; for the rates of a real observer see [Meteor Visual Rates](#meteor-visual-rates).
 
 ```ts
-import { integrateMeteorZhr, isMeteorShowerActive, meteorActivityIntervalsAboveFraction, meteorActivityMaximumZhr, meteorActivityZhr } from 'nebulosa/src/astronomy/meteors/activity'
-import type { MeteorActivityProfile } from 'nebulosa/src/astronomy/meteors/types'
+import {
+	integrateMeteorZhr,
+	isMeteorShowerActive,
+	isMeteorShowerActivityYearLimited,
+	meteorActivityFraction,
+	meteorActivityIntervalsAboveFraction,
+	meteorActivityMaximumSolarLongitude,
+	meteorActivityMaximumZhr,
+	meteorActivityPhase,
+	meteorActivityProgress,
+	meteorActivityZhr,
+	meteorShowerActivityYearApplies,
+} from 'nebulosa/src/astronomy/meteors/activity'
+import type { MeteorActivityProfile, MeteorShowerActivity } from 'nebulosa/src/astronomy/meteors/types'
 import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
 import { deg, toDeg } from 'nebulosa/src/math/units/angle'
 
 // A single exponential peak of ZHR 120 at λ☉ 100°, rising at 0.1 and decaying at 0.2 decades per degree.
 const profile: MeteorActivityProfile = { type: 'exponential', support: { start: deg(90), end: deg(110) }, solarLongitude: deg(100), zhr: 120, slopeBefore: 0.1, slopeAfter: 0.2 }
 
-// Whether the shower is active at a solar longitude, and the ZHR there (meteors per hour).
-console.log(isMeteorShowerActive(profile.support, deg(95))) // true
+// Whether the shower is active at a solar longitude, and how far through its support (0 to 1).
+console.log(isMeteorShowerActive(profile.support, deg(95)), meteorActivityProgress(profile.support, deg(95))) // true 0.25
+
+// The ZHR there (meteors per hour); meteorExponentialZhr evaluates one exponential component the same way.
 console.log(meteorActivityZhr(profile, deg(95)), meteorActivityZhr(profile, deg(105))) // 37.947 12
 
-// The peak ZHR, and the intervals where the activity is at least half of it.
-console.log(meteorActivityMaximumZhr(profile)) // 120
+// The peak ZHR and its solar longitude, and the ZHR as a fraction of the peak.
+console.log(meteorActivityMaximumZhr(profile), toDeg(meteorActivityMaximumSolarLongitude(profile)!)) // 120 100
+console.log(meteorActivityFraction(profile, deg(95))) // 0.3162
+
+// Activity, progress, and signed distance from the maximum (radians) in one call.
+const phase = meteorActivityPhase(profile, deg(95))
+console.log(phase.active, phase.progress, toDeg(phase.deltaFromMaximum!)) // true 0.25 -5 — degrees before the peak
+
+// The intervals where the activity is at least half of the peak.
 console.log(meteorActivityIntervalsAboveFraction(profile, 0.5).map((interval) => [toDeg(interval.start), toDeg(interval.end)])) // [[96.990, 101.505]] — degrees
+
+// A dated outburst applies only in its catalog years (isMeteorShowerActivityYearLimited tells whether a range applies).
+const outburst: MeteorShowerActivity = { kind: 'outburst', source: '2019', years: { start: 2019, end: 2019 } }
+console.log(isMeteorShowerActivityYearLimited(outburst), meteorShowerActivityYearApplies(outburst, 2019), meteorShowerActivityYearApplies(outburst, 2024)) // true true false
 
 // The ZHR integrated over a time span, in ZHR·hours.
 const quadrantids: MeteorActivityProfile = { type: 'exponential', support: { start: deg(280), end: deg(286) }, solarLongitude: deg(283), zhr: 110, slopeBefore: 0.2, slopeAfter: 0.2 }
@@ -2740,7 +3061,7 @@ HR = ZHR · sin^γ(h) / (F · r^(6.5 − lm))
 Most catalog showers have no activity profile, so `meteorGeometricObservingWindows` plans the same constraints without one and returns the windows in chronological order, with a geometric opportunity measure (the integral of the sine of the radiant altitude) that is never a meteor count. The conditions at one instant, the altitudes of the Sun, the Moon, and the radiant, the lunar illumination, and the Moon-radiant separation, are available directly, and are what a rate-correction callback receives.
 
 ```ts
-import { meteorObservingConditionsAt } from 'nebulosa/src/astronomy/meteors/observation'
+import { meteorMoonDirection, meteorMoonIllumination, meteorObservationContext, meteorObservingConditionsAt, meteorSunDirection } from 'nebulosa/src/astronomy/meteors/observation'
 import { meteorGeometricObservingWindows, meteorObservingWindows } from 'nebulosa/src/astronomy/meteors/planner'
 import type { MeteorActivityProfile, MeteorShowerSolution } from 'nebulosa/src/astronomy/meteors/types'
 import { Ellipsoid, geodeticLocation } from 'nebulosa/src/astronomy/observer/location'
@@ -2766,10 +3087,15 @@ for (const window of meteorGeometricObservingWindows(solution, observer, start, 
 	console.log(timeToDate(utc(window.start)).slice(0, 5), window.durationHours, window.radiantSineHours) // UTC start, hours, and hours of sine-weighted radiant altitude
 }
 
-// The Sun, Moon, and radiant at one instant.
-const conditions = meteorObservingConditionsAt({ rightAscension: deg(230.1), declination: deg(48.5) }, observer, timeYMDHMS(2024, 1, 4, 3, 0, 0, Timescale.UTC))
+// The Sun, Moon, and radiant at one instant, with the solar longitude and sidereal time computed once in a context.
+const instant = timeYMDHMS(2024, 1, 4, 3, 0, 0, Timescale.UTC)
+const context = meteorObservationContext(instant, observer)
+const conditions = meteorObservingConditionsAt({ rightAscension: deg(230.1), declination: deg(48.5) }, observer, instant, context)
 
 console.log(toDeg(conditions.sunAltitude), conditions.moonIllumination, toDeg(conditions.radiant.altitude)) // −55.22 0.5034 28.70
+
+// The geocentric J2000 Sun and Moon vectors (AU), and the illuminated lunar fraction from them.
+console.log(meteorMoonIllumination(meteorSunDirection(instant), meteorMoonDirection(instant))) // 0.5034
 ```
 
 ### Meteor Orbit Reconstruction
@@ -2849,7 +3175,19 @@ A meteor radiant is the point of the sky from which the meteors of a shower appe
 For a local observer the radiant is precessed and nutated to the true equator of date and rotated to the horizon with the apparent sidereal time; azimuth is measured north through east and no refraction is applied. The radiant altitude governs how many meteors are seen (see [Meteor Visual Rates](#meteor-visual-rates)), so planning needs when the radiant rises, culminates, and sets. The rise and set instants use the standard horizon altitude of the shared event finder, not the geometric crossing of zero altitude.
 
 ```ts
-import { meteorRadiantHorizontal, meteorRadiantJ2000, meteorRadiantMaximumAltitude, meteorRadiantPathBetween, meteorRadiantRiseTransitSet } from 'nebulosa/src/astronomy/meteors/radiant'
+import {
+	meteorRadiantDegrees,
+	meteorRadiantHorizontal,
+	meteorRadiantJ2000,
+	meteorRadiantMaximumAltitude,
+	meteorRadiantOfDate,
+	meteorRadiantPath,
+	meteorRadiantPathBetween,
+	meteorRadiantPathSegmentsBetween,
+	meteorRadiantRiseTransitSet,
+	meteorRadiantVector,
+	meteorRadiantVisibility,
+} from 'nebulosa/src/astronomy/meteors/radiant'
 import { meteorComputationContext } from 'nebulosa/src/astronomy/meteors/solar'
 import type { MeteorShowerSolution } from 'nebulosa/src/astronomy/meteors/types'
 import { Ellipsoid, geodeticLocation } from 'nebulosa/src/astronomy/observer/location'
@@ -2873,15 +3211,25 @@ const time = timeYMDHMS(2024, 1, 4, 5, 0, 0, Timescale.UTC)
 const result = meteorRadiantJ2000(solution, meteorComputationContext(time))!
 console.log(toDeg(result.radiant.rightAscension), toDeg(result.radiant.declination), result.extrapolated) // 229.924 48.544 true
 
-// Radiant path sampled daily between two instants.
-const path = meteorRadiantPathBetween(solution, timeYMDHMS(2024, 1, 3, 0, 0, 0, Timescale.UTC), timeYMDHMS(2024, 1, 5, 0, 0, 0, Timescale.UTC))
+// A radiant from catalog degrees, and its unit J2000 direction vector.
+console.log(meteorRadiantVector(meteorRadiantDegrees(230.1, 48.5))) // [-0.4250, -0.5083, 0.7490]
 
-// Geometric azimuth and altitude (radians) of a radiant for the observer.
+// Radiant path sampled daily between two instants; the segments variant splits it where the model is unavailable.
+const path = meteorRadiantPathBetween(solution, timeYMDHMS(2024, 1, 3, 0, 0, 0, Timescale.UTC), timeYMDHMS(2024, 1, 5, 0, 0, 0, Timescale.UTC))
+const segments = meteorRadiantPathSegmentsBetween(solution, timeYMDHMS(2024, 1, 3, 0, 0, 0, Timescale.UTC), timeYMDHMS(2024, 1, 5, 0, 0, 0, Timescale.UTC))
+
+// Radiant path over solar longitude in 1° steps, for a drift declared per radian of solar longitude.
+const perLongitude: MeteorShowerSolution = { ...solution, radiantDrift: { basis: 'solarLongitude', rightAscensionRate: 0.8, declinationRate: -0.2 } }
+console.log(meteorRadiantPath(perLongitude, deg(280), deg(286), deg(1)).length) // 7 — points from 280° to 286°
+
+// The radiant in the true equator and equinox of date, and its geometric azimuth and altitude (radians) for the observer.
+const ofDate = meteorRadiantOfDate(result.radiant, time)
 const horizontal = meteorRadiantHorizontal(result.radiant, observer, time)
 
-// Highest altitude in an interval, and the rise, transit, and set instants.
+// Highest altitude in an interval, and the rise, transit, and set instants with their classification.
 const highest = meteorRadiantMaximumAltitude(solution, observer, timeYMDHMS(2024, 1, 4, 0, 0, 0, Timescale.UTC), timeYMDHMS(2024, 1, 5, 0, 0, 0, Timescale.UTC))
 const events = meteorRadiantRiseTransitSet(solution, observer, time)
+console.log(meteorRadiantVisibility(events)) // risesAndSets
 ```
 
 ### Meteor Shower State
@@ -2925,7 +3273,7 @@ The meteor modules compute it as the geometric geocentric longitude of the Sun i
 Converting a longitude to a time searches one civil UTC year. A civil year is shorter than the orbital period, so a fraction of a degree of longitude at the year turn (around 280° today) does not occur in a given year; the plain solver throws there, while the crossing solver answers `undefined`. The dates of a shower solution (start, reference, end, and the maximum of an explicit activity profile) are resolved for the occurrence that starts in the requested year, so an interval that wraps through the new year ends in the following year. The catalog reference longitude is the mean activity longitude, not necessarily the ZHR maximum.
 
 ```ts
-import { meteorShowerDates, meteorSolarLongitude, meteorSolarLongitudeCrossingTimes, timeAtMeteorSolarLongitude } from 'nebulosa/src/astronomy/meteors/solar'
+import { meteorShowerDates, meteorSolarLongitude, meteorSolarLongitudeCrossingTimes, meteorSolarLongitudeDelta, meteorSolarLongitudeForwardDelta, meteorSolarLongitudeTimes, meteorSolarState, timeAtMeteorSolarLongitude } from 'nebulosa/src/astronomy/meteors/solar'
 import type { MeteorShowerSolution } from 'nebulosa/src/astronomy/meteors/types'
 import { Timescale, timeToDate, timeYMDHMS, utc } from 'nebulosa/src/astronomy/time/time'
 import { deg, toDeg } from 'nebulosa/src/math/units/angle'
@@ -2933,17 +3281,24 @@ import { deg, toDeg } from 'nebulosa/src/math/units/angle'
 // Solar longitude (J2000 ecliptic) at an instant.
 console.log(toDeg(meteorSolarLongitude(timeYMDHMS(2024, 1, 4, 0, 0, 0, Timescale.UTC)))) // 282.768 — degrees
 
-// First instant of the year at which the Sun reaches a longitude; throws if it does not occur.
-console.log(timeToDate(utc(timeAtMeteorSolarLongitude(2024, deg(283))))) // [2024, 1, 4, 5, 27, 22, 227]
+// The same longitude with the geocentric J2000 equatorial Sun vector (AU) from one ephemeris evaluation.
+const state = meteorSolarState(timeYMDHMS(2024, 1, 4, 0, 0, 0, Timescale.UTC))
 
-// Several longitudes at once, undefined for one that the civil year never reaches.
+// Signed shortest difference in (−π, π] and forward difference in [0, 2π) of two longitudes, across 0°.
+console.log(toDeg(meteorSolarLongitudeDelta(deg(5), deg(355))), toDeg(meteorSolarLongitudeForwardDelta(deg(5), deg(355)))) // 10 350 — degrees
+
+// First instant of the year at which the Sun reaches a longitude; throws if it does not occur.
+console.log(timeToDate(utc(timeAtMeteorSolarLongitude(2024, deg(283))))) // [2024, 1, 4, 5, 27, 22, 228]
+
+// Several longitudes at once: meteorSolarLongitudeTimes throws like the single solver, the crossing variant answers undefined.
+const solved = meteorSolarLongitudeTimes(2024, [deg(90), deg(283)])
 const times = meteorSolarLongitudeCrossingTimes(2024, [0, deg(90), deg(180), deg(270)])
 
 // Start, reference, and end instants of a catalog solution in a civil year.
 const solution: MeteorShowerSolution = { activity: { kind: 'annual', source: 'annual' }, activityInterval: { start: deg(280), end: deg(286) }, referenceSolarLongitude: deg(283) }
 const dates = meteorShowerDates(solution, 2024)
-console.log(timeToDate(utc(dates.start!))) // [2024, 1, 1, 6, 48, 21, 800]
-console.log(timeToDate(utc(dates.end!))) // [2024, 1, 7, 4, 5, 28, 442]
+console.log(timeToDate(utc(dates.start!))) // [2024, 1, 1, 6, 48, 21, 801]
+console.log(timeToDate(utc(dates.end!))) // [2024, 1, 7, 4, 5, 28, 443]
 ```
 
 ### Meteor Track Association
@@ -2953,7 +3308,7 @@ A single observed meteor can be tested against a shower by geometry: its trail, 
 A track is the great-circle arc between two equatorial J2000 points, start and end in the direction of motion. The association measures the cross-track error, the angular distance of the radiant from the trail's great circle; the radiant distance, from the radiant to the start of the trail; and whether the direction of motion is compatible. It is a geometric screen only: it does not use the speed or the radiant uncertainty, so the thresholds are the caller's. A track whose ends coincide or are antipodal defines no plane and is never compatible.
 
 ```ts
-import { associateMeteorTrack, meteorRadiantTrackResidual, meteorTrackPositionAngle } from 'nebulosa/src/astronomy/meteors/trajectory'
+import { associateMeteorTrack, meteorRadiantTrackResidual, meteorTrackDirectionCompatible, meteorTrackGreatCircle, meteorTrackLength, meteorTrackPoint, meteorTrackPositionAngle } from 'nebulosa/src/astronomy/meteors/trajectory'
 import type { MeteorRadiant, MeteorTrack } from 'nebulosa/src/astronomy/meteors/types'
 import { deg, toDeg } from 'nebulosa/src/math/units/angle'
 
@@ -2961,9 +3316,17 @@ import { deg, toDeg } from 'nebulosa/src/math/units/angle'
 const track: MeteorTrack = { start: { rightAscension: deg(220), declination: deg(55) }, end: { rightAscension: deg(228), declination: deg(48) } }
 const radiant: MeteorRadiant = { rightAscension: deg(214.2), declination: deg(61.7) }
 
+// Length of the trail, its midpoint, and the unit pole of its great circle (J2000); undefined for a degenerate track.
+console.log(toDeg(meteorTrackLength(track)!)) // 8.58 — degrees
+const middle = meteorTrackPoint(track, 0.5)! // RA 224.31°, Dec 51.57°
+const pole = meteorTrackGreatCircle(track)!
+
 // Direction of motion at the start, east of north; and the cross-track error of the radiant.
 console.log(toDeg(meteorTrackPositionAngle(track.start, track.end))) // 141.37 — degrees
 console.log(toDeg(meteorRadiantTrackResidual(radiant, track)!)) // 2.10 — degrees
+
+// Whether the trail moves away from the radiant.
+console.log(meteorTrackDirectionCompatible(radiant, track)) // true
 
 // Decision with caller thresholds (radians) on the cross-track error and the radiant distance.
 const association = associateMeteorTrack(radiant, track, { maximumCrossTrackError: deg(5), maximumRadiantDistance: deg(30) })
@@ -2987,7 +3350,18 @@ z_geocentric = z + Δz,   Δz = 2·atan((v − Vg)·tan(z/2) / (v + Vg))
 Speeds are AU/day and distances AU, the entry altitude is measured from a reference ellipsoid, atmospheric drag is not modeled, and no refraction is applied.
 
 ```ts
-import { apparentMeteorRadiantHorizontal, geocentricMeteorRadiantFromHorizontal, meteorRadiantWithEarthRotation, meteorSpeedAtGeodeticAltitude, meteorZenithAttraction } from 'nebulosa/src/astronomy/meteors/trajectory'
+import {
+	apparentMeteorRadiantHorizontal,
+	apparentZenithAngleFromGeocentric,
+	geocentricMeteorRadiantFromHorizontal,
+	geocentricZenithAngleFromApparent,
+	meteorGeocentricRadius,
+	meteorObserverRotationVelocity,
+	meteorRadiantWithEarthRotation,
+	meteorSpeedAtDistance,
+	meteorSpeedAtGeodeticAltitude,
+	meteorZenithAttraction,
+} from 'nebulosa/src/astronomy/meteors/trajectory'
 import type { MeteorRadiant } from 'nebulosa/src/astronomy/meteors/types'
 import { Ellipsoid, geodeticLocation } from 'nebulosa/src/astronomy/observer/location'
 import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
@@ -3000,10 +3374,15 @@ const observer = geodeticLocation(deg(-8), deg(40), meter(100), Ellipsoid.WGS84)
 const time = timeYMDHMS(2024, 1, 4, 5, 0, 0, Timescale.UTC)
 const radiant: MeteorRadiant = { rightAscension: deg(230.1), declination: deg(48.5) }
 
-// Speed at a 100 km entry height, and the zenith attraction at an apparent zenith angle of 60°.
+// Speed at a 100 km entry height; the same from the geocentric radius (AU) of that point on the ellipsoid.
 const entrySpeed = meteorSpeedAtGeodeticAltitude(speed, deg(40), kilometer(100))
 console.log(toKilometerPerSecond(entrySpeed)) // 42.476 — km/s
+console.log(toKilometerPerSecond(meteorSpeedAtDistance(speed, meteorGeocentricRadius(deg(40), kilometer(100))))) // 42.476
+
+// The zenith attraction at an apparent zenith angle of 60°, the geocentric zenith angle, and the inverse.
 console.log(toDeg(meteorZenithAttraction(deg(60), speed, entrySpeed))) // 1.170 — degrees
+const geocentricZenith = geocentricZenithAngleFromApparent(deg(60), speed, entrySpeed) // 61.170°
+console.log(toDeg(apparentZenithAngleFromGeocentric(geocentricZenith, speed, entrySpeed)!)) // 60 — degrees
 
 // Apparent horizontal radiant of a geocentric J2000 radiant, and the inverse back to the catalog frame.
 const options = { geocentricSpeed: speed, entryAltitude: kilometer(100) }
@@ -3011,7 +3390,8 @@ const apparent = apparentMeteorRadiantHorizontal(radiant, observer, time, option
 console.log(toDeg(apparent.azimuth), toDeg(apparent.altitude)) // 57.973 48.097 — 0.78° above the geometric 47.321°
 const recovered = geocentricMeteorRadiantFromHorizontal(apparent, observer, time, options)
 
-// Radiant shifted by the observer's rotation velocity.
+// The observer's rotation velocity in GCRS (AU/day), and the radiant shifted by it.
+console.log(toKilometerPerSecond(Math.hypot(...meteorObserverRotationVelocity(observer, time)))) // 0.357 — km/s at latitude 40°
 const rotated = meteorRadiantWithEarthRotation(radiant, speed, observer, time)!
 console.log(toDeg(rotated.rightAscension), toDeg(rotated.declination)) // 230.471 48.177
 ```
@@ -3029,7 +3409,19 @@ Here `N` is the count, `F ≥ 1` the obstruction correction, `r` the population 
 The population index `r` is the ratio of meteor counts between consecutive magnitude classes, `N(m + 1) / N(m)`, and is related to the mass index by `s = 1 + 2.3 · log10(r)`; it is estimated from counts per magnitude bin by a regression of `ln N` on magnitude. Counts are Poisson-distributed, so small counts have wide uncertainties: Garwood's exact interval gives the confidence interval of the expected count, and of the ZHR scaled from it. The expected number of meteors seen over a night integrates an activity profile through the same correction, with the radiant altitude and any weather or lunar losses supplied explicitly.
 
 ```ts
-import { combineMeteorVisualObservations, integrateMeteorExpectedCount, meteorGarwoodZhr, meteorPopulationIndexFromMagnitudeBins, meteorZhrFromObservation } from 'nebulosa/src/astronomy/meteors/observation'
+import {
+	combineMeteorVisualObservations,
+	integrateMeteorExpectedCount,
+	meteorGarwoodInterval,
+	meteorGarwoodZhr,
+	meteorLocalHourlyRate,
+	meteorMagnitudeRatio,
+	meteorMassIndex,
+	meteorPopulationIndex,
+	meteorPopulationIndexFromMagnitudeBins,
+	meteorVisualRate,
+	meteorZhrFromObservation,
+} from 'nebulosa/src/astronomy/meteors/observation'
 import type { MeteorVisualObservation } from 'nebulosa/src/astronomy/meteors/types'
 import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
 import { deg } from 'nebulosa/src/math/units/angle'
@@ -3041,6 +3433,17 @@ const observation: MeteorVisualObservation = { count: 25, effectiveTime: 1.5, li
 console.log(meteorZhrFromObservation(observation)) // 42.30 — meteors per hour
 console.log(meteorGarwoodZhr(observation)) // { lower: 27.38, upper: 62.45 }
 console.log(combineMeteorVisualObservations([observation, { ...observation, count: 10, effectiveTime: 1, radiantAltitude: deg(60) }])) // 31.20
+
+// The 95% Garwood interval of the count itself, before scaling to a ZHR.
+console.log(meteorGarwoodInterval(25)) // { lower: 16.18, upper: 36.90 } — meteors
+
+// The inverse: the local hourly rate a ZHR of 100 produces under these conditions, and both rates of the observation.
+console.log(meteorLocalHourlyRate(100, observation)) // 39.40 — meteors per hour
+console.log(meteorVisualRate(observation)) // { zhr: 42.30, localHourlyRate: 16.67, observation } — the rate is 25 / 1.5 h
+
+// Population index and mass index, both ways, and the count ratio N(m + Δm) / N(m) for two magnitudes.
+console.log(meteorMassIndex(2.2), meteorPopulationIndex(1.7876)) // 1.7876 2.2
+console.log(meteorMagnitudeRatio(2.2, 2)) // 4.84
 
 // Population index from counts per magnitude class.
 console.log(
@@ -3092,7 +3495,7 @@ The Minor Planet Center (MPC) distributes the osculating orbits of all known min
 Parsing turns one line into a structured record with angles converted to radians and distances in AU, ready to build a Kepler orbit (see [Asteroid and Comet Orbit Construction](#asteroid-and-comet-orbit-construction)). An asteroid line carries the absolute magnitude `H` and slope `G`, and the elements at an osculating epoch given as a five-character packed date (century letter, two-digit year, and month and day in base 32). A comet line carries the perihelion date and distance instead of an epoch and mean anomaly, and the comet magnitude parameters. The mean daily motion keeps its published unit of degrees per day.
 
 ```ts
-import { mpcorb, mpcorbComet, unpackDate } from 'nebulosa/src/astronomy/orbits/mpcorb'
+import { mpcorb, mpcorbComet, packDate, unpackDate } from 'nebulosa/src/astronomy/orbits/mpcorb'
 import { toDeg } from 'nebulosa/src/math/units/angle'
 
 // One MPCORB line for (1) Ceres.
@@ -3100,6 +3503,7 @@ const ceres = mpcorb('00001    3.34  0.15 K2555 188.70269   73.27343   80.25221 
 
 console.log(ceres.magnitudeH, ceres.magnitudeG) // 3.34 0.15
 console.log(unpackDate(ceres.epochPacked)) // [2025, 5, 5] — packed epoch K2555
+console.log(packDate(2025, 5, 5)) // K2555 — the inverse, for writing or matching records
 console.log(toDeg(ceres.meanAnomaly), ceres.semiMajorAxis) // 188.70269 2.7660512 — degrees, AU
 
 // One CometEls line for 1P/Halley.
@@ -3118,7 +3522,8 @@ The Galilean search covers Io, Europa, Ganymede, and Callisto with the analytica
 This is the detection layer only: each event has its kind, the front and back moons, the instants of first contact, maximum, and last contact, and an impact parameter from 0 (central) to 1 (grazing). There is no light curve and no magnitude drop. The search step must be shorter than the duration of a conjunction.
 
 ```ts
-import { galileanMutualEvents, saturnianMutualEvents } from 'nebulosa/src/astronomy/events/mutual'
+import { analyticalSaturnianEphemeris } from 'nebulosa/src/astronomy/ephemeris/saturnian'
+import { findSaturnianMutualEvents, galileanMutualEvents, saturnianMutualEvents } from 'nebulosa/src/astronomy/events/mutual'
 import { type Time, Timescale, timeToDate, timeYMDHMS, utc } from 'nebulosa/src/astronomy/time/time'
 
 const format = (time: Time) => timeToDate(utc(time)).slice(0, 6).join('-')
@@ -3131,11 +3536,17 @@ for (const event of galileanMutualEvents(timeYMDHMS(2026, 12, 2, 19, 0, 0, Times
 // eclipse ganymede europa 2026-12-2-21-47-32 0.3122
 
 // Saturn, shortly after the ring-plane crossing of 2025: Titan eclipses Rhea, and occults it a few minutes later.
-for (const event of saturnianMutualEvents(timeYMDHMS(2025, 3, 12, 10, 0, 0, Timescale.UTC), timeYMDHMS(2025, 3, 12, 13, 0, 0, Timescale.UTC))) {
+const saturnStart = timeYMDHMS(2025, 3, 12, 10, 0, 0, Timescale.UTC)
+const saturnStop = timeYMDHMS(2025, 3, 12, 13, 0, 0, Timescale.UTC)
+
+for (const event of saturnianMutualEvents(saturnStart, saturnStop)) {
 	console.log(event.kind, event.front, event.back, format(event.middle), event.impactParameter)
 }
 // eclipse titan rhea 2025-3-12-11-27-26 0.8338
 // occultation titan rhea 2025-3-12-11-34-1 0.2453
+
+// The same search on an explicit ephemeris source, every body from it (findGalileanMutualEvents takes a JovianEphemeris).
+console.log(findSaturnianMutualEvents(analyticalSaturnianEphemeris, saturnStart, saturnStop).length) // 2 — the same events
 ```
 
 ### Nutation and Celestial Orientation
@@ -3145,7 +3556,7 @@ Nutation is the short-period wobble of the Earth's rotation axis on top of the s
 The angles come from the IAU 2000A model adjusted for IAU 2006. The GCRS to CIRS matrix (frame bias, precession, and nutation, with right ascension measured from the Celestial Intermediate Origin) is the right companion for the CIRS-based observed-place conversions; the equinox-based precession-nutation matrix would offset right ascension by the equation of the origins, which grows by about 50″ per year since J2000. These matrices are cached on the `Time` and shared, so they must be treated as read-only. See [Precession Matrices](#precession-matrices) for the equinox-based matrices.
 
 ```ts
-import { cirsRotationMatrix, nutationAngles, Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { cirsRotationMatrix, equationOfOrigins, nutationAngles, Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
 import { toArcsec } from 'nebulosa/src/math/units/angle'
 
 const time = timeYMDHMS(2026, 6, 29, 0, 0, 0, Timescale.TT)
@@ -3157,6 +3568,9 @@ console.log(toArcsec(deltaPsi), toArcsec(deltaEpsilon)) // 8.046 7.477 — arcse
 
 // GCRS to CIRS rotation matrix (shared, read-only).
 console.log(cirsRotationMatrix(time).slice(0, 3)) // [0.9999966, -4.8e-9, -0.0025894] — first row
+
+// The same orientation from the equinox-based precession-nutation matrix turned by GAST − ERA (shared, read-only).
+console.log(equationOfOrigins(time).slice(0, 3)) // [0.9999966, -4.8e-9, -0.0025894] — first row
 ```
 
 ### Obliquity and Ecliptic Orientation
@@ -3286,8 +3700,10 @@ A Kepler orbit built from a heliocentric state (AU, AU/day) exposes the full set
 The Tisserand parameter with respect to a planet, `T = a_p/a + 2·cos(i)·√((a/a_p)(1 − e²))`, is nearly conserved during an encounter with that planet and classifies small bodies: relative to Jupiter, above 3 is typically asteroidal, between 2 and 3 a Jupiter-family comet, and below 2 a Halley-type or nearly isotropic comet.
 
 ```ts
-import { KeplerOrbit, tisserandParameter } from 'nebulosa/src/astronomy/orbits/asteroid'
+import { argumentOfLatitude, argumentOfPeriapsis, eccentricityVector, inclination, KeplerOrbit, longitudeOfAscendingNode, longitudeOfPeriapsis, meanLongitude, nodeVector, period, semiLatusRectum, semiMajorAxis, tisserandParameter, trueAnomaly } from 'nebulosa/src/astronomy/orbits/asteroid'
 import { Timescale, time, timeToDate } from 'nebulosa/src/astronomy/time/time'
+import { GM_SUN_PITJEVA_2005 } from 'nebulosa/src/core/constants'
+import { vecCross, vecLength } from 'nebulosa/src/math/linear-algebra/vec3'
 import { toDeg } from 'nebulosa/src/math/units/angle'
 
 // Heliocentric equatorial state of Vesta from JPL Horizons, 2025-04-21 12:00 TDB: AU and AU/day.
@@ -3301,6 +3717,33 @@ console.log(timeToDate(vesta.periapsisTime).slice(0, 3)) // [2021, 12, 28] — l
 
 // Tisserand parameter relative to Jupiter (a = 5.2044 AU).
 console.log(tisserandParameter(vesta.semiMajorAxis, vesta.eccentricity, vesta.inclination, 5.2044)) // 3.4411 — asteroidal
+
+// The point of the orbit at a true anomaly, in the orbit's output frame: here the perihelion.
+console.log(Math.hypot(...vesta.positionAtTrueAnomaly(0))) // 2.1486 — AU, the perihelion distance
+
+// The same elements as functions of a state (the building blocks of KeplerOrbit): the eccentricity vector,
+// the angular momentum h = r × v, the node vector, and the semi-latus rectum (AU).
+const [r, v] = [vesta.position, vesta.velocity]
+const h = vecCross(r, v)
+const ev = eccentricityVector(r, v, GM_SUN_PITJEVA_2005)
+const nv = nodeVector(h)
+const p = semiLatusRectum(r, v, GM_SUN_PITJEVA_2005)
+const e = vecLength(ev)
+
+// Orientation and position angles (radians): inclination, node, argument of periapsis, true anomaly.
+const i = inclination(h)
+const node = longitudeOfAscendingNode(h, i)
+const w = argumentOfPeriapsis(ev, nv, h)
+const nu = trueAnomaly(ev, r, v, nv)
+
+console.log(toDeg(i), toDeg(node), toDeg(w), toDeg(nu)) // 22.768 18.192 238.53 322.87 — degrees
+
+// Sizes from p and e (AU): semiMajorAxis, and semiMinorAxis, periapsisDistance, apoapsisDistance with the same
+// arguments; the period from a and GM (days).
+console.log(semiMajorAxis(p, e), period(semiMajorAxis(p, e), GM_SUN_PITJEVA_2005)) // 2.3614 1325.4
+
+// Combined angles (radians): argument of latitude, longitude of periapsis, and mean longitude (node + ω + M).
+console.log(toDeg(argumentOfLatitude(w, nu)), toDeg(longitudeOfPeriapsis(node, w)), toDeg(meanLongitude(node, w, vesta.meanAnomaly))) // 201.41 256.73 225.51 — degrees
 ```
 
 ### Planetary Apparent Magnitudes (Mallama and Hilton)
@@ -3627,10 +4070,10 @@ The ellipsoid is built from three semi-axes in AU, for example the SPICE body ra
 import { bodyFixedFrame } from 'nebulosa/src/astronomy/bodies/orientation'
 import { MARS_ROTATION } from 'nebulosa/src/astronomy/bodies/orientation.data'
 import { mars } from 'nebulosa/src/astronomy/ephemeris/models/analytical/vsop87e'
-import { bodyShape, bodySurfaceLocation, bodySurfaceNormal, bodySurfacePositionAndVelocity, bodySurfaceState } from 'nebulosa/src/astronomy/observer/body'
+import { bodyFixedPosition, bodyShape, bodySurfaceLocation, bodySurfaceNormal, bodySurfacePositionAndVelocity, bodySurfaceState } from 'nebulosa/src/astronomy/observer/body'
 import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
 import { deg } from 'nebulosa/src/math/units/angle'
-import { kilometer } from 'nebulosa/src/math/units/distance'
+import { kilometer, toKilometer } from 'nebulosa/src/math/units/distance'
 
 const time = timeYMDHMS(2026, 6, 29, 0, 0, 0, Timescale.UTC)
 
@@ -3639,6 +4082,9 @@ const shape = bodyShape([kilometer(3396.2), kilometer(3396.2), kilometer(3376.2)
 
 // 18° N, 135° W (225° E), at the reference surface, in the IAU body-fixed frame of Mars.
 const location = bodySurfaceLocation(deg(-135), deg(18), 0, shape, bodyFixedFrame(MARS_ROTATION))
+
+// Body-fixed Cartesian position (AU), computed once and cached on the location; do not mutate it.
+console.log(bodyFixedPosition(location).map(toKilometer)) // [-2282.6, -2282.6, 1048.9] — km
 
 // Unit outward normal of the ellipsoid in body-fixed axes.
 console.log(bodySurfaceNormal(location)) // [-0.6717, -0.6717, 0.3123]
@@ -3880,6 +4326,31 @@ console.log(toDeg(motion.positionAngle)) // degrees, north through east
 console.log(motion.angularAccelerationPerDaySquared) // 0.03832 — radians/day²
 ```
 
+### Saros Series
+
+A saros is a period of about 6585.3 days (18 years 11⅓ days), equal to 223 synodic months, 242 draconic months, and very nearly 239 anomalistic months. After one saros the Sun, the Moon, and the lunar node return to nearly the same geometry, so an eclipse is followed by a very similar one; the extra third of a day shifts it about 120° west in longitude. Eclipses separated by whole saroses are grouped into numbered saros series, each of which typically lasts more than a thousand years, with separate numberings for solar and lunar eclipses.
+
+`solarSaros` returns the solar series number, from 1 to 223 as in the van den Bergh catalog, for the lunation that contains an instant, using the Kluepfel formula on the Meeus lunation index. `lunarSaros` returns the lunar series number, from 1 to 223, counting from the full moon of 18 January 2003 (series 192) and advancing by 38 (modulo 223) per lunation. Both are numberings of the lunation, not tests that an eclipse occurs: not every lunation belongs to a series that produces one, so find the eclipse with [Solar Eclipse Search and Classification](#solar-eclipse-search-and-classification) or [Lunar Eclipse Search](#lunar-eclipse-search) and pass its maximal time here to get its series.
+
+```ts
+import { lunarSaros } from 'nebulosa/src/astronomy/bodies/moon'
+import { nearestSolarEclipse, solarSaros } from 'nebulosa/src/astronomy/bodies/sun'
+import { Timescale, timeYMD, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+
+// Solar saros series of the lunation containing a date.
+console.log(solarSaros(timeYMD(2017, 8, 21))) // 145 — the "Great American" total eclipse of 21 August 2017
+console.log(solarSaros(timeYMD(1999, 8, 11))) // 145 — the same series, one saros (18 years) earlier
+
+// The series of the next solar eclipse, from its time of greatest eclipse.
+const eclipse = nearestSolarEclipse(timeYMDHMS(2025, 3, 1, 0, 0, 0, Timescale.UTC), true)
+
+console.log(solarSaros(eclipse.maximalTime)) // 149 — the partial eclipse of 29 March 2025
+
+// Lunar saros series of the lunation containing a date.
+console.log(lunarSaros(timeYMD(2025, 9, 7))) // 128 — the total lunar eclipse of 7 September 2025
+console.log(lunarSaros(timeYMD(2026, 3, 3))) // 133 — the total lunar eclipse of 3 March 2026
+```
+
 ### Satellite Collision Probability
 
 The probability of collision (Pc) of a satellite conjunction is the chance that two objects, whose positions at the time of closest approach (TCA) are uncertain, come within their combined hard-body radius `R`. It is the quantity operators use to decide whether to perform an avoidance maneuver. In the short-encounter model (Foster and Estes 1992, Chan 1997, Alfano 2005) the relative motion is a straight line during the brief encounter and the position errors are independent Gaussians with combined covariance `C = C₁ + C₂`, so the problem collapses onto the **encounter plane** perpendicular to the relative velocity: Pc is the mass of the projected 2D Gaussian, centred at the miss vector, inside a disk of radius `R`.
@@ -3894,11 +4365,11 @@ The covariance comes from orbit determination, typically delivered in a CCSDS Co
 
 ```ts
 import { parseCDM } from 'nebulosa/src/astronomy/orbits/cdm'
-import { cdmCollisionProbability, cdmEncounterStates, collisionProbability } from 'nebulosa/src/astronomy/orbits/collision'
+import { cdmCollisionProbability, cdmEncounterStates, collisionProbability, rotateStateCovariance, rtnRotation } from 'nebulosa/src/astronomy/orbits/collision'
 import { meter, toMeter } from 'nebulosa/src/math/units/distance'
 
-// CCSDS 508.0-B-1 section 3.6.2 example message, saved as KVN text ("CCSDS_CDM_VERS = 1.0", "TCA = ...", ...).
-const cdm = parseCDM(await Bun.file('conjunction.cdm').text())
+// The CCSDS 508.0-B-1 example message as KVN text ("CCSDS_CDM_VERS = 1.0", "TCA = ...", ...), a repository fixture.
+const cdm = parseCDM(await Bun.file('data/cdm.kvn').text())
 
 console.log(toMeter(cdm.relative.missDistance)) // 715 — reported miss distance, m
 
@@ -3913,6 +4384,11 @@ if (result.kind === 'estimate') {
 // The same estimate from two states in one frame at the same epoch.
 const [primary, secondary] = cdmEncounterStates(cdm)
 const small = collisionProbability(primary, secondary, meter(5))
+
+// RTN axes of a state (rows R, T, N), and its 6×6 covariance rotated into them; the transpose rotates an RTN covariance back to the frame.
+const rtn = rtnRotation(primary.position, primary.velocity)!
+const covariance = rotateStateCovariance(primary.covariance, rtn)
+console.log(toMeter(Math.sqrt(covariance.get(0, 0))), toMeter(Math.sqrt(covariance.get(1, 1)))) // 6.436 50.329 — 1σ radial and along-track, m, as in the message
 ```
 
 ### Satellite Conjunctions
@@ -3948,7 +4424,7 @@ The Earth is a sphere of radius `EARTH_RADIUS_AU` with no atmospheric refraction
 
 ```ts
 import { earth, sun } from 'nebulosa/src/astronomy/ephemeris/models/analytical/vsop87e'
-import { satelliteEclipses, satelliteShadowState } from 'nebulosa/src/astronomy/events/satellite'
+import { isSatelliteSunlit, satelliteEclipses, satelliteShadowState } from 'nebulosa/src/astronomy/events/satellite'
 import { parseTLE, recordFromTLE } from 'nebulosa/src/astronomy/orbits/propagation/sgp4'
 import { type Time, timeShift } from 'nebulosa/src/astronomy/time/time'
 import { vecMinus } from 'nebulosa/src/math/linear-algebra/vec3'
@@ -3957,8 +4433,9 @@ const tle = parseTLE('1 25544U 98067A   20330.54791667  .00016717  00000-0  1027
 const iss = recordFromTLE(tle)
 const sunAt = (time: Time) => vecMinus(sun(time)[0], earth(time)[0]) // geocentric ICRS, AU
 
-// Shadow state at one instant.
+// Shadow state at one instant, and whether the solar disk is wholly unobscured (penumbra is not sunlit).
 console.log(satelliteShadowState(iss, sunAt, tle.epoch)) // umbra
+console.log(isSatelliteSunlit(iss, sunAt, tle.epoch)) // false
 
 // Umbral eclipses in the six hours after the epoch; the first one has no entry, since the window starts in the shadow.
 for (const eclipse of satelliteEclipses(iss, sunAt, tle.epoch, timeShift(tle.epoch, 0.25))) console.log(eclipse.entry, eclipse.exit, eclipse.duration)
@@ -3966,29 +4443,6 @@ for (const eclipse of satelliteEclipses(iss, sunAt, tle.epoch, timeShift(tle.epo
 
 // Penumbral eclipses are slightly longer, since they include the partial shadow.
 const penumbra = satelliteEclipses(iss, sunAt, tle.epoch, timeShift(tle.epoch, 0.25), { boundary: 'penumbra' })
-```
-
-### Satellite Look Angles
-
-The look angles of a satellite are where it appears for a ground observer: azimuth, altitude, and slant range. They are what an antenna rotator or a telescope mount points to, and what decides whether the satellite is above the horizon. The satellite is propagated with SGP4 in the TEME frame, rotated to the Earth-fixed ITRS frame, and differenced against the observer's ITRS position; the topocentric vector is then resolved onto the local horizon of the geodetic vertical.
-
-Azimuth is measured from north through east, the altitude is geometric with no refraction (negative below the horizon), and the range is the observer-to-satellite distance in AU. No light time or aberration is applied. SGP4 is only meaningful near the epoch of the element set, so queries should stay within a few days of it.
-
-```ts
-import { satelliteLookAngles } from 'nebulosa/src/astronomy/events/satellite'
-import { geodeticLocation } from 'nebulosa/src/astronomy/observer/location'
-import { parseTLE, recordFromTLE } from 'nebulosa/src/astronomy/orbits/propagation/sgp4'
-import { timeShift } from 'nebulosa/src/astronomy/time/time'
-import { deg, toDeg } from 'nebulosa/src/math/units/angle'
-import { toKilometer } from 'nebulosa/src/math/units/distance'
-
-const tle = parseTLE('1 25544U 98067A   20330.54791667  .00016717  00000-0  10270-3 0  9000', '2 25544  51.6442  21.4611 0001363  85.7790 274.3535 15.49180547 25697', 'ISS')
-const iss = recordFromTLE(tle)
-const site = geodeticLocation(deg(-46.6361), deg(-23.5475), 0) // São Paulo: longitude, latitude, height
-
-// Azimuth, altitude, and range one hour after the TLE epoch.
-const angles = satelliteLookAngles(iss, site, timeShift(tle.epoch, 1 / 24))
-console.log(toDeg(angles.azimuth), toDeg(angles.altitude), toKilometer(angles.range)) // 153.318 3.433 2033.7 — degrees, km
 ```
 
 ### Satellite Ground Footprint
@@ -4017,6 +4471,29 @@ console.log(toDeg(footprint.halfAngle), toKilometer(footprint.surfaceRadius)) //
 
 // Over a sphere of mean radius 6371 km the cap is slightly larger.
 const mean = satelliteGroundFootprint(iss, tle.epoch, kilometer(6371))
+```
+
+### Satellite Look Angles
+
+The look angles of a satellite are where it appears for a ground observer: azimuth, altitude, and slant range. They are what an antenna rotator or a telescope mount points to, and what decides whether the satellite is above the horizon. The satellite is propagated with SGP4 in the TEME frame, rotated to the Earth-fixed ITRS frame, and differenced against the observer's ITRS position; the topocentric vector is then resolved onto the local horizon of the geodetic vertical.
+
+Azimuth is measured from north through east, the altitude is geometric with no refraction (negative below the horizon), and the range is the observer-to-satellite distance in AU. No light time or aberration is applied. SGP4 is only meaningful near the epoch of the element set, so queries should stay within a few days of it.
+
+```ts
+import { satelliteLookAngles } from 'nebulosa/src/astronomy/events/satellite'
+import { geodeticLocation } from 'nebulosa/src/astronomy/observer/location'
+import { parseTLE, recordFromTLE } from 'nebulosa/src/astronomy/orbits/propagation/sgp4'
+import { timeShift } from 'nebulosa/src/astronomy/time/time'
+import { deg, toDeg } from 'nebulosa/src/math/units/angle'
+import { toKilometer } from 'nebulosa/src/math/units/distance'
+
+const tle = parseTLE('1 25544U 98067A   20330.54791667  .00016717  00000-0  10270-3 0  9000', '2 25544  51.6442  21.4611 0001363  85.7790 274.3535 15.49180547 25697', 'ISS')
+const iss = recordFromTLE(tle)
+const site = geodeticLocation(deg(-46.6361), deg(-23.5475), 0) // São Paulo: longitude, latitude, height
+
+// Azimuth, altitude, and range one hour after the TLE epoch.
+const angles = satelliteLookAngles(iss, site, timeShift(tle.epoch, 1 / 24))
+console.log(toDeg(angles.azimuth), toDeg(angles.altitude), toKilometer(angles.range)) // 153.318 3.433 2033.7 — degrees, km
 ```
 
 ### Satellite Orbit Beta Angle
@@ -4235,15 +4712,25 @@ Both functions take one [Saturnian ephemeris source](#saturnian-ephemeris-source
 
 ```ts
 import { analyticalSaturnianEphemeris, interpolatedSaturnianRingEphemeris } from 'nebulosa/src/astronomy/ephemeris/saturnian'
-import { saturnRingEvents, saturnRingGeometry } from 'nebulosa/src/astronomy/events/saturn.rings'
+import { saturnRingEvents, saturnRingGeometry, saturnRingIllumination, saturnRingOpenings } from 'nebulosa/src/astronomy/events/saturn.rings'
 import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
-import { toDeg } from 'nebulosa/src/math/units/angle'
+import { deg, toDeg } from 'nebulosa/src/math/units/angle'
+
+const time = timeYMDHMS(2026, 11, 1, 0, 0, 0, Timescale.UTC)
 
 // Ring openings B and B′ and pole position angle P at one instant (radians).
-const rings = saturnRingGeometry(analyticalSaturnianEphemeris, timeYMDHMS(2026, 11, 1, 0, 0, 0, Timescale.UTC))
+const rings = saturnRingGeometry(analyticalSaturnianEphemeris, time)
 
 console.log(toDeg(rings.earthOpening), toDeg(rings.solarOpening), toDeg(rings.polePositionAngle)) // ~-6.58 ~-8.11 ~3.40 — degrees
 console.log(rings.illumination) // sameFace — the Earth sees the lit side
+
+// Only B and B′, without the sky geometry: cheap enough for scanning.
+const openings = saturnRingOpenings(analyticalSaturnianEphemeris, time)
+
+console.log(toDeg(openings.earthOpening), toDeg(openings.solarOpening)) // ~-6.58 ~-8.11 — degrees
+
+// Which face is seen, from any pair of openings (radians).
+console.log(saturnRingIllumination(deg(5), deg(-3))) // oppositeFaces — the Earth sees the unlit side
 
 // Ring-plane crossings and opening extrema in [start, stop), on a coarse ring-only interpolator.
 const ephemeris = interpolatedSaturnianRingEphemeris(analyticalSaturnianEphemeris)
@@ -4286,18 +4773,31 @@ The disk, shadow and eclipse geometry is the oblate-planet geometry shared with 
 
 ```ts
 import { analyticalSaturnianEphemeris, interpolatedSaturnianEphemeris } from 'nebulosa/src/astronomy/ephemeris/saturnian'
-import { saturnianSeparationMaxima, saturnianView } from 'nebulosa/src/astronomy/events/saturn.geometry'
+import { skyBasis } from 'nebulosa/src/astronomy/events/satellites.geometry'
+import { saturnianMoonView, saturnianSeparationMaxima, saturnianView } from 'nebulosa/src/astronomy/events/saturn.geometry'
+import { saturnRingGeometryOf, saturnRingOpenings } from 'nebulosa/src/astronomy/events/saturn.rings'
 import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
 import { toDeg } from 'nebulosa/src/math/units/angle'
 
+const time = timeYMDHMS(2026, 11, 1, 0, 0, 0, Timescale.UTC)
+
 // Apparent positions of the seven major moons at one instant.
-const view = saturnianView(analyticalSaturnianEphemeris, timeYMDHMS(2026, 11, 1, 0, 0, 0, Timescale.UTC))
+const view = saturnianView(analyticalSaturnianEphemeris, time)
 
 for (const moon of view.moons) console.log(moon.moon, toDeg(moon.separation) * 3600, moon.disk, moon.ringOverlap) // arcseconds from Saturn's centre
 
+// The steps of the view, to evaluate the system state once while sampling a track: the ring openings
+// with their state, the sky basis of the line of sight, the ring geometry, and one moon.
+const openings = saturnRingOpenings(analyticalSaturnianEphemeris, time)
+const basis = skyBasis(time, openings.state.lineOfSight)
+const rings = saturnRingGeometryOf(openings, basis)
+const titan = saturnianMoonView(analyticalSaturnianEphemeris, openings.state, basis, 'titan')
+
+console.log(toDeg(rings.polePositionAngle), toDeg(titan.separation) * 3600) // 3.40 28.75 — degrees, and arcseconds as in the view
+
 // Greatest elongations of Titan and Iapetus in November 2026, on an interpolated source.
 const ephemeris = interpolatedSaturnianEphemeris(analyticalSaturnianEphemeris)
-const maxima = saturnianSeparationMaxima(ephemeris, timeYMDHMS(2026, 11, 1, 0, 0, 0, Timescale.UTC), timeYMDHMS(2026, 12, 1, 0, 0, 0, Timescale.UTC), ['titan', 'iapetus'])
+const maxima = saturnianSeparationMaxima(ephemeris, time, timeYMDHMS(2026, 12, 1, 0, 0, 0, Timescale.UTC), ['titan', 'iapetus'])
 
 for (const maximum of maxima) console.log(maximum.moon, maximum.time, toDeg(maximum.separation) * 3600) // Iapetus ~567″ on 2026-11-10
 ```
@@ -4342,7 +4842,8 @@ console.log(position) // [0.0078347, 0.0010775, -0.00076689] — AU, Saturnicent
 console.log(velocity) // [-0.00043573, 0.0032733, -0.00018113] — AU/day
 console.log(toKilometer(Math.hypot(...position))) // 1188636 — km, close to Titan's orbital radius
 
-// The other satellites have their own functions; tass17(time, index) is the shared one (0 Mimas … 7 Hyperion).
+// The other satellites have their own functions (enceladus, tethys, dione, rhea, iapetus, hyperion);
+// tass17(time, index) is the shared one (0 Mimas … 7 Hyperion).
 console.log(toKilometer(Math.hypot(...mimas(time)[0]))) // 184379 — km
 console.log(tass17(time, 5)[0]) // Titan again, AU
 ```
@@ -4420,10 +4921,15 @@ console.log(toDeg(back.x), toDeg(back.y)) // 152 23 — degrees of RA and Dec
 const chart = new Gnomonic(hour(10), deg(20), { scale: 206264.806, raAxisDirection: 'west' })
 
 console.log(chart.project(hour(10) + deg(2), deg(23))) // { x: -6638.9, y: 10855.2 } — arcseconds
+// Other azimuthal projections (AzimuthalProjection, same constructor): Stereographic, Orthographic,
+// LambertAzimuthalEqualArea, AzimuthalEquidistant.
 
 // A cylindrical projection of the whole sphere; the pole is outside Mercator's domain.
 console.log(new Mercator().project(deg(30), deg(45))) // { x: 0.5236, y: 0.8814 }
 console.log(new Mercator().project(0, deg(90))) // undefined
+// Other cylindrical projections (CylindricalProjection): WebMercator, EllipsoidalMercator, Miller, CentralCylindrical,
+// CylindricalEqualArea with LambertCylindricalEqualArea, Behrmann, GallPeters, HoboDyer, Balthasart, TrystanEdwards,
+// CylindricalStereographic with Gall and Braun, and CylindricalEquidistant with PlateCarree.
 ```
 
 ### Sky Surface Brightness (Krisciunas and Schaefer)
@@ -4442,7 +4948,7 @@ import { eraS2c } from 'nebulosa/src/astronomy/coordinates/erfa/erfa'
 import { moon } from 'nebulosa/src/astronomy/ephemeris/models/analytical/elpmpp02'
 import { earth, sun } from 'nebulosa/src/astronomy/ephemeris/models/analytical/vsop87e'
 import { Ellipsoid, geodeticLocation } from 'nebulosa/src/astronomy/observer/location'
-import { fitSkyBaseline, skyBrightness, skyBrightnessGeometryAt } from 'nebulosa/src/astronomy/sky/brightness'
+import { fitSkyBaseline, nanolambertsToSkyMagnitude, skyBrightness, skyBrightnessGeometryAt, skyMagnitudeToNanolamberts } from 'nebulosa/src/astronomy/sky/brightness'
 import { type Time, Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
 import { vecMinus } from 'nebulosa/src/math/linear-algebra/vec3'
 import { deg, hour } from 'nebulosa/src/math/units/angle'
@@ -4453,6 +4959,10 @@ const geometry = { altitude: deg(60), sunAltitude: deg(-25), moon: { altitude: d
 const sky = skyBrightness(geometry)
 
 console.log(sky.total, sky.natural, sky.moon) // 19.131 21.463 19.266 — mag/arcsec²
+
+// The model's linear flux unit: mag/arcsec² to nanolamberts and back (K&S eq. 1).
+console.log(skyMagnitudeToNanolamberts(22)) // 54.008 — nL
+console.log(nanolambertsToSkyMagnitude(2 * 54.008)) // 21.247 — mag/arcsec², twice the flux is 0.75 mag brighter
 
 // Calibrate the light pollution of a site from SQM readings (geometry plus measured mag/arcsec²).
 const fit = fitSkyBaseline([
@@ -4510,10 +5020,10 @@ Locating a sunspot or a prominence on the Sun, and following it from day to day,
 The mapping functions place a line of sight on the solar sphere seen from that observer at its finite distance, either from helioprojective angles (from the disk centre, toward solar west and solar north) or from pixels of an ideal, distortion-free image centred on the disk (origin upper left, +Y down), and back. `mu`, the cosine of the heliocentric angle, is 1 at the disk centre and 0 at the limb. Features are carried forward by differential rotation, ω = A + B sin²φ + C sin⁴φ (sidereal, Howard 1990 by default, Snodgrass 1983 and Allen available), relative to the rigid Carrington rate; the latitude is kept, so map the new Carrington longitude through the geometry of the later time.
 
 ```ts
-import { helioprojectiveToHeliographic, heliographicToSolarImage, rotateCarringtonLongitude, solarDiskGeometry, solarImageScale, solarImageToHeliographic } from 'nebulosa/src/astronomy/bodies/sun.heliographic'
+import { approximateSolarDiskGeometry, heliographicToHelioprojective, heliographicToSolarImage, helioprojectiveToHeliographic, rotateCarringtonLongitude, solarDiskGeometry, solarImageScale, solarImageToHeliographic, solarRotationRate } from 'nebulosa/src/astronomy/bodies/sun.heliographic'
 import { earth, sun } from 'nebulosa/src/astronomy/ephemeris/models/analytical/vsop87e'
 import { Timescale, timeShift, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
-import { arcsec, toDeg } from 'nebulosa/src/math/units/angle'
+import { arcsec, deg, toArcsec, toDeg } from 'nebulosa/src/math/units/angle'
 
 const time = timeYMDHMS(2026, 6, 29, 0, 0, 0, Timescale.UTC)
 
@@ -4522,10 +5032,25 @@ const geometry = solarDiskGeometry(time, earth(time), sun(time))
 
 console.log(toDeg(geometry.p), toDeg(geometry.b0), toDeg(geometry.l0)) // -3.6155 2.6155 96.8428 — degrees
 
+// The geocentric Meeus approximation, from the time alone.
+const approximate = approximateSolarDiskGeometry(time)
+
+console.log(toDeg(approximate.p), toDeg(approximate.b0), toDeg(approximate.l0)) // -3.6143 2.6114 96.8846 — degrees
+
 // A line of sight 300″ west and 200″ north of the disk centre, on the solar sphere.
 const point = helioprojectiveToHeliographic(arcsec(300), arcsec(200), geometry)
 
-if (point.onDisk) console.log(toDeg(point.stonyhurstLongitude), toDeg(point.latitude), toDeg(point.carringtonLongitude), point.mu) // 19.100 14.657 115.943 0.924
+if (point.onDisk) {
+	console.log(toDeg(point.stonyhurstLongitude), toDeg(point.latitude), toDeg(point.carringtonLongitude), point.mu) // 19.100 14.657 115.943 0.924
+
+	// The inverse: a Carrington (or Stonyhurst) point back to helioprojective angles.
+	const back = heliographicToHelioprojective(point.carringtonLongitude, point.latitude, 'carrington', geometry)
+
+	console.log(toArcsec(back.tx), toArcsec(back.ty), back.visible) // 300 200 true — arcseconds
+}
+
+// Sidereal rotation rate at a latitude (radians/day), Howard 1990 unless another model is passed.
+console.log(toDeg(solarRotationRate(deg(30)))) // 13.682 — degrees/day
 
 // A plate-solved image: disk centre at (1024, 1024), radius 960 px, ICRS north up.
 const calibration = { centerX: 1024, centerY: 1024, scale: solarImageScale(geometry, 960), positionAngle: 0, north: 'icrs' } as const
@@ -4548,9 +5073,11 @@ Because the elements vary smoothly, they are published (and computed here) as cu
 
 ```ts
 import { nearestSolarEclipse } from 'nebulosa/src/astronomy/bodies/sun'
-import { sunMoonPosition } from 'nebulosa/src/astronomy/events/eclipse/eclipse'
+import { moon } from 'nebulosa/src/astronomy/ephemeris/models/analytical/elpmpp02'
+import { earth, sun } from 'nebulosa/src/astronomy/ephemeris/models/analytical/vsop87e'
+import { computeSunMoonPositionAt, sunMoonPosition } from 'nebulosa/src/astronomy/events/eclipse/eclipse'
 import { computePolynomialBesselianElements, evaluateBesselian, instantBesselianFromSunMoon } from 'nebulosa/src/astronomy/events/eclipse/solar/map'
-import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { type Time, Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
 import { toDeg } from 'nebulosa/src/math/units/angle'
 
 // The total solar eclipse of 8 April 2024.
@@ -4571,6 +5098,11 @@ console.log(toDeg(maximum.d), toDeg(maximum.mu)) // 7.59086 94.01317 — degrees
 const exact = instantBesselianFromSunMoon(eclipse.maximalTime, sunMoonPosition(eclipse.maximalTime))
 
 console.log(exact.x, exact.y) // -0.1575000315 0.3050841577
+
+// A Sun/Moon provider from other ephemerides: barycentric Sun and Earth and geocentric Moon states (AU, AU/day, ICRF).
+const elpmpp02 = (time: Time) => computeSunMoonPositionAt(time, sun, earth, moon)
+
+console.log(evaluateBesselian(computePolynomialBesselianElements(eclipse.maximalTime, elpmpp02), eclipse.maximalTime).x) // -0.15691 — Earth radii, with the ELPMPP02 Moon
 ```
 
 ### Solar Eclipse Ground-Track Geometry
@@ -4667,26 +5199,6 @@ console.log(toArcsec(sunSemidiameter(1))) // 959.63 — arcseconds
 console.log(toArcsec(sunSemidiameter(0.98329))) // 975.94 — arcseconds, near perihelion
 ```
 
-### Solar Saros Index
-
-A saros is a period of about 6585.3 days (18 years 11 days) after which the Sun, Moon, and lunar node return to nearly the same geometry, so a solar eclipse is followed by a similar one about 120° of longitude to the west. Solar eclipses are grouped into numbered saros series, with number 1 to 223 in the van den Bergh catalog. `solarSaros` returns the saros series number of the lunation that contains an instant, using the Kluepfel formula on the Meeus lunation index.
-
-It is a numbering of the lunation, not a test that an eclipse occurs: use `nearestSolarEclipse` (see [Solar Eclipse Search and Classification](#solar-eclipse-search-and-classification)) to find the eclipse itself, and pass its maximal time here to get its series. For the lunar series see [Lunar Saros Index](#lunar-saros-index).
-
-```ts
-import { nearestSolarEclipse, solarSaros } from 'nebulosa/src/astronomy/bodies/sun'
-import { Timescale, timeYMD, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
-
-// Saros series of the lunation containing a date.
-console.log(solarSaros(timeYMD(2017, 8, 21))) // 145 — the "Great American" total eclipse of 21 August 2017
-console.log(solarSaros(timeYMD(1999, 8, 11))) // 145 — the same series, one saros (18 years) earlier
-
-// The series of the next eclipse, from its time of greatest eclipse.
-const eclipse = nearestSolarEclipse(timeYMDHMS(2025, 3, 1, 0, 0, 0, Timescale.UTC), true)
-
-console.log(solarSaros(eclipse.maximalTime)) // 149 — the partial eclipse of 29 March 2025
-```
-
 ### Spherical Coordinate Conversions
 
 The same direction on the sky can be written in several spherical systems. Equatorial uses right ascension and declination, ecliptic uses longitude and latitude relative to the plane of the Earth's orbit, and Galactic uses longitude and latitude relative to the plane of the Milky Way. Converting between them is a fixed rotation for the J2000 systems, or a time-dependent one for systems "of date", which follow precession, nutation, and the obliquity of the ecliptic.
@@ -4694,18 +5206,26 @@ The same direction on the sky can be written in several spherical systems. Equat
 Each function takes and returns radians as a `[longitude-like, latitude-like]` pair. The J2000 conversions need no time; the "of date" ones take a `Time` (the current instant by default): the ecliptic of date uses the true obliquity, and the J2000-to-date equatorial conversion applies the IAU 2006/2000A precession-nutation. Longitudes and right ascensions come back in `(−π, π]`, not wrapped to `[0, 2π)`. These are directions only: for positions or states and the other frames, see [Celestial and Terrestrial Reference Frames](#celestial-and-terrestrial-reference-frames), and for the horizontal system see [Local Horizon Coordinates](#local-horizon-coordinates).
 
 ```ts
-import { equatorialFromJ2000, equatorialToEcliptic, equatorialToEclipticJ2000, equatorialToGalactic, equatorialToJ2000 } from 'nebulosa/src/astronomy/coordinates/coordinate'
+import { eclipticJ2000ToEquatorial, eclipticToEquatorial, equatorialFromJ2000, equatorialToEcliptic, equatorialToEclipticJ2000, equatorialToGalactic, equatorialToJ2000, galacticToEquatorial } from 'nebulosa/src/astronomy/coordinates/coordinate'
 import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
 import { deg, hour, toDeg } from 'nebulosa/src/math/units/angle'
 
 const time = timeYMDHMS(2026, 6, 29, 4, 0, 0, Timescale.UTC)
 
 // J2000 equatorial RA 10 h, Dec +20° to J2000 ecliptic, and to the ecliptic of date.
-console.log(equatorialToEclipticJ2000(hour(10), deg(20)).map(toDeg)) // [145.128, 7.2907] — degrees
-console.log(equatorialToEcliptic(hour(10), deg(20), time).map(toDeg)) // [145.1281, 7.2915] — degrees
+const eclipticJ2000 = equatorialToEclipticJ2000(hour(10), deg(20))
+const eclipticOfDate = equatorialToEcliptic(hour(10), deg(20), time)
 
-// The Galactic center region in Galactic coordinates.
+console.log(eclipticJ2000.map(toDeg)) // [145.128, 7.2907] — degrees
+console.log(eclipticOfDate.map(toDeg)) // [145.1281, 7.2915] — degrees
+
+// The inverses, ecliptic J2000 and ecliptic of date back to equatorial.
+console.log(eclipticJ2000ToEquatorial(...eclipticJ2000).map(toDeg)) // [150, 20] — degrees
+console.log(eclipticToEquatorial(...eclipticOfDate, time).map(toDeg)) // [150, 20] — degrees
+
+// The Galactic center region in Galactic coordinates, and the Galactic origin back in equatorial coordinates.
 console.log(equatorialToGalactic(hour(17.7611), deg(-28.9362)).map(toDeg)) // [0.0052, -0.0086] — degrees
+console.log(galacticToEquatorial(0, 0).map(toDeg)) // [-93.595, -28.936] — degrees (RA 266.405°)
 
 // J2000 to equatorial coordinates of date (precession and nutation), and back.
 const [ra, dec] = equatorialFromJ2000(hour(10), deg(20), time)
@@ -4861,7 +5381,7 @@ An SPK (Spacecraft and Planet Kernel) is a NAIF binary file of ephemerides: for 
 ```ts
 import fs from 'fs/promises'
 import { readDaf } from 'nebulosa/src/astronomy/ephemeris/kernels/daf'
-import { Naif } from 'nebulosa/src/astronomy/ephemeris/kernels/naif'
+import { extendedPermanentAsteroidNumber, Naif } from 'nebulosa/src/astronomy/ephemeris/kernels/naif'
 import { readSpk } from 'nebulosa/src/astronomy/ephemeris/kernels/spk'
 import { inspectSpk } from 'nebulosa/src/astronomy/ephemeris/kernels/spk.inspect'
 import { prepareSpkKernelSet } from 'nebulosa/src/astronomy/ephemeris/kernels/spk.kernelset'
@@ -4891,8 +5411,13 @@ for (const [id, path] of [
 
 const set = await prepareSpkKernelSet(entries)
 
+// NAIF code of a numbered asteroid, 20000000 + number: (65803) Didymos is Naif.DIDYMOS_BARYCENTER. The other schemes are
+// extendedPrimaryBodyOfPermanentAsteroidNumber, extendedSatelliteOfPermanentAsteroidNumber, extendedProvisionalAsteroidNumber,
+// and, for old kernels, originalPermanentAsteroidNumber and originalProvisionalAsteroidNumber.
+const code = extendedPermanentAsteroidNumber(65803) // 20065803
+
 // Barycentric state of Didymos, chained Sun -> Didymos from one file and barycenter -> Sun from the other.
-const didymos = set.stateAt(Naif.DIDYMOS_BARYCENTER, timeYMDHMS(2022, 12, 8, 20, 7, 15, Timescale.TDB))
+const didymos = set.stateAt(code, timeYMDHMS(2022, 12, 8, 20, 7, 15, Timescale.TDB))
 
 if (didymos.ok) console.log(didymos.state, didymos.kernels) // AU and AU/day in J2000 axes; ['didymos', 'de440s']
 ```
@@ -5063,14 +5588,13 @@ Planning an image of a lunar crater or any other surface feature depends on its 
 
 `surfaceFeature` prepares a location of [Planetary Surface Locations](#planetary-surface-locations) with its local horizon frame: up is the reference ellipsoid normal, north is the body's pole projected onto the tangent plane, and azimuth runs north through east. A facet slope and aspect tilt the normal used for incidence and emission, for example a crater wall, and a terrain horizon mask (see [Local Horizon Mask](#local-horizon-mask)) adds occlusion by distant relief. `surfaceFeatureIllumination` gives the geometry at one instant, taken from the feature point, so the observer's parallax is included (up to about 0.26° for the Earth seen from the Moon); `surfaceFeatureWindows` finds the intervals where solar and observer constraints all hold, with the search of [Time-Constraint Intervals](#time-constraint-intervals). Against SPICE `ilumin`, `azlcpo`, and `gfilum` with the same DE421 and MOON_ME kernels, the tests check the angles to 5e-7° and window edges to about half a second.
 
-Without a mask, the feature sits on a smooth ellipsoid, so crater-rim and relief shadows are not predicted. With a digital elevation model (DEM), such as a LOLA tile converted to heights in AU above the reference sphere, the relief itself sets the horizon, the facet, and the shadows: the terrain functions march the DEM to build the horizon mask and the slope of a feature, trace a ray toward the Sun to tell whether a point is in a cast shadow, and find the length of the shadow a summit or rim casts. The Sun is treated as a point; to bracket the penumbra, offset the solar altitude by its angular radius. All results are only as good as the DEM: ridges and peaks narrower than its spacing can be missed or smoothed.
+Without a mask, the feature sits on a smooth ellipsoid, so crater-rim and relief shadows are not predicted; a digital elevation model supplies the mask, the facet, and the cast shadows (see [Digital Elevation Model Terrain](#digital-elevation-model-terrain)).
 
 ```ts
 import { bodyFixedFrame, MOON_ROTATION } from 'nebulosa/src/astronomy/bodies/orientation'
 import { moon } from 'nebulosa/src/astronomy/ephemeris/models/analytical/elpmpp02'
 import { earth, sun } from 'nebulosa/src/astronomy/ephemeris/models/analytical/vsop87e'
 import { surfaceFeature, surfaceFeatureIllumination, surfaceFeatureWindows } from 'nebulosa/src/astronomy/events/surface'
-import { type ElevationGrid, terrainHorizon, terrainModel, terrainShadowTip, terrainSlope, terrainSurfaceLocation } from 'nebulosa/src/astronomy/events/surface.terrain'
 import { bodyShape, bodySurfaceLocation } from 'nebulosa/src/astronomy/observer/body'
 import { type Time, Timescale, timeShift, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
 import { vecMinus } from 'nebulosa/src/math/linear-algebra/vec3'
@@ -5081,9 +5605,7 @@ const epoch = timeYMDHMS(2024, 1, 15, 0, 0, 0, Timescale.TDB)
 
 // Copernicus crater: 20.08° W, 9.62° N, on a sphere of radius 1737.4 km.
 const radius = kilometer(1737.4)
-const shape = bodyShape([radius, radius, radius])
-const frame = bodyFixedFrame(MOON_ROTATION)
-const copernicus = surfaceFeature(bodySurfaceLocation(deg(-20.08), deg(9.62), 0, shape, frame))
+const copernicus = surfaceFeature(bodySurfaceLocation(deg(-20.08), deg(9.62), 0, bodyShape([radius, radius, radius]), bodyFixedFrame(MOON_ROTATION)))
 
 // Moon-centre to Sun and to the geocenter, in AU and base axes (geometric).
 const sunAt = (time: Time) => vecMinus(vecMinus(sun(time)[0], earth(time)[0]), moon(time)[0])
@@ -5100,20 +5622,6 @@ console.log(now.sunlit, now.visible) // true true
 const grazing = surfaceFeatureWindows(copernicus, sunAt, earthAt, epoch, timeShift(epoch, 32), { minSolarAltitude: deg(2), maxSolarAltitude: deg(10), step: 0.25 })
 
 console.log(grazing.map((w) => [w.start, w.end])) // the morning and evening windows of the lunation
-
-// grid: ElevationGrid — elevations in AU on a planetocentric longitude/latitude grid around the crater.
-declare const grid: ElevationGrid
-const dem = terrainModel(grid)
-
-// A feature on the crater floor with the horizon and facet derived from the DEM.
-const floor = surfaceFeature(terrainSurfaceLocation(dem, deg(-20.08), deg(9.62), shape, frame)!)
-const feature = surfaceFeature(floor.location, { ...terrainSlope(dem, floor), horizon: terrainHorizon(dem, floor) })
-
-// The length of the shadow cast from the feature down-Sun, along the surface (AU).
-const light = surfaceFeatureIllumination(feature, sunAt, earthAt, timeShift(epoch, 5.5))
-const tip = terrainShadowTip(dem, feature, light.solarAltitude, light.solarAzimuth)
-
-console.log(tip?.distance) // AU along the surface
 ```
 
 ### TEME and ITRF Conversion
@@ -5123,8 +5631,9 @@ SGP4 outputs positions in TEME, the True Equator, Mean Equinox frame: an Earth-c
 The conversions accept a position or a `[position, velocity]` state in any unit (AU and AU/day for SGP4 output) and are exact inverses of each other; variants take a sidereal angle and a polar-motion matrix the caller already has. UT1, and so GMST, comes from the loaded Earth orientation data (see [Earth Orientation Parameters](#earth-orientation-parameters)); without it UT1 equals UTC, which moves a low-orbit position by up to about 0.5 km. The general frame machinery gives the same result (see [Celestial and Terrestrial Reference Frames](#celestial-and-terrestrial-reference-frames)).
 
 ```ts
-import { itrfToTeme, temeToItrf } from 'nebulosa/src/astronomy/coordinates/frame'
+import { itrfToTeme, temeToItrf, temeToItrfByGmst } from 'nebulosa/src/astronomy/coordinates/frame'
 import { parseTLE, sgp4 } from 'nebulosa/src/astronomy/orbits/propagation/sgp4'
+import { greenwichMeanSiderealTime, pmMatrix } from 'nebulosa/src/astronomy/time/time'
 import { toKilometer } from 'nebulosa/src/math/units/distance'
 import { toKilometerPerSecond } from 'nebulosa/src/math/units/velocity'
 
@@ -5140,6 +5649,9 @@ console.log(velocity.map(toKilometerPerSecond)) // [3.8830, 5.7151, -2.5222] —
 
 // Back to TEME.
 console.log(itrfToTeme([position, velocity], tle.epoch)[0].map(toKilometer)) // [-3737.79, 2970.46, 4831.15] — km, the SGP4 state
+
+// The same rotation from a GMST (radians) and polar-motion matrix the caller already has; itrfToTemeByGmst is its inverse.
+console.log(temeToItrfByGmst(teme, greenwichMeanSiderealTime(tle.epoch), pmMatrix(tle.epoch))[0].map(toKilometer)) // [4662.27, -1028.59, 4831.15] — km, ITRF
 ```
 
 ### Time-Constraint Intervals
@@ -5214,7 +5726,8 @@ Satellite orbital data comes as a two-line element set (TLE), a fixed-column tex
 The record is built with the WGS-72 constants by default, the set operational element sets are fitted with. Elements typed by hand must also be SGP4 mean elements, not osculating ones. Element sets from a network query, a file, or an operator should be validated before they are parsed or propagated: a corrupted TLE line still parses into plausible numbers, which the per-line modulo-10 checksum detects, and an OMM for another frame or theory still builds a record.
 
 ```ts
-import { type OMM, parseTLE, recordFromOMM, recordFromTLE, sgp4, validateTLE } from 'nebulosa/src/astronomy/orbits/propagation/sgp4'
+import { type OMM, parseTLE, recordFromOMM, recordFromSgp4Elements, recordFromTLE, sgp4, tleCatalogNumber, tleChecksum, validateOMM, validateTLE } from 'nebulosa/src/astronomy/orbits/propagation/sgp4'
+import { TAU } from 'nebulosa/src/core/constants'
 import { toDeg } from 'nebulosa/src/math/units/angle'
 import { toKilometer } from 'nebulosa/src/math/units/distance'
 
@@ -5224,6 +5737,9 @@ const line2 = '2 25544  51.6415  14.7889 0003559 325.3396 149.4637 15.4947758041
 // Validate untrusted lines first: the first problem found, or undefined for a usable set.
 console.log(validateTLE(line1, line2)) // undefined
 
+// The modulo-10 checksum of a line (its last column), and the decimal catalog number of an Alpha-5 one.
+console.log(tleChecksum(line1), tleCatalogNumber('A0001')) // 6 100001
+
 // Parse the TLE (epoch as a UTC Time, angles in radians) and build a reusable record.
 const tle = parseTLE(line1, line2, 'ISS (ZARYA)')
 const record = recordFromTLE(tle)
@@ -5231,9 +5747,14 @@ const record = recordFromTLE(tle)
 console.log(toDeg(tle.inclination), tle.meanMotion) // 51.6415 15.4947758 — degrees, rev/day
 console.log(sgp4(tle.epoch, record)[0].map(toKilometer)) // [-3737.79, 2970.46, 4831.15] — km, TEME
 
-// omm: OMM — a CelesTrak or Space-Track JSON record with the same elements; it builds the same record.
+// omm: OMM — a CelesTrak or Space-Track JSON record with the same elements; validate it, then build the same record.
 declare const omm: OMM
+console.log(validateOMM(omm)) // undefined for a usable set
 console.log(sgp4(tle.epoch, recordFromOMM(omm))[0].map(toKilometer)) // the same TEME position, km
+
+// Typed mean elements without TLE or OMM text (mean motion in radians/minute); the gravity option selects SGP4_WGS84 or SGP4_WGS72_OLD.
+const typed = recordFromSgp4Elements({ epoch: tle.epoch, eccentricity: tle.eccentricity, inclination: tle.inclination, rightAscensionOfAscendingNode: tle.rightAscensionOfAscendingNode, argumentOfPerigee: tle.argumentOfPerigee, meanAnomaly: tle.meanAnomaly, meanMotion: (tle.meanMotion * TAU) / 1440, bstar: tle.bstar })
+console.log(sgp4(tle.epoch, typed)[0].map(toKilometer)) // [-3737.79, 2970.46, 4831.15] — km, the same record
 ```
 
 ### Topocentric Observed Place
@@ -5243,7 +5764,7 @@ The observed place of a source is where an observer on the Earth's surface sees 
 `icrsToObserved` does the full chain for a source without parallax or proper motion, from the Earth's barycentric and heliocentric state; the stages `icrsToCirs` and `cirsToObserved`, and their inverses, are available separately. Azimuth is measured north through east, and the hour angle is positive west. Refraction uses the ERFA model with pressure (hPa), temperature (°C), relative humidity, and wavelength (µm), with standard defaults; it can be turned off for the geometric altitude, and applied alone to an altitude. UT1 and polar motion come from the loaded Earth orientation data; without it UT1 equals UTC, so the outputs below are good to a few arcseconds (see [Earth Orientation Parameters](#earth-orientation-parameters)). For a quick refraction estimate without pressure or temperature, see [Approximate Atmospheric Refraction](#approximate-atmospheric-refraction).
 
 ```ts
-import { icrsToObserved, refractedAltitude } from 'nebulosa/src/astronomy/coordinates/astrometry'
+import { cirsToIcrs, cirsToObserved, icrsToCirs, icrsToObserved, observedToCirs, refractedAltitude, unrefractedAltitude } from 'nebulosa/src/astronomy/coordinates/astrometry'
 import { eraEpv00 } from 'nebulosa/src/astronomy/coordinates/erfa/earth'
 import { geodeticLocation } from 'nebulosa/src/astronomy/observer/location'
 import { tdb, Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
@@ -5264,8 +5785,20 @@ const observed = icrsToObserved(star, time, barycentric, heliocentric[0], undefi
 console.log(toDeg(observed.azimuth), toDeg(observed.altitude)) // 271.54 66.71 — degrees, refracted
 console.log(toDeg(icrsToObserved(star, time, barycentric, heliocentric[0], false, location).altitude)) // 66.70 — degrees, geometric
 
-// Refraction alone: a true altitude of 10° appears higher.
+// The two stages: ICRS to the geocentric CIRS [RA, Dec], then CIRS to the observed place.
+const cirs = icrsToCirs(star, time, barycentric, heliocentric[0])
+const stage = cirsToObserved(cirs, time, undefined, location)
+
+console.log(cirs.map(toDeg), toDeg(stage.altitude)) // [240.0674, -26.0767] 66.71 — degrees
+
+// The inverses: observed azimuth and altitude to CIRS, then CIRS to ICRS.
+const back = observedToCirs(stage.azimuth, stage.altitude, time, undefined, location)
+
+console.log(cirsToIcrs(back, time, barycentric, heliocentric[0]).map(toDeg)) // [240, -26] — degrees, the ICRS input
+
+// Refraction alone: a true altitude of 10° appears higher, and an apparent altitude of 10° is lower in truth.
 console.log(toDeg(refractedAltitude(deg(10)))) // 10.0861 — degrees
+console.log(toDeg(unrefractedAltitude(deg(10)))) // 9.9132 — degrees
 ```
 
 ### Topocentric Parallax
@@ -5422,7 +5955,7 @@ A two-body orbit is fully reproducible from a center's gravitational parameter, 
 The model gives the exact geometric state relative to the center at any instant, and the inverse problem, the osculating elements of a state referred to the equator or the ecliptic. Some elements are undefined by geometry rather than numerically small: an equatorial orbit has no node, a circular one no periapsis, and such angles are reported as undefined instead of an arbitrary value. Units are AU, days, and AU³/day² for the gravitational parameter; the centers carry DE440 gravitational parameters by NAIF ID. The same model also samples the conic for drawing, with points crowding near periapsis, and tabulates states over an interval dense enough for Hermite interpolation (see [Splines and Interpolation](#splines-and-interpolation)). A residual against a reference state is resolved on its RTN frame (radial, along-track, normal), the natural frame for comparing an orbit with an ephemeris.
 
 ```ts
-import { orbitalElements, orbitCenter, orbitOf, orbitStateAt, stateResidual } from 'nebulosa/src/astronomy/orbits/mechanics'
+import { conicClass, orbitalElements, orbitCenter, orbitDiagnostics, orbitOf, orbitStateAt, stateResidual } from 'nebulosa/src/astronomy/orbits/mechanics'
 import { sampleConic, sampleStates } from 'nebulosa/src/astronomy/orbits/sampling'
 import { Timescale, time } from 'nebulosa/src/astronomy/time/time'
 import { deg, toDeg } from 'nebulosa/src/math/units/angle'
@@ -5445,6 +5978,14 @@ const elements = orbitalElements(state.time, state.position, state.velocity, sun
 console.log(elements.conic, elements.period) // elliptic 1620.5 — days
 console.log(toDeg(elements.meanAnomaly!)) // 62.216 — degrees, 100 days after 40°
 
+// The conic class of an eccentricity, with the library's circular and parabolic tolerances.
+console.log(conicClass(0.3), conicClass(1)) // elliptic parabolic
+
+// Dynamical diagnostics of a state: radius, speeds, specific energy (AU²/day², −GM/2a when bound), angular momentum.
+const diagnostics = orbitDiagnostics(state.position, state.velocity, sun.mu)
+
+console.log(diagnostics.radius, diagnostics.escapeSpeed, diagnostics.specificEnergy) // 2.5467 0.015244 -5.4799e-5 — AU, AU/day, AU²/day²
+
 // The curve for drawing, with periapsis, apoapsis, and nodes as markers; states tabulated over a year.
 const conic = sampleConic(model.orbit, { plane: 'ecliptic' })
 const table = sampleStates(model.orbit, epoch, time(2460787 + 365, 0, Timescale.TDB))
@@ -5452,6 +5993,63 @@ const table = sampleStates(model.orbit, epoch, time(2460787 + 365, 0, Timescale.
 // Model minus reference, resolved on the reference's RTN frame: 0.01 day later is ahead along-track.
 const later = orbitStateAt(model.orbit, time(2460787 + 100.01, 0, Timescale.TDB))
 if (later.ok) console.log(stateResidual(later.position, later.velocity, state.position, state.velocity).rtnPosition) // [3.2693e-5, 0.00010588, 1.6e-16] — AU
+```
+
+### Unix Millisecond Timestamps
+
+Logs, file names, schedules, and user interfaces need wall-clock time rather than an astronomical time scale: a UTC calendar date and clock reading that can be stored as one number, compared, shifted by calendar units, and written or parsed as text. A `Temporal` is that number, the Unix time in milliseconds since 1970-01-01 00:00:00 UTC, with calendar fields in the proleptic Gregorian calendar and no dependency on `Date` or a timezone database.
+
+Unix time follows POSIX, so every day has exactly 86400 labelled seconds and a leap second has no reading of its own: the inserted 23:59:60 maps to the next midnight. Use [Civil UTC Timestamps](#civil-utc-timestamps) and the `Time` model wherever the leap second, the time scale, or sub-millisecond precision matters, and convert to `Temporal` only for display and bookkeeping. Calendar arithmetic is in calendar units: adding a month keeps the day of the month and clamps it to the length of the target month. Patterns are fixed-width tokens (`YYYY`, `MM`, `DD`, `HH`, `mm`, `ss`, `SSS`, and month and weekday names); a timezone offset in minutes only shifts the rendered clock, and the literal `Z` of `ISO8601_FORMAT` is correct only with the default offset 0.
+
+```ts
+import {
+	daysInMonth,
+	formatTemporal,
+	isLeapYear,
+	ISO8601_FORMAT,
+	parseTemporal,
+	temporalAdd,
+	temporalDayOfWeek,
+	temporalEndOfDay,
+	temporalFromDate,
+	temporalFromFractionOfYear,
+	temporalFromTime,
+	temporalGet,
+	temporalNow,
+	temporalSet,
+	temporalStartOfDay,
+	temporalSubtract,
+	temporalToDate,
+	temporalUnix,
+	zellersCongruence,
+} from 'nebulosa/src/astronomy/time/temporal'
+import { timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+
+// A UTC timestamp from calendar fields (month 1–12, milliseconds last), and back to fields.
+const t = temporalFromDate(2024, 1, 31, 22, 15, 30, 250)
+console.log(t) // 1706739330250 — Unix milliseconds
+console.log(temporalToDate(t)) // [2024, 1, 31, 22, 15, 30, 250]
+
+// Calendar arithmetic: one month later clamps to the end of February; 90 minutes earlier.
+console.log(formatTemporal(temporalAdd(t, 1, 'month'))) // 2024-02-29 22:15:30.250
+console.log(formatTemporal(temporalSubtract(t, 90, 'm'))) // 2024-01-31 20:45:30.250
+
+// The bounds of the UTC day, one field read and replaced, and the weekday (0 is Sunday).
+console.log(formatTemporal(temporalStartOfDay(t)), formatTemporal(temporalEndOfDay(t))) // 2024-01-31 00:00:00.000 2024-01-31 23:59:59.999
+console.log(temporalGet(t, 'hour'), formatTemporal(temporalSet(t, 2023, 'year'))) // 22 2023-01-31 22:15:30.250
+console.log(temporalDayOfWeek(t), zellersCongruence(2024, 1, 31)) // 3 3 — Wednesday
+
+// Formatting with patterns, and with a clock shifted 180 minutes west of UTC; parsing is the inverse.
+console.log(formatTemporal(t, ISO8601_FORMAT), formatTemporal(t, 'DD/MM/YYYY HH:mm'), formatTemporal(t, 'YYYY-MM-DD HH:mm', -180)) // 2024-01-31T22:15:30.250Z 31/01/2024 22:15 2024-01-31 19:15
+console.log(parseTemporal('2024-01-31 22:15:30.250', 'YYYY-MM-DD HH:mm:ss.SSS') === t) // true
+
+// From Unix seconds, from a fractional day of the year (1-based), and from an astronomical Time (a leap second maps to the next midnight).
+console.log(formatTemporal(temporalUnix(946684800)), formatTemporal(temporalFromFractionOfYear(2024, 32.5))) // 2000-01-01 00:00:00.000 2024-02-01 12:00:00.000
+console.log(formatTemporal(temporalFromTime(timeYMDHMS(2016, 12, 31, 23, 59, 60.5)))) // 2017-01-01 00:00:00.000
+
+// Calendar facts of the proleptic Gregorian calendar, and the current time from the system clock.
+console.log(isLeapYear(2024), daysInMonth(2024, 2), daysInMonth(2023, 2)) // true 29 28
+const now = temporalNow()
 ```
 
 ### Uranian Satellite Theory (GUST86)
@@ -5490,7 +6088,7 @@ import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
 
 const time = timeYMDHMS(2025, 9, 28, 12, 0, 0, Timescale.TT)
 
-// Earth, barycentric, ICRF equatorial axes; sun, mercury, ..., neptune share the signature.
+// Earth, barycentric, ICRF equatorial axes; sun, mercury, venus, mars, jupiter, saturn, uranus, and neptune share the signature.
 const [position, velocity] = earth(time)
 
 console.log(position) // [0.99399, 0.079296, 0.034528] — AU
@@ -5568,8 +6166,8 @@ An astrometry.net solver needs index files, each of which stores star quads whos
 `selectAstrometryIndexes` is a pure computation: it never reads the filesystem or the network and only returns descriptors of the files and why each is needed. The manifest covers the 5200 series (quads from 2′ to 22′, tiled at HEALPix resolution 2, 48 tiles per scale) and the 4100 series (22′ to 2000′, one all-sky file per scale), so a very long or very short focal length can be only partially covered or not at all. The tile numbers are the HEALPix XY identifiers of astrometry.net, which are not the RING or NESTED numbers of standard HEALPix.
 
 ```ts
-import { coordinateToTile, selectAstrometryIndexes } from 'nebulosa/src/astrometry/solvers/astrometrynet.index'
-import { deg, hour, toArcsec } from 'nebulosa/src/math/units/angle'
+import { coordinateToTile, distanceToTile, selectAstrometryIndexes, tileIntersectsDisc } from 'nebulosa/src/astrometry/solvers/astrometrynet.index'
+import { deg, hour, toArcsec, toDeg } from 'nebulosa/src/math/units/angle'
 
 // A 1000 mm telescope (focal length in mm) with a 3.76 µm camera of 4144 × 2822 pixels, no position known.
 const plan = selectAstrometryIndexes({ focalLength: 1000, pixelPitch: 3.76, width: 4144, height: 2822 })
@@ -5586,6 +6184,9 @@ console.log(near.files.length) // 13
 
 // The astrometry.net HEALPix XY tile of a position, at resolution 2.
 console.log(coordinateToTile(center.rightAscension, center.declination, 2)) // 38
+
+// The angular distance from the position to a neighboring tile, and whether a disc of 1° (radians) touches it.
+console.log(toDeg(distanceToTile(36, 2, center.rightAscension, center.declination)), tileIntersectsDisc(36, 2, center.rightAscension, center.declination, deg(1))) // 0.3133201 true — degrees
 ```
 
 ### Catalog Crossmatching
@@ -5618,7 +6219,7 @@ The FITS World Coordinate System (Greisen and Calabretta) describes in header ke
 These pure TypeScript functions read a plain `FitsHeader` object, from a file or written by hand, and convert between pixels and the sky for `RA---TAN`/`DEC--TAN` and their `-SIP` forms; for any other projection (`SIN`, `ARC`, `TPV`...) use [WCSLIB Equatorial Projection](#wcslib-equatorial-projection). Pixel coordinates are FITS ones, 1-based with the center of the first pixel at (1, 1); header values are degrees and results radians. The linear part may be given as `CD`, as `PC` with `CDELT`, or as `CDELT` with `CROTA2`. Sky to pixel uses the inverse `AP`/`BP` polynomials when present and otherwise inverts the forward polynomial iteratively, so a SIP round trip is exact only as far as that inverse goes. Non-zero constant and linear SIP terms, as ASTAP writes them, are evaluated as written, so the reference pixel then does not map exactly to `CRVAL`. A malformed SIP header gives `undefined` rather than a silent fallback to plain TAN.
 
 ```ts
-import { cdMatrix, DEC_TAN, DEC_TAN_SIP, RA_TAN, RA_TAN_SIP, tanProject, tanUnproject } from 'nebulosa/src/astrometry/wcs/fits.wcs'
+import { cd, cdFromCdelt, cdMatrix, DEC_TAN, DEC_TAN_SIP, hasCd, isWcsFitsKeyword, matrixKind, pc2cd, RA_TAN, RA_TAN_SIP, tanProject, tanUnproject } from 'nebulosa/src/astrometry/wcs/fits.wcs'
 import { deg, toDeg } from 'nebulosa/src/math/units/angle'
 
 // A TAN header of 0.0005°/pixel (1.8″), centered at RA 83.8°, Dec -5.4°, with the reference pixel at (500.5, 400.5).
@@ -5626,6 +6227,17 @@ const header = { CTYPE1: RA_TAN, CTYPE2: DEC_TAN, CRPIX1: 500.5, CRPIX2: 400.5, 
 
 // The linear part as a row-major CD matrix (degrees per pixel), whichever convention the header uses.
 console.log(cdMatrix(header)) // [ -0.0005, 0, 0, 0.0005 ]
+
+// The convention of the linear part (cd, pc, crota or none), whether there is one, and one CD element (1-based i, j).
+console.log(matrixKind(header), hasCd(header), cd(header, 2, 2)) // cd true 0.0005
+console.log(matrixKind({ CDELT1: -0.0005, CDELT2: 0.0005, CROTA2: 30 })) // crota
+
+// The older conventions converted to CD: CDELT with a rotation (radians), and a PC matrix with CDELT.
+console.log(cdFromCdelt(-0.0005, 0.0005, deg(30))) // [ -0.000433, -0.00025, -0.00025, 0.000433 ] — to rounding
+console.log(pc2cd(0.866, -0.5, 0.5, 0.866, -0.0005, 0.0005)) // [ -0.000433, 0.00025, 0.00025, 0.000433 ]
+
+// The WCS keywords of a header, for example to copy or strip a solution.
+console.log(Object.keys({ ...header, EXPTIME: 30 }).filter(isWcsFitsKeyword)) // every key except EXPTIME
 
 // Sky (radians) to FITS pixel, and back; undefined beyond the tangent plane.
 const [x, y] = tanProject(header, deg(83.85), deg(-5.3))!
@@ -5686,26 +6298,34 @@ The astrometry.net solver (see [Local Astrometry.net Plate Solving](#local-astro
 The index files are given as paths or directories (see [Astrometry.net Index Selection](#astrometrynet-index-selection)); a field of view or scale and a center with a radius narrow the search, and the solution is refined with a SIP polynomial by default. The result is a [Plate Solution](#plate-solution), or `undefined` when the field is not matched. The native library must exist for the platform, and the solve runs synchronously inside the native call, so a blind solve against many indexes blocks the thread for its whole duration. The `AstrometryNet` class keeps one native solver for several solves and is released with `using`.
 
 ```ts
-import { AstrometryNet, libAstrometryNetPlateSolve } from 'nebulosa/src/bindings/astrometry/libastrometry'
+import { AstrometryNet, astrometryNetIndexFiles, libAstrometryNetPlateSolve, unload } from 'nebulosa/src/bindings/astrometry/libastrometry'
 import { readImageFromJpeg } from 'nebulosa/src/imaging/model/image'
 import { detectStars } from 'nebulosa/src/imaging/stars/detector'
 import { deg, toArcsec, toDeg, toHour } from 'nebulosa/src/math/units/angle'
 
 // A 719 × 507 JPEG of the northern sky, and its detected stars.
 const image = readImageFromJpeg(Buffer.from(await Bun.file('data/apod4.jpg').arrayBuffer()), undefined, 'GRAY')!
-const stars = detectStars(image, { maxStars: 500 })
+const stars = detectStars(image, { maxStars: 200 })
 
 // A hinted solve with the 4116 index: a field 34° wide, ±20 % on the scale, SIP order 2.
-const solution = await libAstrometryNetPlateSolve(stars, image.metadata.width, image.metadata.height, { indexes: 'data/index-4116.fits', fov: deg(34), scaleError: 0.2, tweakOrder: 2, maxStars: 500 })
+const solution = await libAstrometryNetPlateSolve(stars, image.metadata.width, image.metadata.height, { indexes: 'data/index-4116.fits', fov: deg(34), scaleError: 0.2, tweakOrder: 2, maxStars: 200 })
 
 if (solution) {
-	console.log(toHour(solution.rightAscension), toDeg(solution.declination)) // 12.4786264 56.7123822 — hours, degrees, J2000
-	console.log(toArcsec(solution.scale), solution.CTYPE1) // 170.856082 RA---TAN-SIP — arcsec/pixel
+	console.log(toHour(solution.rightAscension), toDeg(solution.declination)) // 12.4786163 56.7126013 — hours, degrees, J2000
+	console.log(toArcsec(solution.scale), solution.CTYPE1) // 170.8421226 RA---TAN-SIP — arcsec/pixel
 }
 
-// One native solver reused for several solves, released at the end of the scope.
-using solver = new AstrometryNet()
-await solver.solve(stars, image.metadata.width, image.metadata.height, { indexes: 'data' })
+// The index files that a path or directory list resolves to (directories are scanned recursively).
+console.log(await astrometryNetIndexFiles('data')) // [ "data/index-4116.fits" ] — with the platform's path separator
+
+// One native solver reused for several solves, released at the end of its scope (or by dispose()).
+{
+	using solver = new AstrometryNet()
+	await solver.solve(stars, image.metadata.width, image.metadata.height, { indexes: 'data' })
+}
+
+// Closes the cached native library once no solver is alive; the next solver opens it again.
+unload()
 ```
 
 ### Nova Astrometry.net Plate Solving
@@ -5746,7 +6366,7 @@ affine:      x' = m00·x + m01·y + tx  y' = m10·x + m11·y + ty
 The transforms are plain objects in image pixels, used by [Star Pattern Matching](#star-pattern-matching) and [Star List Registration](#star-list-registration). The fits find the least-squares transform that sends matched `current` points onto their `reference` points, from at least 2 pairs for a similarity and 3 for an affine. The points must be spread over the field: collinear or coincident points give a degenerate fit.
 
 ```ts
-import { applyTransformToPoint, applyTransformToStars, fitAffineTransform, fitSimilarityTransform, invertTransform } from 'nebulosa/src/astrometry/matching/star.matching'
+import { applyAffineTransformToPoint, applySimilarityTransformToPoint, applyTransformToPoint, applyTransformToStars, fitAffineTransform, fitSimilarityTransform, invertAffineTransform, invertSimilarityTransform, invertTransform } from 'nebulosa/src/astrometry/matching/star.matching'
 
 // current, reference: { x, y }[] — pixel positions of the same stars in two frames, in the same order.
 // stars: DetectedStar[] — stars of the current frame.
@@ -5761,6 +6381,10 @@ const affine = fitAffineTransform(current, reference)!
 console.log(applyTransformToPoint(100, 120, affine)) // { x, y } in reference pixels
 const aligned = applyTransformToStars(stars, similarity)
 const inverse = invertTransform(similarity) // undefined when singular
+
+// The typed forms of the same operations, for a transform known to be a similarity or an affine.
+console.log(applySimilarityTransformToPoint(100, 120, similarity), applyAffineTransformToPoint(100, 120, affine)) // { x, y } in reference pixels
+console.log(invertSimilarityTransform(similarity), invertAffineTransform(affine)) // the inverse maps, or undefined
 ```
 
 ### Plate Solution
@@ -5795,17 +6419,21 @@ x_ref − x = Σ A_i_j · u^i · v^j      y_ref − y = Σ B_i_j · u^i · v^j  
 The terms of degree 0 and 1 belong to `CRVAL` and the CD matrix, so the model starts at degree 2. `fitSipDistortion` fits both polynomials by weighted least squares from matched stars, each with its measured pixel and the pixel where the linear WCS puts its catalog position, and rejects outliers by iterative sigma clipping. A higher order needs more stars and a good spread across the field, otherwise the polynomial extrapolates wildly in the empty regions; when the image size is known, the fit refuses a poor distribution unless told otherwise. The model belongs to the reference pixel of the linear WCS and must be refit when `CRPIX` changes. Writing it into a header promotes `TAN` to `TAN-SIP`; the inverse polynomials are not fitted, so sky to pixel is then computed by iteration (see [FITS TAN and SIP Coordinate Mapping](#fits-tan-and-sip-coordinate-mapping)).
 
 ```ts
-import { applySipCorrection, fitSipDistortion, sipModelIntoFitsHeader } from 'nebulosa/src/astrometry/wcs/sip.fit'
+import { applySipCorrection, countSipTerms, evaluateSipCorrection, fitSipDistortion, listSipTerms, sipModelIntoFitsHeader } from 'nebulosa/src/astrometry/wcs/sip.fit'
 
 // stars: MatchedStar[] — measured pixel (x, y) and the pixel (xRef, yRef) predicted by the linear WCS from the catalog.
 // header: FitsHeader — the linear TAN solution of the image.
 const wcs = { crpix1: 500.5, crpix2: 400.5, width: 1000, height: 800 }
 
+// The number of coefficients per axis of an order, the unknowns that the matched stars must outnumber, and their (i, j) powers.
+console.log(countSipTerms(2), countSipTerms(3), listSipTerms(2)) // 3 7 [ { i: 2, j: 0 }, { i: 1, j: 1 }, { i: 0, j: 2 } ]
+
 // Order-2 fit with sigma clipping; the result has the A and B coefficients and the RMS residual in pixels.
 const fit = fitSipDistortion(stars, wcs, { order: 2 })
 console.log(fit.A, fit.B, fit.rmsTotal) // { A_2_0, A_1_1, A_0_2 }, { B_2_0, B_1_1, B_0_2 }, pixels
 
-// The corrected position of a measured pixel.
+// The correction at a measured pixel, and the corrected position.
+console.log(evaluateSipCorrection(900, 700, fit.model, wcs)) // { dx, dy } in pixels
 console.log(applySipCorrection(900, 700, fit.model, wcs)) // { x, y } in pixels
 
 // Write A_ORDER, B_ORDER, and the coefficients into a TAN header, which becomes TAN-SIP.
@@ -5838,31 +6466,65 @@ The FITS WCS standard defines more than twenty sky projections besides the gnomo
 The sky side is always `[rightAscension, declination]` in radians, whatever the order of the FITS axes, and the pixel side is the FITS one, 1-based. Only a single two-axis equatorial solution is accepted; galactic or ecliptic axes are refused. SIP is not applied by this class: a `-SIP` header is parsed but its transforms fail, so use `tanProject` and `tanUnproject` for TAN-SIP. The class owns native memory and must be released with `using` or `[Symbol.dispose]()`, and the native library must exist for the platform.
 
 ```ts
-import { Wcs } from 'nebulosa/src/bindings/astrometry/libwcs'
+import { unload, Wcs } from 'nebulosa/src/bindings/astrometry/libwcs'
 import { deg, toDeg } from 'nebulosa/src/math/units/angle'
 
 // A SIN header of 0.0005°/pixel with a small rotation term, centered at RA 83.8°, Dec -5.4°.
 const header = { CTYPE1: 'RA---SIN', CTYPE2: 'DEC--SIN', CRPIX1: 500.5, CRPIX2: 400.5, CRVAL1: 83.8, CRVAL2: -5.4, CD1_1: -0.0005, CD1_2: 0.00005, CD2_1: 0.00005, CD2_2: 0.0005, RADESYS: 'ICRS', EQUINOX: 2000 }
 
-// Parse the header; released at the end of the scope.
-using wcs = new Wcs(header)
+{
+	// Parse the header; released at the end of the scope.
+	using wcs = new Wcs(header)
 
-// FITS pixel to [RA, Dec] in radians, and sky to pixel.
-console.log(wcs.pixToSky(700, 600)!.map(toDeg)) // [ 83.70984091889542, -5.290268285694518 ] — degrees
-console.log(wcs.skyToPix(deg(83.85), deg(-5.3))) // [ 421.7149740557992, 608.3743123612096 ] — FITS pixels
+	// FITS pixel to [RA, Dec] in radians, and sky to pixel.
+	console.log(wcs.pixToSky(700, 600)!.map(toDeg)) // [ 83.70984091889542, -5.290268285694518 ] — degrees
+	console.log(wcs.skyToPix(deg(83.85), deg(-5.3))) // [ 421.7149740557992, 608.3743123612096 ] — FITS pixels
+
+	// Replace the solution held by the same instance with another header.
+	wcs.load({ ...header, CRVAL1: 84 })
+}
+
+// Closes the cached native library once no Wcs is alive.
+unload()
 ```
 
 ## 🖼️ Imaging
 
 Plan telescope and camera combinations, then work with captured or synthetic images.
 
+### Aberration Focus Scan
+
+A single frame shows where the stars degrade but not why: a tilted sensor, a curved field, and a wrong backfocus can all leave the corners soft (see [Aberration Inspector](#aberration-inspector)). A focus scan, a run of frames stepped through focus, separates them, because each region of the sensor reaches its own best focus: a tilt makes the best focus change linearly across the field, field curvature makes it change quadratically from the center to the edges, and a wrong spacing to a flattener shows as an offset between the center and the periphery.
+
+`inspectAberrationFocusScan` reports the whole aberration family of a focus run at once: it inspects every frame by region, fits a focus curve per region (see [Focus Curve Fitting](#focus-curve-fitting)), fits a quadratic best-focus surface through the regional minima that separates tilt from field curvature (see [Focus Surface Analysis](#focus-surface-analysis)), and derives from it the plane and its tilt (see [Sensor Tilt Estimator](#sensor-tilt-estimator)), the curvature (see [Focus Field Curvature](#focus-field-curvature)), and the field offset (see [Backfocus Correction Estimates](#backfocus-correction-estimates)). A physical scale converts the tilt into angles, a backfocus calibration permits backfocus findings, and the stars can optionally be registered across the frames and tracked, each with its own focus curve. Findings are statistical and published only at about 3 sigma, so a surface fitted from few regions never reports a pattern; like the surface, they say where the focus is best, not which part causes it. The frames must bracket the best focus of every region, with enough stars in each.
+
+```ts
+import { inspectAberrationFocusScan } from 'nebulosa/src/imaging/analysis/aberration/scan'
+
+// frames: AberrationFocusFrame[] — { position, image } or { position, profiles, width, height } along a focus run (focuser steps).
+// Pixel pitch (binning included) and focal-plane displacement per focuser step, both in mm.
+const physicalScale = { pixelSize: 0.004, focusDisplacement: 0.001 }
+
+// Regional focus curves on a 4 × 4 grid, the best-focus surface, and what derives from it.
+const scan = inspectAberrationFocusScan(frames, { regions: { columns: 4, rows: 4 }, physicalScale })
+
+console.log(scan.regions.map((region) => [region.u, region.v, region.bestFocus])) // normalized sensor position, and best focus in steps
+console.log(scan.plane, scan.curvature, scan.fieldOffset?.centerToEdge) // focus gradients, principal curvatures, and periphery minus center, in steps
+console.log(scan.tilt?.significant, scan.tilt?.physical) // whether the tilt is significant, and its angles in radians
+console.log(scan.findings.map((finding) => finding.kind)) // e.g. sensorTiltPattern, fieldCurvature
+
+// The same run with the stars registered across the frames into tracks, each with its own focus curve.
+console.log(inspectAberrationFocusScan(frames, { tracking: {} }).tracks?.length)
+```
+
 ### Aberration Inspector
 
 The optical defects of an imaging train show in the stars across the field: field curvature makes the stars grow toward the corners, sensor tilt makes one side larger than the other, a wrong flattener spacing elongates the corner stars radially or tangentially, and coma or miscollimation elongates them in a coherent direction. Measuring the size (HFD, FWHM) and the shape (eccentricity, elongation, axis orientation) of many stars and summarizing them by region of the sensor turns a single frame into a map of where and how the optics degrade.
 
-The inspector detects the stars and measures their profiles (see [Star Profile Measurement](#star-profile-measurement)), or takes profiles already measured, selects a balanced set over the field, and summarizes each region with robust medians. It reports per-region metrics, orientation vectors where the long axes agree, and findings such as field degradation or radial or tangential elongation, each with a likelihood, a confidence, and its limitations. A finding describes a pattern in one frame and does not name a mechanical cause: tilt, curvature, and a collimation error cannot be told apart from a single frame, which is the job of a focus scan (see [Focus Surface Analysis](#focus-surface-analysis) and [Sensor Tilt Estimator](#sensor-tilt-estimator)). The result is only as good as the profiles: false stars of the detector are not filtered here.
+The inspector detects the stars and measures their profiles (see [Star Profile Measurement](#star-profile-measurement)), or takes profiles already measured, selects a balanced set over the field, and summarizes each region with robust medians. It reports per-region metrics, orientation vectors where the long axes agree, and findings such as field degradation or radial or tangential elongation, each with a likelihood, a confidence, and its limitations. A finding describes a pattern in one frame and does not name a mechanical cause: tilt, curvature, and a collimation error cannot be told apart from a single frame, which is the job of a focus scan (see [Aberration Focus Scan](#aberration-focus-scan)). The result is only as good as the profiles: false stars of the detector are not filtered here.
 
 ```ts
+import { buildAberrationField } from 'nebulosa/src/imaging/analysis/aberration/region'
 import { inspectAberration, inspectAberrationProfiles } from 'nebulosa/src/imaging/analysis/aberration/single'
 
 // image: Image — a frame with many stars over the whole field.
@@ -5872,6 +6534,10 @@ const result = inspectAberration(image)
 console.log(result.regions.map((region) => [region.id, region.medianHFD])) // median HFD of each region, pixels
 console.log(result.vectors) // coherent long-axis orientation per region, radians in [0, π), clockwise (y down)
 console.log(result.findings.map((finding) => [finding.kind, finding.likelihood, finding.limitations])) // e.g. fieldDegradation, radialElongation
+
+// A finer map of one metric for display: the median HFD of the selected stars in each cell of a 6 × 4 grid.
+const field = buildAberrationField(result.stars, 'hfd', { columns: 6, rows: 4 })
+console.log(field.map((cell) => [cell.column, cell.row, cell.value, cell.count])) // pixels, undefined in a cell with too few stars
 
 // profiles: StarProfile[] — profiles already measured on a 1000 × 800 frame.
 const fromProfiles = inspectAberrationProfiles(1000, 800, profiles)
@@ -5925,7 +6591,7 @@ The sky behind deep-sky objects is rarely flat: light pollution, moonlight, and 
 `automaticBackgroundExtraction` samples a grid of box medians, rejects the samples that lie above the surface (stars, nebulosity), fits a Chebyshev polynomial for smooth gradients or a smoothing thin-plate spline for irregular ones, per channel or on the luminance, and removes it while restoring a chosen background level; the fit, evaluation, and application are also exported as separate steps. The image is modified in place. The box medians do not model extended nebulosity: an object that fills most of the frame is absorbed by the background unless it is excluded with a mask, for example the disks around detected stars.
 
 ```ts
-import { automaticBackgroundExtraction, backgroundExclusionMaskFromStars, fitBackgroundSurface } from 'nebulosa/src/imaging/processing/background'
+import { applyBackground, automaticBackgroundExtraction, backgroundExclusionMaskFromStars, evaluateBackgroundModel, fitBackgroundSurface } from 'nebulosa/src/imaging/processing/background'
 
 // image: Image — a linear frame normalized to 0..1; stars: DetectedStar[] — its detected stars.
 // Fit a degree-4 polynomial per channel and subtract it, restoring the mean level of the model.
@@ -5937,6 +6603,10 @@ console.log(result.channels[0].acceptedSamples, result.channels[0].residual) // 
 // Fit only, with a thin-plate spline and the stars kept out of the samples.
 const mask = backgroundExclusionMaskFromStars(image.metadata.width, image.metadata.height, stars)
 const model = fitBackgroundSurface(image, { model: 'thinPlateSpline', exclusionMask: mask })
+
+// The fitted model as a new image of the same geometry, then divided out of the frame in place (vignetting).
+const background = evaluateBackgroundModel(model, image)
+console.log(applyBackground(image, background, { correction: 'divide' })) // per channel, the corrected range before clipping
 ```
 
 ### Backfocus Correction Estimates
@@ -6081,7 +6751,15 @@ for (const value of [10, 11, 9, 10, 12, 8, 10, 11, 9, 1000]) reservoir.push(valu
 
 // The median, the MAD normalized to a Gaussian standard deviation, and the standard deviation without the outlier.
 console.log(reservoir.median(), reservoir.mad(true), reservoir.robustStandardDeviation()) // 10 1.482602218505602 1.154700538379252
-console.log(reservoir.approximate) // false — true once more values were seen than retained
+
+// The 90th percentile (a fraction in 0..1, interpolated between ranks), and the normalized MAD around a known center.
+console.log(reservoir.percentile(0.9), reservoir.madAround(10, true)) // ≈ 110.8 (pulled by the outlier) 1.482602218505602
+
+// Values seen and values retained; approximate is true once more values were seen than retained.
+console.log(reservoir.seenCount, reservoir.retainedCount, reservoir.approximate) // 10 10 false
+
+// Empties the reservoir and restores its random generator, for the next population.
+reservoir.reset()
 ```
 
 ### Celestial Streak Tracks
@@ -6191,36 +6869,27 @@ console.log(result.corrected, result.hot, result.cold) // number of samples repl
 cosmeticCorrection(image, { hotSigma: 0, coldSigma: 0, masterDark, defects: { pixels: [[3, 5]], columns: [8], rows: [] } })
 ```
 
-### Critical Focus Planning Estimate
+### Critical Focus Zone
 
-The critical focus zone is the range of focuser travel over which a star image stays as sharp as diffraction allows. Its width grows with the square of the focal ratio `N` and linearly with the wavelength, and it does not depend on the aperture or the focal length alone, so a fast telescope has a much narrower zone: about 67 µm at f/5 in green light, but only about 11 µm at f/2. Comparing it with the step size and the backlash of the focuser tells whether the focuser can actually hold focus (see [Focuser Backlash Calibration](#focuser-backlash-calibration)).
+The critical focus zone is the range of focuser travel over which a star image stays as sharp as diffraction allows. Its width grows with the square of the focal ratio `N` and linearly with the wavelength, and it does not depend on the aperture or the focal length alone, so a fast telescope has a much narrower zone: about 67 µm at f/5 in green light, but only about 11 µm at f/2. Comparing it with the step size and the backlash of the focuser tells whether the focuser can actually hold focus (see [Focuser Backlash Calibration](#focuser-backlash-calibration)), and comparing it with the physical focus offsets that the aberration analyses measure across the field, such as a sensor tilt or a field curvature expressed as a focal-plane displacement (see [Sensor Tilt Estimator](#sensor-tilt-estimator) and [Backfocus Correction Estimates](#backfocus-correction-estimates)), tells whether such an offset matters.
 
-`criticalFocusZone` in `astronomy/formulas` is the common planning rule `CFZ ≈ 4.88 · λ · N²`, a full width in micrometers for a wavelength in micrometers (about 0.55 µm for visual or luminance light). It is an optical depth of focus, not a focuser setting, and it ignores seeing, the sensor, field curvature and mechanical slop. A function with the same name in `imaging/analysis/aberration/physical` uses a different convention (a semi-amplitude, see [Critical Focus Zone](#critical-focus-zone)); do not mix the two.
+Two functions named `criticalFocusZone` use two conventions that must not be mixed. The one in `astronomy/formulas` is the common planning rule `CFZ ≈ 4.88 · λ · N²`, a full width in micrometers for a wavelength in micrometers (about 0.55 µm for visual or luminance light). The one in `imaging/analysis/aberration/physical` is the focus tolerance of the analyses, a semi-amplitude: the displacement on one side of best focus that the optics tolerate. Its diffraction criterion is `λ · N²`, in whatever length unit the wavelength is given in, and its caller-provided criterion returns a tolerance fixed by the camera, the seeing or the manual of the instrument. Both are optical depths of focus, not focuser settings, and they ignore the seeing, the sensor and its pixel size, field curvature and mechanical slop.
 
 ```ts
 import { criticalFocusZone } from 'nebulosa/src/astronomy/formulas'
+import { criticalFocusZone as focusTolerance } from 'nebulosa/src/imaging/analysis/aberration/physical'
 
-// An f/5 telescope in green light (0.55 µm): the full width of the zone in micrometers.
+// Planning rule: the full width of the zone of an f/5 telescope in green light (0.55 µm), in micrometers.
 console.log(criticalFocusZone(0.55, 5)) // 67.1 µm
 
 // The zone follows N²: 25 times wider at f/10 than at f/2.
 console.log(criticalFocusZone(0.55, 10) / criticalFocusZone(0.55, 2)) // 25
-```
 
-### Critical Focus Zone
-
-The aberration analyses measure physical focus offsets across the field, such as a sensor tilt or a field curvature expressed as a focal-plane displacement (see [Sensor Tilt Estimator](#sensor-tilt-estimator) and [Backfocus Correction Estimates](#backfocus-correction-estimates)). Deciding whether such an offset matters needs a focus tolerance in the same length unit: the displacement on one side of best focus that the optics tolerate.
-
-`criticalFocusZone` in `imaging/analysis/aberration/physical` returns that semi-amplitude. Its diffraction criterion is `λ · N²`, in whatever length unit the wavelength is given in, so a wavelength in micrometers gives micrometers and one in millimeters gives millimeters; the caller-provided criterion returns a tolerance fixed by the camera, the seeing or the manual of the instrument. The function does not know the sensor, the seeing or the pixel size. The planning formula with the factor 4.88 and a full width is [Critical Focus Planning Estimate](#critical-focus-planning-estimate), and it is not the same convention.
-
-```ts
-import { criticalFocusZone } from 'nebulosa/src/imaging/analysis/aberration/physical'
-
-// The diffraction semi-amplitude of an f/5 telescope at 0.55 µm, in micrometers.
-console.log(criticalFocusZone({ focalRatio: 5, wavelength: 0.55 })) // { tolerance: 13.75, criterion: 'diffraction' }
+// Analysis tolerance: the diffraction semi-amplitude of the same telescope, in micrometers.
+console.log(focusTolerance({ focalRatio: 5, wavelength: 0.55 })) // { tolerance: 13.75, criterion: 'diffraction' }
 
 // A tolerance fixed by the caller, in the same unit as the focus offsets it will be compared with.
-console.log(criticalFocusZone({ criterion: 'callerProvided', tolerance: 15 })) // { tolerance: 15, criterion: 'callerProvided' }
+console.log(focusTolerance({ criterion: 'callerProvided', tolerance: 15 })) // { tolerance: 15, criterion: 'callerProvided' }
 ```
 
 ### Curves
@@ -6421,13 +7090,19 @@ Drizzle (Fruchter and Hook, arXiv astro-ph/9808087) reconstructs a set of dither
 
 ```ts
 import type { AffineTransform } from 'nebulosa/src/astrometry/matching/star.matching'
-import { createDrizzleAccumulator, depositDrizzle, drizzleNormalization, prepareDrizzleFootprint } from 'nebulosa/src/imaging/processing/drizzle'
+import { createDrizzleAccumulator, depositDrizzle, drizzleMemoryBytes, drizzleNormalization, drizzleOverlap, prepareDrizzleFootprint } from 'nebulosa/src/imaging/processing/drizzle'
 
 // reference: Image — the 4x4 mono reference frame
 // frames: { image: Image; transform: AffineTransform; inverse: AffineTransform }[] — registered frames, input to reference
 
+// The peak bytes of a 2x grid (64 output pixels), mono, with coverage counts and Float64 samples, fixed scratch included.
+console.log(drizzleMemoryBytes(64, 1, 1, true, false, 8)) // 789568
+
 // A 2x output grid with coverage counts, Float64 samples and a 1 GiB memory budget.
 const state = createDrizzleAccumulator(4, 4, 1, false, 2, true, false, 8, 2 ** 30)
+
+// The fraction of the 4x4 reference area that a 4x4 frame shifted by 1 pixel covers, with the scratch of the state.
+console.log(drizzleOverlap({ m00: 1, m01: 0, tx: 1, m10: 0, m11: 1, ty: 0 }, 4, 4, 4, 4, state.polygon, state.clipped)) // 0.75
 
 frames.forEach(({ image, transform, inverse }, i) => {
 	// The drop of each input pixel on the output grid, for a pixfrac of 0.7.
@@ -6474,13 +7149,16 @@ Visual observing is governed by a few relations of the telescope and the eyepiec
 `astronomy/formulas` has these planning formulas, in millimeters and degrees, for ideal optics: the exit pupil takes no obstruction into account, and the apparent-field estimate of the true field is the usual approximation, not the exact tangent relation, so it can disagree with the field-stop value for a given eyepiece. `exitPupil` has two overloads with the same types and different meanings; the named forms `exitPupilFromApertureAndMagnification` and `exitPupilFromEyepieceAndFocalRatio` avoid mixing the arguments. No limits are applied and the inputs are not validated.
 
 ```ts
-import { eyepieceTrueFovViaFieldStop, eyepieceView, exitPupilFromApertureAndMagnification, exitPupilFromEyepieceAndFocalRatio, magnification } from 'nebulosa/src/astronomy/formulas'
+import { exitPupil, eyepieceTrueFovViaFieldStop, eyepieceView, exitPupilFromApertureAndMagnification, exitPupilFromEyepieceAndFocalRatio, magnification } from 'nebulosa/src/astronomy/formulas'
 
 // A 200 mm f/5 reflector (1000 mm) with a 25 mm eyepiece: 40x.
 const power = magnification(1000, 25)
 
 // The exit pupil (mm) from the aperture and magnification, or from the eyepiece and focal ratio.
 console.log(exitPupilFromApertureAndMagnification(200, power), exitPupilFromEyepieceAndFocalRatio(25, 5)) // 5 5
+
+// The overloaded form behind both: a length divided by a magnification or a focal ratio.
+console.log(exitPupil(200, power)) // 5
 
 // The whole view with a 52° apparent field: magnification, true field (degrees) and exit pupil (mm).
 console.log(eyepieceView(1000, 200, 25, 52)) // { magnification: 40, trueFieldOfViewDegrees: 1.3, exitPupilMm: 5 }
@@ -6502,6 +7180,10 @@ import { fft, FFTWorkspace } from 'nebulosa/src/imaging/processing/fft'
 
 // A workspace padded to powers of two, reused for every frame of a batch.
 const workspace = new FFTWorkspace(30, 20)
+console.log(workspace.width, workspace.height) // 32 32
+
+// The radial Butterworth gain (0..1) of a filter on the padded grid, cached for the next call with the same filter.
+console.log(workspace.mask('lowPass', 0.15).mask) // Float64Array of 32 x 32 gains
 
 // A low-pass at 0.15 of Nyquist smooths the noise and keeps the gradients and the input range.
 fft(image, workspace, 'lowPass', 0.15)
@@ -6718,7 +7400,8 @@ import { resolveAnalysisArea, resolveImageAnalysisPlanes, resolveImagePlaneGeome
 console.log(resolveImageAnalysisPlanes(mosaic)) // ['red', 'green1', 'green2', 'blue']
 const area = resolveAnalysisArea(undefined, 6, 4)
 
-// The blue plane: source pixel (1, 1), step 2, 3x2 samples.
+// The blue plane: source pixel (1, 1), step 2, 3x2 samples. resolveOptionalImagePlaneGeometry returns undefined instead
+// when a CFA plane has no sample in the area, and imagePlaneGeometry does the same from metadata already validated.
 const blue = resolveImagePlaneGeometry(mosaic, area, 'blue')
 console.log(mosaic.raw[blue.rawStart + 1 * blue.rawRowStep + 1 * blue.rawColumnStep]) // blue sample (1, 1), source pixel (3, 3)
 
@@ -6733,10 +7416,9 @@ Calibration and many processing steps are sample-by-sample arithmetic on whole f
 `plus`, `subtract`, `multiply` and `divide` combine two images of the same width, height, channels and CFA pattern; `plusScalar`, `subtractScalar`, `multiplyScalar` and `divideScalar` combine an image and a number. The last argument is the output image, and it defaults to the first operand, which is then overwritten in place: pass an explicit output to keep the input. `divide` writes 0 where the divisor is 0 instead of an infinity. Cloning and copying are in [Image Cloning and Copying](#image-cloning-and-copying).
 
 ```ts
-import { divide, multiplyScalar, subtract } from 'nebulosa/src/imaging/processing/arithmetic'
+import { divide, divideScalar, multiply, multiplyScalar, plus, plusScalar, subtract, subtractScalar } from 'nebulosa/src/imaging/processing/arithmetic'
 
-// light, dark, flat: Image — a light frame, a master dark and a normalized master flat of the same geometry
-// calibrated: Image — an output image of the same geometry
+// light, dark, flat, other, mask: Image — frames of the same geometry; calibrated: Image — an output image of the same geometry
 
 // light - dark into a separate output, keeping the light frame.
 subtract(light, dark, calibrated)
@@ -6744,8 +7426,15 @@ subtract(light, dark, calibrated)
 // Divided by the flat, in place in `calibrated` (a zero flat sample gives 0).
 divide(calibrated, flat)
 
-// Rescaled by 2, in place.
+// Sample-by-sample sum and product with another image, in place.
+plus(calibrated, other)
+multiply(calibrated, mask)
+
+// With a number: a pedestal added and removed, and a rescale by 2 and back, in place.
+plusScalar(calibrated, 0.01)
+subtractScalar(calibrated, 0.01)
 multiplyScalar(calibrated, 2)
+divideScalar(calibrated, 2)
 ```
 
 ### Image Calibration
@@ -6790,7 +7479,7 @@ The integration works on rows, one buffer per frame, so a caller can stream an i
 A flat is the one master that is normalized. Each raw flat is corrected by its dark-flat or bias, then divided by its own median per plane (the four phases of a mosaic in image-local coordinates, or the channels), which removes the change of illumination between flats and keeps the vignetting and the dust. The integrated result is the `flatRepresentation: 'calibratedNormalized'` input of [Image Calibration](#image-calibration). Medians make it unity per plane, while the raw branch of `calibrate` uses means, so the two agree up to a constant per plane.
 
 ```ts
-import { CalibrationPlaneLevels, createCalibrationIntegrationDiagnostics, divideCalibrationPlanes, integrateCalibrationRows, subtractCalibrationRows } from 'nebulosa/src/imaging/processing/calibration.integration'
+import { CalibrationPlaneLevels, calibrationPlane, calibrationPlaneCount, createCalibrationIntegrationDiagnostics, divideCalibrationPlanes, effectiveCalibrationCombination, integrateCalibrationRows, subtractCalibrationRows } from 'nebulosa/src/imaging/processing/calibration.integration'
 
 // Five dark frames of two pixels, in digital numbers: the second is hot, and a cosmic ray hits the first in the last frame.
 const rows = [new Float32Array([1000, 4000]), new Float32Array([1002, 4001]), new Float32Array([998, 3999]), new Float32Array([1001, 4000]), new Float32Array([60000, 4000])]
@@ -6801,11 +7490,17 @@ const diagnostics = createCalibrationIntegrationDiagnostics(rows.length)
 integrateCalibrationRows(rows, 2, output, { method: 'sigmaClip' }, diagnostics)
 console.log(output) // [1000.25, 4000] — DN, the hot pixel stays and the cosmic ray does not
 
+// The method really applied: below three frames a sigma clip is a plain mean, to be reported as a low count.
+console.log(effectiveCalibrationCombination('sigmaClip', 2)) // 'mean'
+
+// The independent planes of an image (4 CFA phases of a mosaic, or the channels), and the plane of a sample (x, y).
+console.log(calibrationPlaneCount(true, 1), calibrationPlane(1, 1, true, 0)) // 4 3
+
 // One raw 2x2 flat corrected by its pedestal, then normalized to its median.
 const flat = new Float64Array([1100, 2100, 1600, 2600])
 subtractCalibrationRows(flat, new Float64Array([100, 100, 100, 100]), 4)
 
-const levels = new CalibrationPlaneLevels(1, 4, false)
+const levels = new CalibrationPlaneLevels(calibrationPlaneCount(false, 1), 4, false)
 levels.push(flat, 2, 2, 0)
 const [{ median }] = levels.levels()
 divideCalibrationPlanes(flat, 2, 2, 0, [median], false)
@@ -6839,17 +7534,28 @@ Convolution replaces each pixel with a weighted sum of its neighbors, the weight
 The kernel is normalized by its divisor, the sum of its weights unless one is given, and the pixels outside the image are not read: at a border the kernel is truncated and, by default, renormalized by the weights that fall inside, so a smoothing kernel keeps its gain to the edge. A zero-sum kernel such as edges or emboss is centered at 0.5, so its negative response remains visible. Every channel of an interleaved color image is convolved on its own, in place, and the result is not clipped. The named filters (box and pyramid blurs, Gaussian blur, sharpen, edges, emboss) are fixed kernels of this one operation, and a separable smoothing applies a one-dimensional kernel along rows and then columns at a cost independent of the dilation step.
 
 ```ts
-import { convolution, convolutionKernel, gaussianBlur, separableSmoothing, separableSmoothingKernel, sharpen } from 'nebulosa/src/imaging/processing/convolution'
+import { blur, blurConvolutionKernel, convolution, convolutionKernel, edges, emboss, gaussianBlur, gaussianBlurKernel, mean, meanConvolutionKernel, separableSmoothing, separableSmoothingKernel, sharpen } from 'nebulosa/src/imaging/processing/convolution'
 
 // image: Image — a normalized mono or RGB image; every call modifies it in place.
 // A Gaussian smoothing, sigma in pixels and an odd kernel size.
 gaussianBlur(image, { sigma: 1.4, size: 5 })
 
-// A fixed sharpening kernel.
+// A box (mean) blur and a pyramid blur of an odd size in pixels; mean3x3, mean5x5, mean7x7, blur3x3, blur5x5, and blur7x7 are the fixed sizes.
+mean(image, 5)
+blur(image, 3)
+
+// The fixed sharpening, edge-detection, and emboss kernels.
 sharpen(image)
+edges(image)
+emboss(image)
 
 // A custom 3x3 kernel; its divisor is the sum of the weights (16).
 convolution(image, convolutionKernel([1, 2, 1, 2, 4, 2, 1, 2, 1], 3))
+
+// The kernels of the named filters, for a convolution call: Gaussian (sigma, size), box, and pyramid of a given size.
+convolution(image, gaussianBlurKernel(2, 7))
+convolution(image, meanConvolutionKernel(9))
+convolution(image, blurConvolutionKernel(9))
 
 // A dilated binomial smoothing [1, 4, 6, 4, 1] / 16 with taps 2 pixels apart, from source into output.
 // source, output, intermediate: separate buffers of the image's length.
@@ -6909,9 +7615,9 @@ console.log(planes[0].median, planes[0].robustSigma) // median sky level and rob
 // One plane per photosite phase of a trusted RGGB mosaic.
 console.log(analyzeImageStatistics(image, { cfa: 'RGGB' }).planes.map((p) => p.plane)) // ['red', 'green1', 'green2', 'blue']
 
-// The same computation advanced 8 rows at a time.
+// The same computation advanced 8 rows at a time, between event-loop turns; consumeRows also returns done.
 const scan = createImageStatisticsScan(image)
-while (!scan.consumeRows(8)) {}
+while (!scan.done) scan.consumeRows(8)
 console.log(scan.finish().planes[0].median) // identical to the one-shot result
 ```
 
@@ -6951,8 +7657,8 @@ Frames can only be combined after they agree geometrically and photometrically. 
 `stackFrames` runs the whole pipeline against a reference frame: star matching (see [Star List Registration](#star-list-registration)), resampling (see [Image Warp](#image-warp)), normalization (see [Global Image Normalization](#global-image-normalization)), weighting, and combination. Frames that cannot be registered are rejected rather than combined, and the result reports why. The work is synchronous, so a long stack of large frames blocks for its whole duration. For an integrator that registers frames itself and must bound its memory, `stacking.combination` exposes the same combination a strip of rows at a time, with identical results.
 
 ```ts
-import { stackFrames } from 'nebulosa/src/imaging/processing/stacker'
-import { combineStrip, createCombinationScratch, resolveCombinationParameters } from 'nebulosa/src/imaging/processing/stacking.combination'
+import { referenceQualityScore, stackFrames } from 'nebulosa/src/imaging/processing/stacker'
+import { accumulateSamples, combineSamples, combineStrip, coverageBounds, coverageThreshold, createCombinationScratch, finalizeOnlineSamples, frameWeight, isOnlineCombinationMethod, resolveCombinationParameters } from 'nebulosa/src/imaging/processing/stacking.combination'
 
 // frames: StackingFrame[] — normalized images of one field with their detected stars (zero-based pixel centers).
 // Registers every frame to the reference, normalizes, weights, and combines with sigma-clipping rejection.
@@ -6963,7 +7669,31 @@ console.log(stack.acceptedFrames, stack.rejectedFrames) // frames combined and f
 console.log(stack.diagnostics[1]) // per-frame transform, overlap, quality, and rejection reason
 console.log(stack.coverageMap) // number of frames that contribute to each output pixel
 
-// strips: aligned frames on one grid ({ raw, valid, weight }) starting at the same row; coverage: frames per pixel.
+// The score that ranks a frame as reference candidate (higher is better, within one setup), with 10 stars expected.
+const quality = stack.diagnostics[1].quality
+console.log(referenceQualityScore(quality, 10))
+
+// The building blocks of an integrator that registers frames itself. The weight of a frame from its quality.
+const weight = frameWeight(1, quality, 'quality', 10)
+
+// Sum, average and weighted average accumulate exactly, frame by frame; the rejection methods need every sample.
+console.log(isOnlineCombinationMethod('average'), isOnlineCombinationMethod('sigma-clip')) // true false
+
+// raw, valid: one aligned mono frame and its validity bytes; sum, weightSum: Float64Array accumulators of the grid;
+// coverage: Uint32Array frames per pixel. Adds the frame to the running average.
+accumulateSamples(1, raw, valid, sum, weightSum, coverage, 'average', weight)
+
+// The frames a pixel needs (half of 10 accepted frames), and the inclusive box of the pixels that reach it.
+const threshold = coverageThreshold(10, 'union', 0.5) // 5
+console.log(coverageBounds(width, height, coverage, threshold)) // { left, top, right, bottom, width, height }, or undefined
+
+// Writes the average of the pixels that reach the threshold into out (a pixel buffer of the grid).
+finalizeOnlineSamples(sum, weightSum, coverage, 1, threshold, 'average', out)
+
+// The samples of one pixel across 5 frames, combined by sigma clipping: the outlier 0.9 is rejected.
+console.log(combineSamples('sigma-clip', new Float64Array([0.2, 0.21, 0.19, 0.2, 0.9]), new Float64Array(5).fill(1), 5, resolveCombinationParameters())) // 0.2
+
+// strips: aligned frames on one grid ({ raw, valid, weight }) starting at the same row.
 // Combines `width` pixels of one channel, keeping only pixels covered by at least 2 frames.
 combineStrip(strips, width, 1, coverage, 2, 'sigma-clip', resolveCombinationParameters(), out, createCombinationScratch(strips.length))
 ```
@@ -6978,7 +7708,7 @@ A color image is reduced to one channel or to its grayscale luminance, and the s
 import { histogram, median, medianAbsoluteDeviation } from 'nebulosa/src/imaging/processing/computation'
 
 // image: Image — a normalized RGB sky of 0.2, 0.25, and 0.3 with noise and 40 bright stars.
-// The histogram of the grayscale reduction: normalized mean, median, deviation, and quantiles.
+// The histogram of the grayscale reduction (a Histogram, see Histogram Analysis): normalized mean, median, deviation, and quantiles.
 const gray = histogram(image)
 console.log(gray.median, gray.standardDeviation, gray.quantile(0.75)) // normalized units
 
@@ -6997,7 +7727,7 @@ Warping resamples an image onto the pixel grid of another one through a geometri
 The transform is given in its inverse form, mapping each output pixel of the reference grid to a position in the source, so that every output pixel receives exactly one interpolated value. It is a similarity (`x' = a x - b y + tx`, `y' = b x + a y + ty`, optionally mirrored) or a general affine transform. Pixel coordinates have an integer at the center of a pixel and the origin at the center of the first pixel, so a pure translation `tx = 2` makes output pixel `x` the source pixel `x + 2`. The nearest-neighbor, bilinear, and bicubic kernels trade smoothing for fidelity, and interpolation attenuates the noise by an amount that depends on the subpixel phase, which matters for any later noise statistics (see [Local Image Normalization](#local-image-normalization)). A validity mask marks the output pixels whose whole kernel falls inside the source and touches no rejected pixel (a streak or cosmic-ray mask); the other samples are zero. A singular transform is not detected.
 
 ```ts
-import { toAffineMatrix, warpImage } from 'nebulosa/src/imaging/processing/registration'
+import { composeTransforms, summarizeTransform, toAffineMatrix, warpImage } from 'nebulosa/src/imaging/processing/registration'
 
 // source, reference: Image — a 6x4 source whose value is x + 10 y, and any 6x4 grid.
 // Resamples the source onto the reference grid, here shifted by 2 pixels (bilinear by default).
@@ -7011,6 +7741,13 @@ warpImage(source, reference, { a: 1, b: 0, tx: 0.5, ty: 0, mirrored: false }, { 
 
 // The affine matrix equivalent to a similarity transform (a quarter turn).
 console.log(toAffineMatrix({ a: 0, b: 1, tx: 0, ty: 0, mirrored: false })) // { m00: 0, m01: -1, tx: 0, m10: 1, m11: 0, ty: 0 }
+
+// One affine applying a shift by (2, 3) first and then a quarter turn with tx = 5, so the frame is resampled once.
+const turn = { a: 0, b: 1, tx: 5, ty: 0, mirrored: false }
+console.log(composeTransforms(turn, { a: 1, b: 0, tx: 2, ty: 3, mirrored: false })) // { m00: 0, m01: -1, tx: 2, m10: 1, m11: 0, ty: 2 }
+
+// The readable form of a transform: translation (pixels), scales, rotation (radians), shear, parity, with 12 inliers and 0.3 px RMS.
+console.log(summarizeTransform(turn, 12, 0.3)) // { model: 'similarity', translationX: 5, translationY: 0, scaleX: 1, rotation: 1.5708, mirrored: false, ... }
 ```
 
 ### Live Stacking
@@ -7022,7 +7759,10 @@ That restricts it to the combinations that can be accumulated exactly: the sum, 
 Several live stacks can share one geometric field, for example one stack per filter of a narrowband sequence that will be composed into color later. Every frame of each stack is then registered against the field stars and resampled onto the field grid, so all stacks are on the same pixels, while each stack is normalized to its own first accepted frame, never to the brightness of another filter. A shared field needs the resampling reconstruction.
 
 ```ts
-import { LiveStacker, liveStackerMemoryBytes } from 'nebulosa/src/imaging/processing/stacker'
+import { isLiveCombinationMethodSupported, LiveStacker, liveStackerMemoryBytes } from 'nebulosa/src/imaging/processing/stacker'
+
+// Whether a combination method can run live: only the exactly accumulated ones.
+console.log(isLiveCombinationMethodSupported('average'), isLiveCombinationMethodSupported('sigma-clip')) // true false
 
 // frame: StackingFrame — a normalized image of the field with its detected stars (zero-based pixel centers).
 // Registers, normalizes, and accumulates one frame; the first accepted frame is the reference.
@@ -7032,6 +7772,10 @@ console.log(result.accepted, result.reason) // whether the frame was used, and w
 
 // The current stack, a copy that later frames do not change (undefined before the first accepted frame).
 console.log(live.snapshot()?.finalImage)
+
+// Discards the stack and starts again with the same options, or with new options (and optionally a field).
+live.reset()
+live.initialize({ combinationMethod: 'sum' })
 
 // field: LiveStackingField — { image, stars } of a reference frame; one stack per filter on the same grid.
 const red = new LiveStacker({}, field)
@@ -7050,7 +7794,7 @@ The result reports whether the estimate was measured, is uncertain, or is unavai
 This is a spatial estimate on one frame. It is not a read noise, a gain, or a temporal noise (see [Photon Transfer and Read Noise](#photon-transfer-and-read-noise)), and it does not know whether the baseline is a sky, a bias, or a flat. Debayered, resampled, or denoised pixels have correlated noise and bias it low, and contamination that covers more than half of every tile cannot be told from noise.
 
 ```ts
-import { estimateBackgroundNoise } from 'nebulosa/src/imaging/analysis/background.noise'
+import { BackgroundNoiseCollector, estimateBackgroundNoise } from 'nebulosa/src/imaging/analysis/background.noise'
 
 // sky: Image — a 400x300 sky of 0.1 with a noise of 0.01, a gradient of 0.3 across the frame, and 500 bright stars.
 // The background level and spatial noise of the mono plane, in normalized units.
@@ -7059,6 +7803,12 @@ console.log(noise.status, noise.noiseSigma) // 'measured', close to the injected
 
 // mosaic: Image — a raw RGGB mosaic; the blue photosites are measured alone.
 console.log(estimateBackgroundNoise(mosaic, { plane: 'blue', cfa: 'RGGB' }).level) // normalized units
+
+// The same estimate fed row by row, for example while a file is decoded: a plane grid of 400x300 samples,
+// each row given by its first raw index and the step between its samples.
+const collector = new BackgroundNoiseCollector(400, 300)
+for (let row = 0; row < 300; row++) collector.collectRow(sky.raw, row * 400, 1, row)
+console.log(collector.totalTiles, collector.finish().noiseSigma) // tiles of the grid, and the same noise as estimateBackgroundNoise(sky)
 ```
 
 ### Local Image Normalization
@@ -7068,7 +7818,7 @@ Frames of one field taken during a night differ by more than a global scale and 
 The model keeps the global solution as an anchor and describes only the smooth residual. The frame is divided into a grid of cells, each cell estimates its residual offset (and gain, when it has enough dynamic range) from paired statistics of the same pixels in both frames, and polynomial or spline surfaces are fitted over the cells with outlier rejection. The local gain is limited to a range around the anchor, so a legitimate global exposure difference is never truncated, and a plane that cannot be modeled falls back to the global solution, to identity, or rejects the frame. Both images must already be registered onto the same grid. The fit needs a smooth residual and clean sky: a nebula that fills the frame, or frames that are not registered, will be modeled as gradient.
 
 ```ts
-import { applyLocalNormalization, fitLocalNormalization, localNormalization, localNormalizationSummary } from 'nebulosa/src/imaging/processing/normalization'
+import { applyLocalNormalization, applyLocalNormalizationInPlace, fitLocalNormalization, fitLocalNormalizationRaw, isLocalNormalizationFallback, localNormalization, localNormalizationFailureReason, localNormalizationSummary, resolveLocalNormalizationOptions } from 'nebulosa/src/imaging/processing/normalization'
 
 // reference, frame, other: Image — registered frames of the same field and geometry; frame adds a sky gradient.
 // Fits the model and applies it to the frame in place.
@@ -7076,9 +7826,16 @@ const result = localNormalization(reference, frame)
 console.log(result.applied) // false only when the fallback policy rejected the frame
 console.log(localNormalizationSummary(result.model)) // compact per-plane record of cells, residual, and fallback
 
+// Whether a plane runs on the fallback policy, and the first reason (undefined when every plane was modeled).
+console.log(isLocalNormalizationFallback(result.model), localNormalizationFailureReason(result.model))
+
 // The two steps apart: a coarser grid and a quadratic offset surface, applied to another frame of the same geometry.
 const model = fitLocalNormalization(reference, frame, { gridSize: 8, offsetDegree: 2 })
 applyLocalNormalization(other, model)
+
+// The same on raw RGB buffers of width x height, with resolved options; valid: one byte per pixel, nonzero is usable.
+const rawModel = fitLocalNormalizationRaw(referenceRaw, currentRaw, width, height, 3, 'per-channel', valid, resolveLocalNormalizationOptions({ gridSize: 8 }))
+applyLocalNormalizationInPlace(currentRaw, valid, rawModel)
 ```
 
 ### Multiscale Linear Transform
@@ -7136,12 +7893,16 @@ The photon transfer curve is the standard way to measure a camera's gain and rea
 The slope is the system gain and the intercept holds the read and dark noise. Each point of the curve comes from a pair of frames taken under the same conditions: their difference cancels the fixed pattern, and half its variance is the temporal variance. The read noise is the RMS temporal noise of a pair of bias or short dark frames, converted to electrons by the conversion gain, and optionally corrected for the uniform quantization noise `step² / 12`. The fit uses only the unclipped points within a range of the largest signal, away from the read-noise floor and from saturation. The model holds only for a linear sensor whose pixel-response non-uniformity is removed by the pair difference; [Sensor Characterization](#sensor-characterization) runs this stage with the others.
 
 ```ts
-import { measureSensorPair } from 'nebulosa/src/imaging/analysis/sensor/pair'
+import { aggregateSensorPairs, measureSensorPair } from 'nebulosa/src/imaging/analysis/sensor/pair'
 import { characterizeSensorTemporal, fitPhotonTransferGain, measureSensorReadNoise } from 'nebulosa/src/imaging/analysis/sensor/ptc'
 
 // a, b: DigitalImage — two frames in DN of one setup; the temporal variance is half the variance of their difference.
 const pair = measureSensorPair(a, b)
 console.log(pair.mean, pair.variance) // DN, DN²
+
+// pairs: SensorPairStatistics[] — several pairs of one level, combined by sample count with their scatter between pairs.
+const level = aggregateSensorPairs(pairs)
+console.log(level.mean, level.variance, level.pairCount) // DN, DN², number of pairs
 
 // biasPairs: SensorPairStatistics[] — pairs of bias frames of 2 DN RMS noise.
 // Read noise with a conversion gain of 2 e-/DN and a quantization step of 1 DN.
@@ -7199,7 +7960,7 @@ Many imaging corrections need a smooth surface through scattered measurements: t
 Two models are available. A polynomial in a tensor Chebyshev basis of a total degree, with coordinates normalized to `[-1, 1]` over the domain for numerical conditioning, is fitted by weighted least squares with optional iterative rejection of residual outliers (stars or cosmic rays among the samples). A thin-plate smoothing spline follows a more complex shape, with a smoothing parameter that goes from exact interpolation to a stiff surface; it never rejects by residual, because a flexible surface would read the structure it is meant to model as outliers. A fit that cannot be solved returns a failure result instead of throwing. The surface is only meaningful inside the area spanned by the samples: far from them a high-degree polynomial or the affine tail of a spline extrapolates freely, and the domain should be restricted to the bounding box of a partially covered frame.
 
 ```ts
-import { createScalarSurfacePointEvaluator, evaluateScalarSurfaceInto, fitScalarSurface } from 'nebulosa/src/imaging/processing/surface'
+import { createScalarSurfaceEvaluator, createScalarSurfacePointEvaluator, createSurfaceColumnTable, evaluateScalarSurfaceInto, fitScalarSurface, isExactThinPlateSpline } from 'nebulosa/src/imaging/processing/surface'
 
 // samples: SurfaceSample[] — { x, y, value, weight? } in pixels of a 64x48 plane, with one outlier.
 // A degree-2 polynomial with symmetric 3-sigma rejection of the outliers.
@@ -7212,10 +7973,16 @@ if (fit.ok) {
 
 	// The surface at a fractional position.
 	console.log(createScalarSurfacePointEvaluator(fit.model).at(20.5, 13.25)) // unit of the samples
+
+	// A row evaluator over a Chebyshev basis of 16 columns from x = 0 every 4 pixels, shared by every row.
+	const rows = createScalarSurfaceEvaluator(fit.model, createSurfaceColumnTable(fit.model.degree, fit.model.domain, 16, 0, 4))
+	const row = new Float64Array(16)
+	rows.fillRow(10, row, 0, 1) // the surface along row y = 10
 }
 
 // A thin-plate spline that interpolates every sample exactly.
-fitScalarSurface(samples, 64, 48, { model: 'thinPlateSpline', smoothing: 0 })
+const spline = fitScalarSurface(samples, 64, 48, { model: 'thinPlateSpline', smoothing: 0 })
+if (spline.ok) console.log(isExactThinPlateSpline(spline.model)) // true: the spline passes through the samples
 ```
 
 ### Scientific Image Loading and Export
@@ -7225,7 +7992,11 @@ Astronomical images come as FITS, the standard of professional astronomy, XISF, 
 A reader produces either normalized samples, where 0..1 is the nominal range of the source, for processing and display, or a `DigitalImage` that keeps the digital numbers after the scaling of the format, for measurements in DN such as sensor analysis and calibration masters. A floating-point source whose samples leave 0..1 (a stack or a master in ADU) is rescaled by its minimum and maximum when read as normalized, and the rescale is recorded in the metadata so that a writer can restore the scale of the source on request; otherwise the samples are written as they are. JPEG samples are scaled to 8 bits and clamped, and JPEG has no digital mode.
 
 ```ts
-import { readImageFromPath, writeImageToFits, writeImageToFormat, writeImageToXisf } from 'nebulosa/src/imaging/model/image'
+import { open } from 'fs/promises'
+import { readImageFromBuffer, readImageFromFileHandle, readImageFromFits, readImageFromJpeg, readImageFromPath, readImageFromSource, readImageFromXisf, writeImageToFits, writeImageToFormat, writeImageToXisf } from 'nebulosa/src/imaging/model/image'
+import { readFits } from 'nebulosa/src/io/formats/fits/fits'
+import { readXisf } from 'nebulosa/src/io/formats/xisf/xisf'
+import { bufferSource } from 'nebulosa/src/io/io'
 
 // Detects the format by content and returns normalized samples (a 1037x706 RGB 16-bit FITS).
 const image = (await readImageFromPath('data/NGC3372-16.3.fit'))!
@@ -7234,6 +8005,24 @@ console.log(image.metadata.width, image.metadata.height, image.metadata.channels
 // The digital numbers of a 16-bit XISF, in a 32-bit buffer.
 const digital = (await readImageFromPath('data/NGC3372-16.1.xisf', { sampleScale: 'digital', raw: 32 }))!
 console.log(digital.digitalRange, digital.quantizationStep) // [0, 65535] 1 — DN
+
+// The same detection from a Buffer, a seekable Source, or an open FileHandle, with the same options.
+const buffer = Buffer.from(await Bun.file('data/NGC3372-16.1.xisf').arrayBuffer())
+console.log((await readImageFromBuffer(buffer))!.metadata.channels) // 1
+console.log((await readImageFromSource(bufferSource(buffer), { sampleScale: 'digital' }))!.digitalRange) // [0, 65535]
+await using handle = await open('data/NGC3372-8.1.fit', 'r')
+console.log((await readImageFromFileHandle(handle))!.metadata.bitpix) // 8
+
+// The image of an already parsed container: a FITS HDU, or an XISF file, read from its source.
+const fitsSource = bufferSource(Buffer.from(await Bun.file('data/NGC3372-16.3.fit').arrayBuffer()))
+const fits = (await readFits(fitsSource))!
+console.log((await readImageFromFits(fits.hdus[0], fitsSource))!.metadata.channels) // 3
+const xisfSource = bufferSource(buffer)
+console.log((await readImageFromXisf((await readXisf(xisfSource))!, xisfSource))!.metadata.width) // 1037
+
+// A JPEG decoded into normalized samples (8-bit codes divided by 255).
+const decoded = readImageFromJpeg(Buffer.from(await Bun.file('data/apod4.jpg').arrayBuffer()))!
+console.log(decoded.metadata.width, decoded.metadata.height, decoded.metadata.channels) // 719 507 3
 
 // Writes FITS into a buffer large enough (or a Sink), restoring the scale of a rescaled source.
 await writeImageToFits(image, Buffer.alloc(8e6), { sourceScale: true })
@@ -7255,7 +8044,7 @@ An image has 1 (grayscale) or 3 (RGB) channels, or a single channel that is a co
 
 ```ts
 import { readImageFromPath } from 'nebulosa/src/imaging/model/image'
-import { cfaChannelAt, channelIndex, isImage, shiftCfaPattern } from 'nebulosa/src/imaging/model/types'
+import { cfaChannelAt, channelIndex, grayscaleFromChannel, isImage, makeImageRawTypedArray, shiftCfaPattern } from 'nebulosa/src/imaging/model/types'
 
 // A 1037x706 color image with three interleaved channels.
 const image = (await readImageFromPath('data/NGC3372-16.3.fit'))!
@@ -7270,6 +8059,12 @@ console.log(isImage(digital), isImage(image)) // false true
 
 // The color (0 red, 1 green, 2 blue) of a raw coordinate, and the pattern after moving the origin by one column.
 console.log(cfaChannelAt('RGGB', 1, 0), shiftCfaPattern('RGGB', 1, 0)) // 1 GRBG
+
+// The grayscale weights of a channel or a named luminance (BT.709 when omitted).
+console.log(grayscaleFromChannel('GREEN'), grayscaleFromChannel()) // { red: 0, green: 1, blue: 0 } { red: 0.2125, green: 0.7154, blue: 0.0721 }
+
+// A zeroed sample buffer of a precision (32 or 64 bits) for 2x1 RGB pixels, or of the type of another buffer.
+console.log(makeImageRawTypedArray(32, 6)) // Float32Array(6)
 ```
 
 ### SCNR
@@ -7362,13 +8157,13 @@ import { computeSensorDynamicRange, detectSensorSaturation } from 'nebulosa/src/
 // bias: SensorFrameSet, flats: SensorFlatFrameSet[] — flat pairs with photons per pixel and a 550 nm wavelength.
 const { photonTransfer, gain, readNoise } = characterizeSensorTemporal(bias, flats)
 
-// Linear fit of the response, its relative residuals, and the quantum efficiency.
-const response = measureSensorLinearity(photonTransfer, flats, undefined, gain)
-console.log(response.linearity?.rms, response.responsivity, response.quantumEfficiency) // fraction, DN/photon, e-/photon
-
-// Output saturation (DN and electrons), and the dynamic range.
+// Output saturation (DN and electrons) of a 16-bit converter, and the dynamic range.
 const saturation = detectSensorSaturation(photonTransfer, gain, 65535)
 if (saturation) console.log(computeSensorDynamicRange(saturation, readNoise)) // practical and EMVA: ratio, stops, decibels
+
+// Linear fit of the response within a fraction of that saturation, its relative residuals, and the quantum efficiency.
+const response = measureSensorLinearity(photonTransfer, flats, saturation, gain)
+console.log(response.linearity?.rms, response.responsivity, response.quantumEfficiency) // fraction, DN/photon, e-/photon
 ```
 
 ### Sensor Operating-Point Series
@@ -7403,7 +8198,8 @@ const defects = measureSensorDefects(dark, flat, { maps: 'defects' })
 
 console.log(defects?.hot, defects?.cold, defects?.noisy, defects?.unstable) // pixel counts of each class
 console.log(defects?.rows, defects?.columns) // defective row and column indices on the plane grid
-// index: a row-major pixel index on the plane grid; the mask holds one defect bit per class.
+// index: a row-major pixel index on the plane grid; the mask holds one defect bit per class
+// (also SENSOR_DEFECT_COLD, SENSOR_DEFECT_NOISY, and SENSOR_DEFECT_SATURATED).
 console.log((defects!.mask![index] & SENSOR_DEFECT_HOT) !== 0, (defects!.mask![index] & SENSOR_DEFECT_UNSTABLE) !== 0)
 ```
 
@@ -7411,26 +8207,15 @@ console.log((defects!.mask![index] & SENSOR_DEFECT_HOT) !== 0, (defects!.mask![i
 
 When the sensor is not perpendicular to the optical axis, the best focus changes across the field: one side of the frame is sharp while the opposite side is not. A focus run measured over regions of the frame gives a best-focus surface (see [Focus Surface Analysis](#focus-surface-analysis)), and its linear part, the plane, is the tilt. A tilted best-focus surface is not a diagnosis of a part: the same plane comes from a tilted sensor, focuser, or field lens, so the result is a measurement of the surface, which the user must interpret.
 
-The plane is measured in focuser units across the sensor. Converting it into a physical angle needs two calibrations of the user: the effective pixel pitch (binning included) and the signed displacement of the focal plane per focuser unit, in the same length unit. The small-angle slope is `gradient * focusDisplacement / ((size - 1) * pixelSize)`; the result is the right-handed rotation around the sensor X axis (from the Y slope), around the Y axis (from minus the X slope), and their magnitude, in radians. Reversing the sign of the focuser displacement flips the angles. Given the covariance of the gradients, the first-order uncertainty of the angles is propagated too, while the scale itself is taken as exact.
-
-`inspectAberrationFocusScan` produces the plane from a focus run and reports the whole aberration family at once: a focus curve per region (see [Focus Curve Fitting](#focus-curve-fitting)), a quadratic surface that separates tilt from field curvature, the field offset (see [Backfocus Correction Estimates](#backfocus-correction-estimates)), and statistical findings published only at about 3 sigma, so a surface fitted from few regions never reports a pattern. The frames must bracket the best focus of every region, with enough stars in each.
+The plane is measured in focuser units across the sensor, for example by [Aberration Focus Scan](#aberration-focus-scan), which also converts it in the same step. Converting it into a physical angle needs two calibrations of the user: the effective pixel pitch (binning included) and the signed displacement of the focal plane per focuser unit, in the same length unit. The small-angle slope is `gradient * focusDisplacement / ((size - 1) * pixelSize)`; the result is the right-handed rotation around the sensor X axis (from the Y slope), around the Y axis (from minus the X slope), and their magnitude, in radians. Reversing the sign of the focuser displacement flips the angles. Given the covariance of the gradients, the first-order uncertainty of the angles is propagated too, while the scale itself is taken as exact.
 
 ```ts
 import { analyzePhysicalTilt, estimatePhysicalSensorTilt } from 'nebulosa/src/imaging/analysis/aberration/physical'
-import { inspectAberrationFocusScan } from 'nebulosa/src/imaging/analysis/aberration/scan'
 
 // Pixel pitch (binning included) and focal-plane displacement per focuser step, both in mm.
 const scale = { pixelSize: 0.004, focusDisplacement: 0.001 }
 
-// frames: AberrationFocusFrame[] — { position, image } or { position, profiles, width, height } along a focus run.
-// Fits the regional focus curves and the best-focus surface, and converts its plane into angles.
-const scan = inspectAberrationFocusScan(frames, { regions: { columns: 4, rows: 4 }, physicalScale: scale })
-
-console.log(scan.plane) // focus gradients across the sensor, in focuser steps
-console.log(scan.tilt?.significant, scan.tilt?.physical) // whether the tilt is significant, and its angles in radians
-console.log(scan.findings.map((finding) => finding.kind)) // e.g. sensorTiltPattern, fieldCurvature
-
-// A plane measured elsewhere (120 and 60 steps across a 4000x3000 sensor) converted into radians.
+// A best-focus plane (120 and 60 steps across a 4000x3000 sensor), such as the plane of a focus scan, converted into radians.
 const plane = { gradientX: 120, gradientY: 60, direction: 0.4636, effect: 180 }
 console.log(analyzePhysicalTilt(plane, 4000, 3000, scale)) // { x: 0.005002, y: -0.007502, magnitude: 0.009016 }
 
@@ -7524,7 +8309,7 @@ The transform maps target pixels to reference pixels, `x' = m00 x + m01 y + tx`,
 Every resampling interpolates and smooths the noise, so a frame registered to an intermediate frame (the reference of its own filter, say), and that frame registered to a final reference, should be chained into one transform and resampled once. `composeRegistrationTransforms` does that, combining the residuals of both registrations as independent errors.
 
 ```ts
-import { composeRegistrationTransforms, registerImage, registerStars, warpImage } from 'nebulosa/src/imaging/processing/registration'
+import { composeRegistrationTransforms, registerImage, registerStars } from 'nebulosa/src/imaging/processing/registration'
 
 // referenceStars, targetStars: DetectedStar[] — the stars of two frames of the same field (zero-based pixels).
 const result = registerStars(referenceStars, targetStars)
@@ -7538,9 +8323,6 @@ if (result.success) {
 // reference, target: { image, stars } — registers and resamples the target onto the reference grid.
 const registered = registerImage(reference, target)
 if (registered.success) console.log(registered.image, registered.validityMask) // aligned image and per-pixel coverage (1 valid, 0 not)
-
-// Resampling alone, from an inverse (reference-to-source) transform, with bicubic interpolation.
-const warped = warpImage(sourceImage, referenceImage, { m00: 1, m01: 0, tx: 2.5, m10: 0, m11: 1, ty: 0 }, { interpolationMode: 'bicubic' })
 
 // Chains target → intermediate and intermediate → reference into one transform, to resample once.
 const chained = composeRegistrationTransforms(toIntermediate.transform, toReference.transform)
@@ -7629,7 +8411,8 @@ Knowing what a trail is decides what to do with it: a satellite or an airplane i
 `classifyStreaks` interprets the streaks of [Straight Streak Detection](#straight-streak-detection) with a rule-based vote, not a trained model. Each evidence provider votes for one class with a weight, either as a primary cue (a geometric or field identification: a predicted track or a radiant matched through the WCS of the image, elongated field stars, two spikes crossing at one star, a defective line repeated across frames) or as a secondary cue (the morphology and the intensity profile). A class is named only when its primary evidence is strong enough and leads the others; otherwise the result is `unknown`, with the morphology among the alternatives, so a trail that only looks like a satellite is never named from its shape. The scores are uncalibrated weights, not probabilities, and should be validated on the images of the setup. No provider performs network or catalog access: missing context lowers the confidence instead of being looked up. Predicted tracks come from [Celestial Streak Tracks](#celestial-streak-tracks).
 
 ```ts
-import { classifyStreaks } from 'nebulosa/src/imaging/analysis/streak/classifier'
+import { classifyStreak, classifyStreaks } from 'nebulosa/src/imaging/analysis/streak/classifier'
+import { MorphologyStreakEvidence, TrajectoryStreakEvidence } from 'nebulosa/src/imaging/analysis/streak/evidence'
 
 // streaks: Streak[] — from detectStreaks. image, stars: the frame and its detected stars.
 // wcs: the TAN or TAN-SIP header of the frame; satelliteTracks: [{ id, start, end }] with [ra, dec] endpoints in radians;
@@ -7641,6 +8424,14 @@ for (const c of classifications) {
 	console.log(c.alternatives) // the other classes with a positive score, highest first
 	console.log(c.evidence.map((e) => [e.kind, e.score, e.id])) // the cues behind the decision, with the track or radiant id
 }
+
+// One streak with a replaced provider list. The built-in defaultStreakEvidenceProviders are MorphologyStreakEvidence,
+// IntensityStreakEvidence, TrajectoryStreakEvidence, MeteorRadiantStreakEvidence, FieldCoherenceStreakEvidence, OpticalStreakEvidence, and SensorStreakEvidence.
+const geometric = classifyStreak(streaks[0], { wcs, satelliteTracks }, { providers: [new TrajectoryStreakEvidence(), new MorphologyStreakEvidence()] })
+console.log(geometric.class) // satellite when a predicted track matches strongly; the morphology alone leaves it unknown
+
+// The votes of one provider for a streak, given the context and the other streaks of the frame.
+console.log(new MorphologyStreakEvidence().evaluate(streaks[0], { stars }, streaks)) // e.g. a secondary satellite vote for a long, narrow trail
 ```
 
 ### Streak-Aware Stacking
@@ -7662,6 +8453,25 @@ console.log(stack.diagnostics[2].streaks) // streaks found, masked pixels, and m
 
 // frame: StackingFrame; streaks: Streak[] measured elsewhere — rasterized into an authoritative mask (1 masked) on the grid of the frame.
 const masked: StackingFrame = { ...frame, streakMask: createStreakMask(frame.image.metadata.width, frame.image.metadata.height, streaks) }
+```
+
+### Sub-Exposure and Integration Planning
+
+The depth of an astronomical image is set by its total integration time, the sum of all its sub-exposures, while the length of each sub-exposure is a separate choice that balances read noise, saturation, and the risk of losing a frame. Planning a session is converting between the two: how many frames of a given length reach a total integration. `totalIntegrationTime` is `N * t`, `subframeCount` is `T / t` as a real number (a fractional count tells how far the plan is from a whole number of frames), and `requiredSubframeCount` is its ceiling, the whole frames that reach at least the requested time, so the last frame overshoots unless the division is exact. All times are in seconds.
+
+These are integration times, not clock times: they do not include the dead time between frames (readout, download, dithering, autofocus), the frames lost to bad guiding or clouds, or the calibration frames. The choice of the sub-exposure itself (the sky-limited exposure, the saturation time, and the stacking gain) is in [Signal-to-Noise and Dynamic Range Estimates](#signal-to-noise-and-dynamic-range-estimates), and the trailing limit in [Trailing and Smear Limits](#trailing-and-smear-limits).
+
+```ts
+import { requiredSubframeCount, subframeCount, totalIntegrationTime } from 'nebulosa/src/astronomy/formulas'
+
+// 36 frames of 300 s: 3 hours of integration, in seconds.
+console.log(totalIntegrationTime(36, 300)) // 10800
+
+// Frames of 420 s for 3 hours: a fractional count, and the whole frames that reach it.
+console.log(subframeCount(10800, 420), requiredSubframeCount(10800, 420)) // 25.714 26
+
+// The ceiling overshoots: 26 frames of 420 s give 10920 s, 2 minutes more than the plan.
+console.log(totalIntegrationTime(requiredSubframeCount(10800, 420), 420)) // 10920
 ```
 
 ### Subframe Selector
@@ -7692,25 +8502,6 @@ console.log(
 console.log(subframeRejectionReasons(selection.results[0].metrics, { maxMedianHFD: 3 }))
 ```
 
-### Sub-Exposure and Integration Planning
-
-The depth of an astronomical image is set by its total integration time, the sum of all its sub-exposures, while the length of each sub-exposure is a separate choice that balances read noise, saturation, and the risk of losing a frame. Planning a session is converting between the two: how many frames of a given length reach a total integration. `totalIntegrationTime` is `N * t`, `subframeCount` is `T / t` as a real number (a fractional count tells how far the plan is from a whole number of frames), and `requiredSubframeCount` is its ceiling, the whole frames that reach at least the requested time, so the last frame overshoots unless the division is exact. All times are in seconds.
-
-These are integration times, not clock times: they do not include the dead time between frames (readout, download, dithering, autofocus), the frames lost to bad guiding or clouds, or the calibration frames. The choice of the sub-exposure itself (the sky-limited exposure, the saturation time, and the stacking gain) is in [Signal-to-Noise and Dynamic Range Estimates](#signal-to-noise-and-dynamic-range-estimates), and the trailing limit in [Trailing and Smear Limits](#trailing-and-smear-limits).
-
-```ts
-import { requiredSubframeCount, subframeCount, totalIntegrationTime } from 'nebulosa/src/astronomy/formulas'
-
-// 36 frames of 300 s: 3 hours of integration, in seconds.
-console.log(totalIntegrationTime(36, 300)) // 10800
-
-// Frames of 420 s for 3 hours: a fractional count, and the whole frames that reach it.
-console.log(subframeCount(10800, 420), requiredSubframeCount(10800, 420)) // 25.714 26
-
-// The ceiling overshoots: 26 frames of 420 s give 10920 s, 2 minutes more than the plan.
-console.log(totalIntegrationTime(requiredSubframeCount(10800, 420), 420)) // 10920
-```
-
 ### Surface Registration
 
 The Moon, the Sun, and the planets fill the field with extended texture (craters, granulation and active regions, cloud bands) instead of point stars, so star-based registration does not apply. Guiding on them, or aligning the frames of a lunar or solar sequence, needs to measure how the texture itself moved. Surface registration estimates a proper rigid transform, `q = R(rotation)·p + translation`, which maps a reference pixel `p` to the current pixel `q`; the rotation is in radians from +X toward +Y (clockwise on a displayed image) and the translation in pixels, with pixel centers at integers, origin at the upper left, x right, and y down.
@@ -7720,12 +8511,16 @@ The Moon, the Sun, and the planets fill the field with extended texture (craters
 The module `imaging/analysis/tracking/registration` exposes the translation primitives underneath: whole-plane phase correlation refined to subpixel by a localized DFT (Guizar-Sicairos), patch matching by ZNCC, and enhanced correlation coefficient refinement (Evangelidis and Psarakis). [Solar System Guide Tracking](#solar-system-guide-tracking) builds a guide tracker on these functions.
 
 ```ts
-import { applyRigidTransform, createSurfaceReference, IDENTITY_RIGID_TRANSFORM, reacquireSurface, registerSurface, selectSurfacePlane } from 'nebulosa/src/imaging/analysis/tracking/surface'
+import { applyRigidTransform, composeRigidTransforms, createSurfaceReference, IDENTITY_RIGID_TRANSFORM, invertRigidTransform, reacquireSurface, registerSurface, rigidTransformThrough, scoreSurfacePlane, selectSurfacePlane, surfaceAnalysisPlanes } from 'nebulosa/src/imaging/analysis/tracking/surface'
 import { SurfaceTrackingWorkspace } from 'nebulosa/src/imaging/analysis/tracking/workspace'
 
-// first, next: Image — two frames of a lunar or solar surface. The workspace owns buffers reused by every call.
+// first, next: Image — two RGB frames of a lunar or solar surface. The workspace owns buffers reused by every call.
 const workspace = new SurfaceTrackingWorkspace()
 const area = { left: 32, top: 32, right: 288, bottom: 288 } // pixels, right and bottom exclusive
+
+// The candidate planes of the layout, and the texture score of one (usable fraction times contrast over noise).
+console.log(surfaceAnalysisPlanes(first)) // ['red', 'green', 'blue']
+console.log(scoreSurfacePlane(first, area, 'green', workspace).score) // dimensionless, 0 when unusable
 
 // Builds the reference over the area, on the plane with the best texture.
 const plane = selectSurfacePlane(first, area, workspace)!
@@ -7743,6 +8538,13 @@ if (registered.success) {
 	// A jump beyond the patch search: coarse phase correlation finds it again.
 	const recovered = reacquireSurface(created.reference, next, IDENTITY_RIGID_TRANSFORM, workspace)
 }
+
+// Transform algebra: the rigid transform of a given rotation (radians) that moves pixel (100, 200) by (3, -2) pixels.
+const step = rigidTransformThrough(0.1, 100, 200, 3, -2)
+console.log(applyRigidTransform(step, 100, 200)) // [103, 198]
+
+// Chains two motions (the inner one first) and inverts one: a transform composed with its inverse is the identity.
+console.log(composeRigidTransforms(step, invertRigidTransform(step))) // { rotation: 0, translation: [≈ 0, ≈ 0] }
 ```
 
 ### Synthetic Bahtinov Spikes
@@ -7774,7 +8576,7 @@ A defocused star seen through a telescope with a central obstruction is a bright
 `generateSyntheticCollimationImage` renders a deterministic image of one such pattern in normalized Float32 samples. The pattern is described by its outer boundary and obstruction boundary as ellipses (center in pixels with y down, semi-axes in pixels, orientation in radians, clockwise because y grows downward, and a soft edge), the total annulus signal, the background, and Gaussian noise from a seed, with optional seeing and tracking blur, azimuthal brightness harmonics, spider vanes, a thermal plume, saturation, hot pixels, and a crop. `renderSyntheticCollimationPattern` adds one annulus to an existing buffer, for scenes with several stars. It is an idealization of a geometric annulus: no diffraction rings, chromatic effects, or optical model, and the harmonics, spider, and plume are brightness modulations, not physical simulations.
 
 ```ts
-import { generateSyntheticCollimationImage, renderSyntheticCollimationPattern, type SyntheticCollimationPattern } from 'nebulosa/src/imaging/synthetic/collimation'
+import { applySyntheticCollimationBlur, applySyntheticCollimationSaturation, generateSyntheticCollimationImage, renderSyntheticCollimationPattern, type SyntheticCollimationPattern } from 'nebulosa/src/imaging/synthetic/collimation'
 
 // An annulus with semi-axes 60x58 pixels and an obstruction of 24x23 offset by (4, -2), on 200x200 pixels.
 const pattern: SyntheticCollimationPattern = {
@@ -7797,6 +8599,10 @@ const blurred = generateSyntheticCollimationImage({ ...pattern, seeing: 2, spide
 // Adds one annulus to an existing buffer; false when nothing was drawn.
 const raw = new Float32Array(200 * 200)
 console.log(renderSyntheticCollimationPattern(raw, { ...pattern, noise: 0, background: 0 })) // true
+
+// After every annulus of a scene is drawn: seeing of 2 pixels and a 4-pixel tracking smear along +X, then clipping at 0.5, in place.
+applySyntheticCollimationBlur(raw, 200, 200, 1, 2, { length: 4, angle: 0 })
+applySyntheticCollimationSaturation(raw, 0.5)
 ```
 
 ### Synthetic Flats
@@ -7887,7 +8693,7 @@ Each star has a centroid and a half-flux diameter (HFD) in pixels, an SNR, and a
 The stars are drawn analytically, not ray traced: the HFD is the scale of the profile, not a measurement made on the result, so a detector measures a slightly different value after sampling, seeing and noise, and a faint star can be buried by the noise.
 
 ```ts
-import { plotStar } from 'nebulosa/src/imaging/stars/generator'
+import { colorIndexToRgbWeights, gaussianSigmaFromHfd, plotStar } from 'nebulosa/src/imaging/stars/generator'
 import { generateStarImage, type AstronomicalImageStar } from 'nebulosa/src/imaging/synthetic/generator'
 
 const width = 64
@@ -7907,6 +8713,10 @@ console.log(stats.seed) // 5, the seed of the noise pass
 // Draws one noise-free Moffat star at focuser position 7500 when the best focus is 5000: wider, fainter, with a halo.
 const defocused = new Float64Array(width * height)
 plotStar(defocused, width, height, 1, 32, 32, 4, 3, 30, 1, undefined, { psfModel: 'moffat', beta: 2.5, focusStep: 7500, bestFocus: 5000, maxFocusStep: 10000 })
+
+// The conversions of the model: the RGB weights of a B-V index, and the sigma of the Gaussian of an HFD (pixels).
+// effectiveGaussianSigma adds the seeing and softening terms, and focusDefocusAmount normalizes a focuser offset to 0..1.
+console.log(colorIndexToRgbWeights(1.2), gaussianSigmaFromHfd(3)) // [0.447, 0.325, 0.227] 1.274
 ```
 
 ### Synthetic Straight Streaks
@@ -8081,6 +8891,12 @@ while (step.type === 'MOVE') {
 
 console.log(step.type, step.absolute) // COMPLETED with the best-focus position to move to, or FAILED with the starting position to restore
 console.log(autofocus.hyperbolic?.minimum) // the fitted vertex: x in steps, y the HFD in pixels
+
+// The best focus of the selected fitting mode, and the other fits (trendLine, parabolic) of the same samples.
+console.log(autofocus.focusPoint, autofocus.trendLine, autofocus.parabolic)
+
+// The leftmost and rightmost sampled points: x in steps, y the HFD in pixels.
+console.log(autofocus.minimum, autofocus.maximum)
 ```
 
 ### Autofocus Runner
@@ -8209,47 +9025,10 @@ const result = analyzeDarvImage({
 console.log(result.status, result.drift) // 'ok' with the signed north drift in radians per second; otherwise the drift may be undefined
 console.log(result.trails.length, result.inliers) // the paired trails, and those kept in the aggregate
 if (result.component?.status === 'ok') console.log(toArcmin(result.component.error)) // the signed azimuth error, in arcminutes
-```
 
-### DARV Runner
-
-A DARV frame is only meaningful if the mount motions happen while the shutter is open and are timed precisely: a stationary lead after the exposure starts, the outbound RA motion for the leg duration, a stop, the return motion for the same duration, a stop, and a trailing margin before the shutter closes. `runDarv` performs that sequence as one operation over the device commanders: it checks that the mount can do it (a connected, unparked equatorial mount tracking at the sidereal rate that can move west and east, abort, and offers the requested slew-rate preset, the same check as [Three-Point Polar Alignment](#three-point-polar-alignment)), applies the slew rate, starts one LIGHT exposure long enough for both legs and three margins, and drives the motions once the camera reports the exposure.
-
-Any failure or cancellation after the exposure started aborts it, so an incomplete sequence never yields a frame, and a return motion that ended after the earliest possible end of the shutter fails the run. The result carries the written frame and the measured timing in seconds, from the monotonic clock shared with the capturer, which are the durations [DARV Image Analysis](#darv-image-analysis) takes. The runner leases nothing itself (the commander and the capturer lease the mount and the camera per command), and it changes the slew rate without restoring it: the listener reports the preset it replaced.
-
-```ts
-import { tmpdir } from 'os'
-import { join } from 'path'
-import { abortableDelay } from 'nebulosa/src/devices/orchestration/operation.wait'
-import { darvExposureTime } from 'nebulosa/src/observation/alignment/darv'
-import { analyzeDarvImage } from 'nebulosa/src/observation/alignment/darv.analysis'
-import { runDarv } from 'nebulosa/src/observation/alignment/darv.runner'
-
-// The shutter time of a 60 s leg with the default margins, in seconds.
-console.log(darvExposureTime(60)) // 129
-
-// coordinator, mountCommander, cameraCapturer, mount and camera as in Device Commanders and Device Camera Capture.
-// Applies the GUIDE slew rate, opens the exposure, and moves the mount west for 60 s and back east for 60 s while the shutter is open.
-const run = await runDarv(
-	coordinator,
-	mount,
-	camera,
-	{ direction: 'WEST', slewRate: 'GUIDE', legDuration: 60, capture: { x: 0, y: 0, width: 0, height: 0, subframe: false, binX: 1, binY: 1, frameFormat: '', gain: 100, offset: 10, compressed: false } },
-	{
-		mountCommander,
-		cameraCapturer,
-		clock: { wallNow: () => Date.now(), monotonicNow: () => performance.now(), delay: abortableDelay },
-		framePath: join(tmpdir(), 'darv.fit'),
-		listener: (event) => console.log(event), // the replaced slew rate, then the phases of the sequence
-	},
-)
-
-if (run.ok) {
-	// image: Image — the frame read from the frame path; transform: the pixel-to-sky transform of DARV Image Analysis.
-	const { timing } = run.value
-	const analysis = analyzeDarvImage({ image, exposure: timing.exposure, legDuration: 60, leadingDuration: timing.leading, outboundDuration: timing.outbound, turnaroundDuration: timing.turnaround, returnDuration: timing.inbound, trailingDuration: timing.trailing, firstDirection: 'west', transform })
-	console.log(analysis.drift) // the signed north drift, in radians per second
-}
+// Every transform maps a pixel offset to an [east, north] sky offset in radians. DarvCalibrationTransform reads the
+// current guiding calibration and axis scales, and DarvWcsTransform the WCS of the frame (new DarvWcsTransform(() => header, reference)).
+console.log(new DarvMatrixTransform([arcsec(1), 0, 0, arcsec(1)]).imageOffsetToSky(10, 0)) // 10″ east, in radians
 ```
 
 ### DARV Polar Error Estimation
@@ -8282,6 +9061,50 @@ const solution = solveDarvPolarError([meridian, west])
 if (solution.status === 'ok') console.log(toArcmin(solution.azimuthError), toArcmin(solution.altitudeError), solution.conditionNumber) // 10 −5 (arcminutes), and the conditioning of the geometry
 ```
 
+### DARV Runner
+
+A DARV frame is only meaningful if the mount motions happen while the shutter is open and are timed precisely: a stationary lead after the exposure starts, the outbound RA motion for the leg duration, a stop, the return motion for the same duration, a stop, and a trailing margin before the shutter closes. `runDarv` performs that sequence as one operation over the device commanders: it checks that the mount can do it (a connected, unparked equatorial mount tracking at the sidereal rate that can move west and east, abort, and offers the requested slew-rate preset, the same check as [Three-Point Polar Alignment](#three-point-polar-alignment)), applies the slew rate, starts one LIGHT exposure long enough for both legs and three margins, and drives the motions once the camera reports the exposure.
+
+Any failure or cancellation after the exposure started aborts it, so an incomplete sequence never yields a frame, and a return motion that ended after the earliest possible end of the shutter fails the run. The result carries the written frame and the measured timing in seconds, from the monotonic clock shared with the capturer, which are the durations [DARV Image Analysis](#darv-image-analysis) takes. The runner leases nothing itself (the commander and the capturer lease the mount and the camera per command), and it changes the slew rate without restoring it: the listener reports the preset it replaced.
+
+```ts
+import { tmpdir } from 'os'
+import { join } from 'path'
+import { abortableDelay } from 'nebulosa/src/devices/orchestration/operation.wait'
+import { darvExposureTime } from 'nebulosa/src/observation/alignment/darv'
+import { analyzeDarvImage } from 'nebulosa/src/observation/alignment/darv.analysis'
+import { runDarv } from 'nebulosa/src/observation/alignment/darv.runner'
+import { polarAlignmentMountRefusal } from 'nebulosa/src/observation/alignment/polaralignment'
+
+// The shutter time of a 60 s leg with the default margins, in seconds.
+console.log(darvExposureTime(60)) // 129
+
+// coordinator, mountCommander, cameraCapturer, mount and camera as in Device Commanders and Device Camera Capture.
+// The check the run makes first, also usable to disable a control: undefined when the mount can run the motions at GUIDE.
+console.log(polarAlignmentMountRefusal(mount, 'GUIDE')) // undefined, or why the mount cannot
+// Applies the GUIDE slew rate, opens the exposure, and moves the mount west for 60 s and back east for 60 s while the shutter is open.
+const run = await runDarv(
+	coordinator,
+	mount,
+	camera,
+	{ direction: 'WEST', slewRate: 'GUIDE', legDuration: 60, capture: { x: 0, y: 0, width: 0, height: 0, subframe: false, binX: 1, binY: 1, frameFormat: '', gain: 100, offset: 10, compressed: false } },
+	{
+		mountCommander,
+		cameraCapturer,
+		clock: { wallNow: () => Date.now(), monotonicNow: () => performance.now(), delay: abortableDelay },
+		framePath: join(tmpdir(), 'darv.fit'),
+		listener: (event) => console.log(event), // the replaced slew rate, then the phases of the sequence
+	},
+)
+
+if (run.ok) {
+	// image: Image — the frame read from the frame path; transform: the pixel-to-sky transform of DARV Image Analysis.
+	const { timing } = run.value
+	const analysis = analyzeDarvImage({ image, exposure: timing.exposure, legDuration: 60, leadingDuration: timing.leading, outboundDuration: timing.outbound, turnaroundDuration: timing.turnaround, returnDuration: timing.inbound, trailingDuration: timing.trailing, firstDirection: 'west', transform })
+	console.log(analysis.drift) // the signed north drift, in radians per second
+}
+```
+
 ### Direction Alignment
 
 The axes of a mount are referenced to its own base, which is never exactly level or turned to north. Before the encoder angles can be converted into directions on the sky, the rotation from the mount base frame to the world frame (the local east, north, up frame of the observer) must be known. Pointing at a few known stars gives pairs of directions, the one the mount reports and the one the star really has, and the rotation that best maps one set onto the other is the classic attitude problem of star trackers (Wahba's problem).
@@ -8291,15 +9114,16 @@ The axes of a mount are referenced to its own base, which is never exactly level
 Only the orientation of the base is fitted: the errors of the mount axes themselves (non-perpendicularity, index offsets, flexure) belong to [Pointing Model Fit and Correction](#pointing-model-fit-and-correction). At least two samples with positive weight that are neither collinear nor antipodal are needed, a direction pair does not distinguish a rotation from a mirrored frame, and a robust fit of very few samples can reject a good one.
 
 ```ts
-import { applyDirectionAlignment, fitDirectionAlignment, fitMountAlignment, predictWorldDirection } from 'nebulosa/src/observation/mount/alignment'
+import { applyDirectionAlignment, fitDirectionAlignment, fitMountAlignment, predictMountDirection, predictWorldDirection } from 'nebulosa/src/observation/mount/alignment'
 
 // samples: DirectionAlignmentSample[] — pairs of the same direction in the mount base frame (mount) and in the east-north-up frame (world).
 // Fits the base rotation, with a Tukey loss that gives a misidentified star a zero weight.
 const fit = fitDirectionAlignment(samples, { robust: 'tukey' })
 console.log(fit.rms, fit.maximumResidual, fit.rejectedCount) // weighted RMS and largest angular residual in radians, and the samples rejected
 
-// Rotates a mount-frame direction into the world frame, as a unit vector.
+// Rotates a mount-frame direction into the world frame, as a unit vector, and a world direction back into the mount frame.
 console.log(predictWorldDirection(fit, [1, 1, 0]))
+console.log(predictMountDirection(fit, [0, 0, 1])) // the local zenith in the mount base frame
 
 // geometry: TwoAxisMountGeometry (see Mount Kinematics); observations: MountAlignmentObservation[] — encoder positions with the observed azimuth and altitude.
 // Fits the base orientation from the encoders and puts it into the geometry (its translation in meters is kept).
@@ -8339,9 +9163,11 @@ The generator knows neither the mount nor the field, and the sum of the offsets 
 
 ```ts
 import { DitherGenerator } from 'nebulosa/src/observation/guiding/dither'
+import { GoldenDitherGenerator } from 'nebulosa/src/observation/guiding/dither.golden'
 
 // A golden-angle disk pattern; the random source (a function returning [0, 1), Math.random by default) is used by the random pattern only.
 const dither = new DitherGenerator({ mode: 'golden' })
+console.log(dither.mode) // 'golden'
 
 // The next increment from the previous point, in the unit of the amount (here 5 guide-camera pixels).
 console.log(dither.next(5)) // { rightAscension, declination }: a step, not an absolute position
@@ -8352,6 +9178,10 @@ console.log(dither.next(5, true))
 // Switches to the PHD2 spiral with a fresh sequence; reset() restarts the active pattern from its origin.
 dither.setMode('spiral')
 dither.reset()
+
+// Each pattern is also a class with the same next() and reset(): RandomDitherGenerator (built with a random source),
+// SpiralDitherGenerator, GoldenDitherGenerator and GridDitherGenerator.
+console.log(new GoldenDitherGenerator().next(5))
 ```
 
 ### Dome Slit Geometry
@@ -8405,7 +9235,12 @@ let command: BacklashCalibrationCommand = calibration.start(focuser.position())
 while (command.type === 'move' || command.type === 'measure') {
 	if (command.type === 'move') command = calibration.next({ type: 'moved', position: focuser.move(command.relative) })
 	else command = calibration.next({ type: 'measured', position: focuser.position(), value: measure() })
+	// The phase and the direction of the active run, for a progress display.
+	console.log(calibration.state, calibration.currentDirection)
 }
+
+// The completed result, also kept by the state machine (undefined before a successful completion).
+console.log(calibration.result)
 
 if (command.type === 'completed') {
 	console.log(command.result.increasing.steps, command.result.decreasing.steps, command.result.quality) // the backlash of each direction in steps, and the quality
@@ -8451,8 +9286,12 @@ which is zero for an error below the minimum move of the axis, and the pulse is 
 `Guider` is a pure state machine with no device I/O: it takes one tracker result per frame (see [Guide Star Tracking](#guide-star-tracking)) and returns the pulses, and the caller sends them (see [INDI Guide Output](#indi-guide-output)). It averages the first good frames into the lock reference, then guides, and reports the star lost after consecutive bad frames (no measurement, low quality or a jump). A dither or a lock shift moves the target, and the calibration and positive directions can be replaced without losing the lock after a meridian flip. When frames arrive much faster than the mount should be corrected, as with a planetary or Lunar camera whose measured motion is mostly seeing (see [Solar System Guide Tracking](#solar-system-guide-tracking)), corrections can be gated to an interval on the capture clock and computed from a robust combination of the buffered errors. The controller has no model of the mount, so its gains and calibration must match the setup.
 
 ```ts
-import { Guider } from 'nebulosa/src/observation/guiding/guider'
+import { Guider, hysteresisCorrection } from 'nebulosa/src/observation/guiding/guider'
 import { trackingResultFromStars } from 'nebulosa/src/observation/guiding/tracker'
+
+// The controller equation alone: an error of 1, a last move of 0.5, a hysteresis of 0.1, an aggressiveness of 0.7 and a minimum move of 0.2.
+// The other pure steps are applyCalibration (image to axis error), invertCalibration, applyDeadband and aggregateGuideErrors.
+console.log(hysteresisCorrection(1, 0.5, 0.1, 0.7, 0.2)) // 0.665, in axis units
 
 // An identity calibration (image X is RA, Y is DEC), a lock averaged over 3 frames, a gain of 1 without hysteresis, 500 ms per pixel.
 const guider = new Guider({ lockAveragingFrames: 3, hysteresisRA: 0, hysteresisDEC: 0, aggressivenessRA: 1, aggressivenessDEC: 1, msPerRAUnit: 500, msPerDECUnit: 500 })
@@ -8466,9 +9305,26 @@ for (let i = 0; i < 3; i++) guider.processFrame(frame(320, 240, i))
 // The star moved +1 px in X and −0.5 px in Y; the caller sends the returned pulses.
 const command = guider.processFrame(frame(321, 239.5, 3))
 console.log(command.state, command.ra, command.dec) // guiding, { direction: 'WEST', duration: 500 } and { direction: 'SOUTH', duration: 250 }
+console.log(guider.currentState.referenceX, guider.lastDiagnostics()?.frameId) // the lock at 320 px, and the diagnostics of frame 3
 
-// A dither shifts the target by 3 px in X and starts a settle; stopDither() returns the target to the lock.
+// The pulses that cancel a 2 px error in one move, at full gain and without controller memory, as a recovery move.
+console.log(guider.directPulse(2, 0).ra) // { direction: 'WEST', duration: 1000 }
+
+// A dither shifts the target by 3 px in X and starts a settle; setDithering(false) ends the settle and keeps the offset,
+// stopDither() returns the target to the lock, and setTargetOffset() shifts it without a settle (a lock shift).
 guider.startDither(3, 0)
+guider.setDithering(false)
+guider.stopDither()
+guider.setTargetOffset(1, 1)
+
+// A new exposure time (ms), a DEC policy, and a calibration flipped after a meridian flip, keeping the lock.
+guider.setNominalCadence(2000)
+guider.setDecMode('north-only')
+guider.setCalibration([-1, 0, 0, -1])
+
+// resetControllers() forgets the controller memory and keeps the lock; reset() starts over.
+guider.resetControllers()
+guider.reset()
 ```
 
 ### Guide Star Tracking
@@ -8481,20 +9337,32 @@ The tracker follows a field translation only: rotation, a change of scale and a 
 
 ```ts
 import { detectStars } from 'nebulosa/src/imaging/stars/detector'
-import { enrichGuideStars, StarTracker } from 'nebulosa/src/observation/guiding/tracker.star'
+import { enrichGuideStars, StarTracker, starTrackingOf } from 'nebulosa/src/observation/guiding/tracker.star'
 
 // The caller's detector: the toolkit detector plus the sampled peaks used by the saturation filter.
 const tracker = new StarTracker({ detector: (image) => enrichGuideStars(detectStars(image), image) })
 
+// The same stages are exported as pure functions: filterGuideStars, selectGuideStar and estimateTranslation.
 // image, nextImage: Image — consecutive 160 × 120 guide frames.
 // The first frame acquires the best scored star and measures its position in pixels.
 const first = tracker.track({ image, width: 160, height: 120, timestamp: 0, frameId: 0 }, { phase: 'looping', allowAcquisition: true, preserveIdentity: false })
 console.log(first.measurement, first.selectionPrimary) // { x, y, confidence }, and the acquired guide star
 
-// The consumer accepts the frame; the next one measures the translation of the matched stars from it.
+// A manual selection from that result: the detection nearest a clicked pixel (without a position, the best star of the frame).
+console.log(tracker.select(first, [80, 60])) // [x, y] in pixels, or undefined without detections
+
+// The consumer accepts the frame; the next one is detected first by prepare() (which may await a worker),
+// then measures the translation of the matched stars from the committed reference.
 tracker.commit()
-const second = tracker.track({ image: nextImage, width: 160, height: 120, timestamp: 1000, frameId: 1 }, { phase: 'guiding', allowAcquisition: true, preserveIdentity: true })
+const prepared = await tracker.prepare({ image: nextImage, width: 160, height: 120, timestamp: 1000, frameId: 1 })
+const second = tracker.track(prepared, { phase: 'guiding', allowAcquisition: true, preserveIdentity: true })
 console.log(second.measurement, second.matches) // the acquired position plus the field translation, and the number of matched stars
+
+// The stellar details of a generic result, as the guide client sees it, and the latest result.
+console.log(starTrackingOf(tracker.lastResult)?.selectionPrimary)
+
+// Forgets the guide star and the reference, for a new target.
+tracker.reset()
 ```
 
 ### Guider Client
@@ -8510,6 +9378,7 @@ import type { BlobEncoding } from 'nebulosa/src/devices/indi/types'
 import { readImageFromBuffer, readImageFromSource } from 'nebulosa/src/imaging/model/image'
 import { detectStars } from 'nebulosa/src/imaging/stars/detector'
 import { base64Source, bufferSource } from 'nebulosa/src/io/io'
+import { deg } from 'nebulosa/src/math/units/angle'
 import { GuiderClient, type GuiderClientHandler } from 'nebulosa/src/observation/guiding/client'
 import { enrichGuideStars, StarTracker } from 'nebulosa/src/observation/guiding/tracker.star'
 
@@ -8525,7 +9394,11 @@ client.addHandler(handler)
 client.attachHandler()
 client.connect(camera, guideOutput, { focalLength: 400, pixelSize: 3.76 })
 
-// Loops 2000 ms exposures; once frames arrive, selects a guide star and guides, calibrating first when needed.
+// The connected devices and the id of the client.
+console.log(client.camera?.name, client.guideOutput?.name, client.id)
+
+// Loops 2000 ms exposures; once frames arrive, selects a guide star (findStar is the PHD2 alias of findTarget) and guides,
+// calibrating first when needed. startExposureLoop(ms) starts one exposure and keeps its time as the cadence.
 client.setExposure(2000)
 client.loop()
 client.findStar()
@@ -8534,7 +9407,53 @@ client.guide()
 // While guiding: dithers by up to 5 px and settles within 1.5 px for 10 s, with a 60 s timeout.
 client.dither(5, false, { pixels: 1.5, time: 10, timeout: 60 })
 
+// The lock: an exact position in pixels kept across a new star selection, and a lock shift in pixels per hour.
+client.setLockPosition(320, 240, true)
+client.setStickyLockPositionEnabled(true)
+client.setLockShiftParams({ rate: [3, -1.5], units: 'pixels/hr', axes: 'X/Y' })
+client.setLockShiftEnabled(true)
+
+// Settings, each with its getter: getExposure, getDeclinationGuideMode, getDitherMode, getFastRecenterEnabled,
+// getGuideOutputEnabled, getLockPosition, getLockShiftEnabled, getLockShiftParams and getStickyLockPositionEnabled.
+client.setDeclinationGuideMode('Auto')
+client.setDitherMode('spiral')
+client.setFastRecenterEnabled(true)
+client.setGuideOutputEnabled(true)
+
+// State and telemetry in PHD2 terms; also state, getConnected, getSettling, getCalibrated, getCalibrationData, getSearchRegion,
+// getCameraBinning, getCameraFrameSize, and the getStarImage and getTargetImage thumbnails.
+console.log(client.getAppState(), client.getPixelScale(), client.getPaused()) // the PHD2 app state such as 'Guiding', arcsec per pixel, and whether paused
+
+// Pauses the pulses (true as the second argument also stops the exposures), resumes, and sends a manual 200 ms pulse west.
+client.setPaused(true, false)
+client.setPaused(false)
+client.guidePulse(200, 'West')
+
+// After a meridian flip: flips the calibration in use and keeps the lock.
+client.flipCalibration()
+
+// An operation that arbitrates the guide output bounds every pulse to 1500 ms while it holds the admission.
+const admission = client.admitPulses(1500)
+admission?.open()
+console.log(client.maxPulseDuration(), client.pulseQuiescenceWindow()) // longest pulse of the configuration (ms), and when the delivered pulses end
+admission?.[Symbol.dispose]()
+
+// Drops the guide star and returns to looping; while looping, the guiding assistant runs (see Guiding Assistant).
+client.deselectStar()
+client.startGuidingAssistant({ measureBacklash: false })
+client.stopGuidingAssistant()
+console.log(client.guidingAssistantResult())
+
 client.stopCapture()
+
+// The calibration with its mount context (declination in radians, pier side), stored and reused in another session or after a slew.
+// getCalibrationGeneration() changes whenever the calibration in use does; clearCalibration() forces a new one.
+client.setCalibrationContext({ declination: deg(20), pierSide: 'EAST' })
+const record = client.exportCalibration()
+if (record) console.log(client.restoreCalibration(record, { declination: deg(50), pierSide: 'WEST' }).status)
+console.log(client.reassessCalibration({ declination: deg(60), pierSide: 'WEST' }).status)
+client.clearCalibration()
+
 client.removeHandler(handler)
 client.disconnect()
 client.detachHandler()
@@ -8558,6 +9477,9 @@ const guider = new Guider({ lockAveragingFrames: 1 })
 
 // A guide scale of 2″/px at declination 30° (for the polar alignment hint), 1 s exposures, and the DEC backlash test enabled.
 const assistant = new GuidingAssistant({ imageScale: 2, declination: deg(30), exposure: 1, measureBacklash: true })
+
+// start() opens a fresh run (the first sample also does), and each frame adds its measurement.
+assistant.start()
 for (const frame of frames) assistant.addSample(frame, guider.processFrame(frame))
 
 const result = assistant.result()
@@ -8566,17 +9488,23 @@ console.log(result.motion.polarAlignmentError) // the polar alignment hint from 
 console.log(result.recommendations) // exposure range, minimum moves, star, focus, polar alignment and backlash advice
 
 // captureFrame(): the next GuideFrame; sendPulse(pulse): executes a pulse on the mount.
-// The backlash test: the origin is the first frame after the start, then each returned pulse is executed before the next frame.
+// The backlash test, once canMeasureBacklash is true: the origin is the first frame after the start,
+// then each returned pulse is executed before the next frame while measuringBacklash is true.
+console.log(assistant.canMeasureBacklash)
 let pulse = assistant.startBacklashTest().pulse
 const origin = await captureFrame()
 assistant.alignBacklashOrigin(origin, guider.processFrame(origin))
-while (pulse) {
+while (pulse && assistant.measuringBacklash) {
 	await sendPulse(pulse)
 	const frame = await captureFrame()
 	pulse = assistant.addSample(frame, guider.processFrame(frame)).pulse
 }
 
 console.log(assistant.result().backlash) // the measured backlash and the recommended compensation, in milliseconds
+
+// Ends the run and freezes its recommendations; abortBacklash(message) aborts a running backlash test and fail(message)
+// the whole run, both keeping the measured data.
+assistant.complete()
 ```
 
 ### Guiding Calibration
@@ -8597,11 +9525,16 @@ import { flipGuidingCalibration, GuidingCalibrator } from 'nebulosa/src/observat
 // pulse(command): sends the RA and DEC pulses (ms) the calibrator asked for and waits for their end.
 const calibrator = new GuidingCalibrator()
 
+// Fast clearing starts the clearing leg back toward the origin with longer pulses, as PHD2's fast recenter.
+calibrator.setFastClearing(true)
+
 // Each frame advances the state machine and may ask for the next pulse, until the run completes or fails.
 let step = calibrator.processFrame(frame(0))
 for (let id = 1; step.completed === undefined && step.failure === undefined; id++) {
 	if (step.pulse !== undefined) await pulse(step.pulse)
 	step = calibrator.processFrame(frame(id))
+	// The phase and step counts, and the diagnostics of the latest step, for a progress display.
+	console.log(calibrator.currentState.phase, calibrator.lastDiagnostics())
 }
 
 const result = step.completed!
@@ -8619,6 +9552,9 @@ console.log(flipped.imageMotion) // both axis columns negated; the commanded dir
 const record: GuidingCalibrationRecord = { version: GUIDING_CALIBRATION_RECORD_VERSION, calibration: result, context: { declination: 10 * DEG2RAD, pierSide: 'EAST' }, acquiredAt: Date.now() }
 const west = effectiveGuidingCalibration(record, { declination: 50 * DEG2RAD, pierSide: 'WEST' }, { declinationCompensation: true, reverseDecOutputAfterMeridianFlip: false })
 if (west.status === 'transformed') console.log(west.transformations, west.declinationScale) // ['pierFlip', 'declinationCompensation'] 0.6527
+
+// Starts over for a new calibration run, keeping the configuration.
+calibrator.reset()
 ```
 
 ### Guiding Sessions
@@ -8642,21 +9578,30 @@ const arbiter = new ResourceArbiter()
 const coordinator = new OperationCoordinator(arbiter)
 const settle = { pixels: 1.5, time: 10, timeout: 60 } // pixels, s, s
 
-// The same session over the local guider (longest pulse 1500 ms) or over a PHD2 process.
+// The same session over the local guider (longest pulse 1500 ms, read back as its pulseCeiling) or over a PHD2 process.
 const guiding = useLocal ? new LocalGuidingSession(client, camera, guideOutput, guideOutputCommander, { pulseCeiling: 1500 }) : new PHD2GuidingSession(new PHD2Client(), { host: 'localhost', maxGuidePulse: 2000 })
+
+// A sequencer preflight reports every configuration problem; the state is read synchronously.
+guiding.preflight((message) => console.log(message))
+console.log(guiding.state()) // 'stopped' before the start
 
 // The owner reserves what the session declares, begins the run, then guides under that reservation.
 const reserved = arbiter.reserve({ id: 'night-1', kind: 'sequencer' }, guiding.resources().reserve)
 
 if (reserved.ok && guiding.beginRun().ok) {
 	const reservation = coordinator.reservedScope(reserved.reservation)
-	// Resolves once guiding started and the star settled.
+	// Resolves once guiding started and the star settled; operationId() is the id of the long-lived guiding operation.
 	await guiding.start(reservation, reservation, { recalibrate: false, settle })
-	// Resolves ok once no pulse can still be running: the mount may move now.
+	console.log(guiding.operationId())
+	// Resolves ok once no pulse can still be running: the mount may move now. A pause timeout must be at least the bound (ms).
+	console.log(guiding.pulseQuiescenceBound())
 	await guiding.pause(reservation)
+	// After a meridian flip slew, the calibration is flipped before resuming.
+	await guiding.flipCalibration(reservation)
 	await guiding.resume(reservation, settle)
-	// Shifts the lock position by 3 guide-camera pixels and waits for the guided settle.
-	await guiding.dither(reservation, { amount: { unit: 'guidePixel', value: 3 }, raOnly: false, settle: { kind: 'guided', ...settle } })
+	// As a Ditherer: whether it supports a request and can dither now, then a shift of the lock by 3 guide-camera pixels and the guided settle.
+	const request = { amount: { unit: 'guidePixel', value: 3 }, raOnly: false, settle: { kind: 'guided', ...settle } } as const
+	if (guiding.accepts(request) && guiding.ready()) await guiding.dither(reservation, request)
 	// Interruptions inside a monotonic window (ms), to judge the frame exposed in it.
 	console.log(guiding.interruptions(0, performance.now())) // { interruptions: [], truncated: false }
 	await guiding.stop(reservation)
@@ -8667,8 +9612,23 @@ if (reserved.ok && guiding.beginRun().ok) {
 // Interactive guiding: loop, select a star, guide, and stop guiding while still looping.
 const session = new InteractiveGuidingSession(client, camera, guideOutput, guideOutputCommander)
 await session.startLoop(coordinator, { exposure: 2000 }) // ms
-session.selectTarget()
+session.selectTarget() // or selectTarget([x, y]) near a pixel; clearTarget() drops it
+session.setExposure(1000) // ms
 await session.startGuiding(coordinator, coordinator, { recalibrate: true, settle })
+
+// The projection for a UI: state, held guide output, settling, dithering, calibration and lock position;
+// lost and admitted tell whether a device was lost and whether a pulse admission is installed.
+console.log(session.snapshot(), session.lost, session.admitted)
+
+// The same pause, resume, dither, interruptions, pulseQuiescenceBound, accepts, resources, operationId and beginRun/endRun
+// as the sessions above; pause can stop only the corrections and release the guide output for a slew of the same reservation.
+await session.pause(coordinator, 'corrections', { releaseGuideOutput: true })
+await session.resume(coordinator, settle)
+
+// The calibration of the client, as in Guider Client: flipCalibration, clearCalibration, setCalibrationContext,
+// exportCalibration, restoreCalibration and reassessCalibration.
+session.flipCalibration()
+
 await session.stopGuiding(coordinator)
 await session.stop(coordinator)
 ```
@@ -8686,7 +9646,7 @@ import { geodeticLocation } from 'nebulosa/src/astronomy/observer/location'
 import { deg, toArcsec } from 'nebulosa/src/math/units/angle'
 import { advanceIPolarConvergence, calibrateIPolar, IPOLAR_CONVERGENCE_START, measureIPolar } from 'nebulosa/src/observation/alignment/ipolar'
 import type { IPolarObserver } from 'nebulosa/src/observation/alignment/ipolar.geometry'
-import { runIPolarCalibration, runIPolarRefinement } from 'nebulosa/src/observation/alignment/ipolar.runner'
+import { ipolarMountRefusal, runIPolarCalibration, runIPolarRefinement } from 'nebulosa/src/observation/alignment/ipolar.runner'
 
 // The site; refraction: false measures against the geometric pole.
 const observer: IPolarObserver = { location: geodeticLocation(deg(-45), deg(40)), refraction: false }
@@ -8704,6 +9664,8 @@ const convergence = advanceIPolarConvergence(IPOLAR_CONVERGENCE_START, measureme
 console.log(convergence.converged)
 
 // With devices: coordinator, camera and mount as in Device Commanders; services hold the capturer, the solver, the clock and the listener.
+// Whether the mount can turn the RA axis in automatic mode at a slew-rate preset: undefined, or why it cannot.
+console.log(ipolarMountRefusal(mount, 'SLOW'))
 const run = await runIPolarCalibration(coordinator, camera, mount, calibrationOptions, services)
 if (run.ok) await runIPolarRefinement(coordinator, camera, mount, run.value.mount, run.value.calibration, { convergence: IPOLAR_CONVERGENCE_START }, refinementOptions, services)
 ```
@@ -8870,9 +9832,20 @@ console.log(ditherSlewTarget(hour(5), deg(60), { rightAscension: arcsec(10), dec
 // A spiral pattern applied as guide pulses of at most 5 s.
 const ditherer = new MountDitherer(mount, guideOutput, { guideOutputCommander }, { method: 'pulse', pattern: 'spiral', rightAscensionDirection: 'WEST', declinationDirection: 'NORTH', maxPulseDuration: 5000 })
 
-// A dither of 15″ followed by a mechanical settle of 5 s; phases: dithering, dithered, settling, settled.
-const result = await ditherer.dither(coordinator, { amount: { unit: 'angle', value: arcsec(15) }, raOnly: false, settle: { kind: 'mechanical', time: 5 } }, (phase) => console.log(phase))
-console.log(result) // { ok: true, value: { kind: 'mount', offset } } — offset along the mount axes (rad, RA positive east)
+// What a session reserves for it: the resources that can move the mount (here the guide output, with the worst case in ms
+// between cancelling a pulse and releasing it), as movement(settleTimeout) lists them.
+console.log(ditherer.resources(), ditherer.movement(0))
+
+// A dither of 15″ followed by a mechanical settle of 5 s, once the ditherer accepts the request and is ready; phases: dithering, dithered, settling, settled.
+const request = { amount: { unit: 'angle', value: arcsec(15) }, raOnly: false, settle: { kind: 'mechanical', time: 5 } } as const
+if (ditherer.accepts(request) && ditherer.ready()) {
+	const result = await ditherer.dither(coordinator, request, (phase) => console.log(phase))
+	console.log(result) // { ok: true, value: { kind: 'mount', offset } } — offset along the mount axes (rad, RA positive east)
+}
+
+// At startup after a crash: assumes a pulse of the previous process may still run, and waits until it must have ended.
+console.log(ditherer.assumeDispatchedPulses()) // { busyAckDeadline, endsBy }, monotonic instants in ms
+await ditherer.awaitPulseQuiescence(AbortSignal.timeout(10000))
 ```
 
 ### Mount Kinematics
@@ -8931,18 +9904,26 @@ The target comes from an ephemeris, typically a table interpolated as in [Equato
 ```ts
 import { linearInterpolator } from 'nebulosa/src/astronomy/ephemeris/interpolation/ephemeris'
 import { arcsec } from 'nebulosa/src/math/units/angle'
-import { calibratedNonSiderealTransform, estimateNonSiderealDerivative, NonSiderealTracker, nonSiderealEphemerisFromInterpolator, nonSiderealTrackingOf } from 'nebulosa/src/observation/guiding/tracker.nonsidereal'
+import { calibratedNonSiderealTransform, estimateNonSiderealDerivative, NonSiderealTracker, nonSiderealAngularOffset, nonSiderealEphemerisFromInterpolator, nonSiderealTrackingOf } from 'nebulosa/src/observation/guiding/tracker.nonsidereal'
 
-// points: the tabulated target positions ({ time, rightAscension, declination }, TT, rad); base: the star GuideTracker.
+// points, newerPoints: tabulated target positions ({ time, rightAscension, declination }, TT, rad); base: the star GuideTracker.
 const ephemeris = nonSiderealEphemerisFromInterpolator(linearInterpolator(points))
+
+// The adapter is an InterpolatedNonSiderealEphemeris with a TT validity window (JD); update() swaps in a newer table and bumps its generation.
+console.log(ephemeris.validTime, ephemeris.generation)
+ephemeris.update(linearInterpolator(newerPoints))
 
 // The target rate at an instant by finite differences of the ephemeris (rad/s, east and north).
 console.log(estimateNonSiderealDerivative(ephemeris, now).rate)
+
+// The tangent-plane offset of a position from an anchor: east, north and the separation (rad).
+console.log(nonSiderealAngularOffset({ rightAscension: 1, declination: 0.3 }, { rightAscension: 1.0001, declination: 0.3 })) // east 9.553e-5 (0.0001 · cos 0.3), north ≈ 0
 
 // 2″ per pixel; positive RA moves the image to +X and positive DEC to -Y.
 const transform = calibratedNonSiderealTransform({ pixelScaleArcsecPerPixel: 2, calibration: { rightAscension: { unitX: 1, unitY: 0 }, declination: { unitX: 0, unitY: -1 } } })
 
 // Decorates the star tracker and arms it; the anchor is taken at the first frame after the visual lock.
+// arm(ephemeris, transform, { estimator, controller }) adds the residual rate feedback, and arm(provider, transform) follows a fitted local motion.
 const tracker = new NonSiderealTracker(base, { maxRate: arcsec(100) })
 tracker.arm(ephemeris, transform)
 
@@ -8950,8 +9931,19 @@ tracker.arm(ephemeris, transform)
 const result = tracker.track(frame, context)
 console.log(result.targetOffset, nonSiderealTrackingOf(result)?.state) // pixels the lock moves to follow the target, and 'active'
 
+// The guide client accepts the frame; commit() and select() delegate to the base tracker, and state and lastResult expose the telemetry.
+tracker.commit()
+console.log(tracker.select(result), tracker.state, tracker.lastResult)
+
 // A new anchor at the current time brings the target offset back to zero.
 tracker.reanchor(now)
+
+// A new camera transform (flippedTransform, built from the flipped calibration, as after a meridian flip) invalidates the image fits.
+tracker.onCalibrationChanged(flippedTransform)
+
+// reset() keeps the source for the next lock; clear() disables the non-sidereal control.
+tracker.reset()
+tracker.clear()
 ```
 
 ### Observation Scores
@@ -8976,47 +9968,6 @@ console.log(observationScore({ altitude: deg(50), sunAltitude: deg(-19), moonInt
 
 // The factors behind a score, to tell which one limits it.
 console.log(observationScoreFactors({ altitude: deg(60), airmass: 1, sunAltitude: deg(-15) })) // { altitude: 1, airmass: 1, twilight: 0.5, moon: undefined, duration: undefined }
-```
-
-### Plate-Solved Centering
-
-A slew lands where the mount believes the target is. The pointing error of the mount (polar misalignment, flexure, cone, a stale sync) can put the field arcminutes away. Centering measures that error on the sky: it exposes a short auxiliary frame, plate solves it, and corrects until a solve **after** the last correction shows the solved center within tolerance of the target. A slew is never taken as proof of arrival.
-
-`centerTarget` runs as an operation of the given scope and leases the camera and the mount per command. The target is a fixed J2000 (ICRS) coordinate. JNOW is not accepted, so a caller holding an equinox-of-date coordinate converts it first. The solver must return the ICRS center of a TAN or TAN-SIP solution (see [Plate Solution](#plate-solution)), which is compared with the target by great-circle distance. Each frame is solved with the astronomical midpoint of its exposure. Off target, the mount is either synced to the solved center and sent to the target, or sent from the position it reports, moved against the measured error. A limit of zero corrections only measures. Corrections that stop shrinking the distance end the run instead of looping.
-
-The solver is a function of the caller (ASTAP, astrometry.net, a Worker, a process). It must yield the event loop and honor its abort signal. The timeout is cooperative: the solve is still awaited after the abort, and a solver that never ends is reported unresponsive and then faulted, so later centerings do not call it again. An observer can follow each step and veto a correction before anything is commanded.
-
-```ts
-import { tmpdir } from 'os'
-import { join } from 'path'
-import { astapPlateSolve } from 'nebulosa/src/astrometry/solvers/astap'
-import { abortableDelay } from 'nebulosa/src/devices/orchestration/operation.wait'
-import { deg, hour } from 'nebulosa/src/math/units/angle'
-import { centerTarget } from 'nebulosa/src/observation/mount/centering'
-
-// coordinator, mountCommander, cameraCapturer, mount and camera as in Device Commanders and Device Camera Capture.
-// capture: CenteringCaptureOptions — the exposure, binning and gain of the auxiliary frame.
-const target = { frame: 'J2000', rightAscension: hour(5.5881), declination: deg(-5.3911) } as const
-
-// Up to 3 frames and 2 corrections, centered within 1′, syncing the mount to each solution.
-const result = await centerTarget(
-	coordinator,
-	mount,
-	camera,
-	target,
-	{ tolerance: deg(1 / 60), maximumAttempts: 3, maximumCorrections: 2, settle: 2, syncMount: true, capture, solveTimeout: 60, abortGrace: 5 }, // rad, s
-	{
-		mountCommander,
-		cameraCapturer,
-		// Solves within 4° of the target, honoring the operation's abort signal.
-		solver: (frame, signal) => astapPlateSolve(frame.path, { rightAscension: target.rightAscension, declination: target.declination, radius: deg(4) }, signal),
-		auxiliaryPath: (attempt) => join(tmpdir(), `centering.${attempt}.fit`),
-		clock: { wallNow: () => Date.now(), monotonicNow: () => performance.now(), delay: abortableDelay },
-		observer: { measured: ({ attempt, separation }) => console.log(attempt, separation) }, // separation in rad
-	},
-)
-
-console.log(result) // { ok: true, value: { attempts, separation, solution } } — final separation in radians
 ```
 
 ### Observing Session Scheduling
@@ -9061,6 +10012,47 @@ console.log(plan.diagnostics.efficiency.toFixed(3)) // 0.906 — exposure time o
 const replan = scheduleSession(targets, at(4), end, { ...options, initial: { pointing: targets[1].pointing, filter: 'V', lastFocus: at(3), completedFrames: { 'M42-L': 30, 'darks-300': 10 }, skip: ['transit'] } })
 ```
 
+### Plate-Solved Centering
+
+A slew lands where the mount believes the target is. The pointing error of the mount (polar misalignment, flexure, cone, a stale sync) can put the field arcminutes away. Centering measures that error on the sky: it exposes a short auxiliary frame, plate solves it, and corrects until a solve **after** the last correction shows the solved center within tolerance of the target. A slew is never taken as proof of arrival.
+
+`centerTarget` runs as an operation of the given scope and leases the camera and the mount per command. The target is a fixed J2000 (ICRS) coordinate. JNOW is not accepted, so a caller holding an equinox-of-date coordinate converts it first. The solver must return the ICRS center of a TAN or TAN-SIP solution (see [Plate Solution](#plate-solution)), which is compared with the target by great-circle distance. Each frame is solved with the astronomical midpoint of its exposure. Off target, the mount is either synced to the solved center and sent to the target, or sent from the position it reports, moved against the measured error. A limit of zero corrections only measures. Corrections that stop shrinking the distance end the run instead of looping.
+
+The solver is a function of the caller (ASTAP, astrometry.net, a Worker, a process). It must yield the event loop and honor its abort signal. The timeout is cooperative: the solve is still awaited after the abort, and a solver that never ends is reported unresponsive and then faulted, so later centerings do not call it again. An observer can follow each step and veto a correction before anything is commanded.
+
+```ts
+import { tmpdir } from 'os'
+import { join } from 'path'
+import { astapPlateSolve } from 'nebulosa/src/astrometry/solvers/astap'
+import { abortableDelay } from 'nebulosa/src/devices/orchestration/operation.wait'
+import { deg, hour } from 'nebulosa/src/math/units/angle'
+import { centerTarget } from 'nebulosa/src/observation/mount/centering'
+
+// coordinator, mountCommander, cameraCapturer, mount and camera as in Device Commanders and Device Camera Capture.
+// capture: CenteringCaptureOptions — the exposure, binning and gain of the auxiliary frame.
+const target = { frame: 'J2000', rightAscension: hour(5.5881), declination: deg(-5.3911) } as const
+
+// Up to 3 frames and 2 corrections, centered within 1′, syncing the mount to each solution.
+const result = await centerTarget(
+	coordinator,
+	mount,
+	camera,
+	target,
+	{ tolerance: deg(1 / 60), maximumAttempts: 3, maximumCorrections: 2, settle: 2, syncMount: true, capture, solveTimeout: 60, abortGrace: 5 }, // rad, s
+	{
+		mountCommander,
+		cameraCapturer,
+		// Solves within 4° of the target, honoring the operation's abort signal.
+		solver: (frame, signal) => astapPlateSolve(frame.path, { rightAscension: target.rightAscension, declination: target.declination, radius: deg(4) }, signal),
+		auxiliaryPath: (attempt) => join(tmpdir(), `centering.${attempt}.fit`),
+		clock: { wallNow: () => Date.now(), monotonicNow: () => performance.now(), delay: abortableDelay },
+		observer: { measured: ({ attempt, separation }) => console.log(attempt, separation) }, // separation in rad
+	},
+)
+
+console.log(result) // { ok: true, value: { attempts, separation, solution } } — final separation in radians
+```
+
 ### Pointing Model Calibration Plan
 
 A pointing model (see [Pointing Model Fit and Correction](#pointing-model-fit-and-correction)) is only as good as the sky its calibration samples cover. A term the samples do not constrain cannot be trusted, and a model fitted on one side of the pier says nothing about the other. `planPointingWaypoints` chooses where a calibration run should look. The pattern is either rings of altitude with points in proportion to their circumference, or a golden spiral with equal area per point. Waypoints stay within an altitude band, outside a free zone around the upper meridian, and inside a horizon mask and mount limits. The plan is pure and deterministic: it reads no device or clock, and the same options give the same plan.
@@ -9091,11 +10083,15 @@ The model describes the mechanics, not the atmosphere: refraction belongs to the
 
 ```ts
 import { deg, hour, toArcsec } from 'nebulosa/src/math/units/angle'
-import { computePointingError, correctPointingCoordinate, fitPointingModel, MountPointing, predictPointingModelError, selectPointingStrategy } from 'nebulosa/src/observation/mount/pointing'
+import { applyPointingOffset, computePointingError, correctPointingCoordinate, fitPointingModel, MountPointing, predictPointingModelError, selectPointingStrategy } from 'nebulosa/src/observation/mount/pointing'
+import { celestialToEncoders, encodersToCelestial } from 'nebulosa/src/observation/mount/pointing.pipeline'
 
 // The error of one sample: target RA 3 h, DEC 40°, and its plate-solved solvedRightAscension, solvedDeclination (rad).
 const error = computePointingError(hour(3), deg(40), solvedRightAscension, solvedDeclination)
 console.log(toArcsec(error.dx), toArcsec(error.dy)) // arcsec east and north, solved minus target
+
+// The inverse: the position at that offset from the target, here the solved position again.
+console.log(applyPointingOffset(hour(3), deg(40), error.dx, error.dy)) // { rightAscension, declination } in radians
 
 // samples: PointingSample[] — targets and solved positions with time, site and pier side, spread over both sides.
 const model = fitPointingModel(samples, { strategy: 'semiPhysical' })
@@ -9113,11 +10109,24 @@ console.log(prediction.dx, prediction.dy, prediction.quality.extrapolating) // p
 const corrected = correctPointingCoordinate(best, input)
 console.log(corrected.rightAscension, corrected.declination, corrected.converged)
 
-// The stateful collector: add samples as they are solved, fit, and correct with the latest model.
+// The stateful collector: add samples as they are solved (model(sample, { fit: true }) also refits), fit, and predict or correct with the latest model.
 const pointing = new MountPointing({ strategy: 'hybrid' })
 for (const sample of samples) pointing.add(sample)
 pointing.fit()
-console.log(pointing.correctCoordinate(input))
+console.log(pointing.predictError(input), pointing.correctCoordinate(input))
+console.log(pointing.state.sampleCount, pointing.diagnostics) // the collection and fit state, and the diagnostics of the latest fit
+
+// The fitted model as a serializable structure (optionally with its samples), imported into another instance.
+const exported = pointing.export({ includeSamples: true })
+if (exported) new MountPointing().import(exported)
+
+// chain: MountPointingChain — the mount geometry, its fitted base alignment (see Direction Alignment) and this model.
+// The whole chain from a sky position to the encoders that reach it: the model error is inverted on the sky first, then the kinematics.
+const encoders = celestialToEncoders(chain, input)
+console.log(encoders.primary, encoders.secondary, encoders.correction.clamped) // encoder angles (rad), and whether the correction was truncated
+
+// And back: the sky position the encoders actually point at, the predicted error included.
+console.log(encodersToCelestial(chain, encoders, input))
 ```
 
 ### Polar Alignment Exposure Estimator
@@ -9129,7 +10138,16 @@ It concerns only the polar misalignment, not periodic error, flexure or the star
 ```ts
 import { eraS2c } from 'nebulosa/src/astronomy/coordinates/erfa/erfa'
 import { deg, toArcmin } from 'nebulosa/src/math/units/angle'
-import { polarAlignmentExposureLimit, polarAlignmentExposureLimitForResult, polarAlignmentFieldRadius, polarAlignmentImageScale } from 'nebulosa/src/observation/alignment/exposure'
+import {
+	polarAlignmentExposureLimit,
+	polarAlignmentExposureLimitForResult,
+	polarAlignmentFieldRadius,
+	polarAlignmentGuidedFieldRotationRate,
+	polarAlignmentImageScale,
+	polarAlignmentResidualAngularVelocity,
+	polarAlignmentUnguidedDriftRate,
+	polarAlignmentWorstCaseDriftRate,
+} from 'nebulosa/src/observation/alignment/exposure'
 
 // mountPole, celestialPole: unit ICRF vectors (see Polar Alignment Geometry).
 // The sampling: a 3.76 µm pixel behind a 400 mm telescope, and the corner of a 4144 × 2822 sensor.
@@ -9144,6 +10162,12 @@ console.log(toArcmin(limit.polarError)) // polar error (arcmin)
 console.log(limit.unguided.worstCase, limit.unguided.target) // unguided exposure for any target and for this target (s)
 console.log(limit.guided!.exposure) // guided exposure before field rotation trails the sensor corner (s)
 
+// The instantaneous rates behind the limits: the residual angular velocity ω (p_celestial − p_mount) as a vector (rad/s),
+// the drift of this target and of the worst target (rad/s), and the field roll around the guide star (rad/s, undefined near the axis).
+console.log(polarAlignmentResidualAngularVelocity(mountPole, celestialPole))
+console.log(polarAlignmentUnguidedDriftRate(mountPole, celestialPole, target), polarAlignmentWorstCaseDriftRate(mountPole, celestialPole))
+console.log(polarAlignmentGuidedFieldRotationRate(mountPole, celestialPole, guide))
+
 // alignment: ThreePointPolarAlignmentResult; the same estimate from its pole and time.
 const fromResult = polarAlignmentExposureLimitForResult({ alignment: { pole: alignment.pole, time: alignment.time }, imageScale, target })
 ```
@@ -9156,10 +10180,21 @@ The base moves only with its two knobs. The azimuth knob turns it about the loca
 
 ```ts
 import { geodeticLocation } from 'nebulosa/src/astronomy/observer/location'
-import { timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
-import { arcmin, deg, toArcmin } from 'nebulosa/src/math/units/angle'
+import { timeShift, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { arcmin, deg, hour, toArcmin, toDeg } from 'nebulosa/src/math/units/angle'
 import { meter } from 'nebulosa/src/math/units/distance'
-import { applyMountAdjustment, celestialPoleVector, decomposePolarErrorGeodesic, mountAdjustmentAxes, solveAzAltAdjustment } from 'nebulosa/src/observation/alignment/polaralignment'
+import {
+	applyInverseMountAdjustment,
+	applyMountAdjustment,
+	celestialPoleVector,
+	convertPolarAlignmentAltitudeError,
+	decomposePolarErrorGeodesic,
+	mountAdjustmentAxes,
+	polarAlignmentError,
+	polarAlignmentReferenceAltitude,
+	solveAzAltAdjustment,
+	transportEarthFixed,
+} from 'nebulosa/src/observation/alignment/polaralignment'
 
 // A site at 22° N, 45° W and 800 m, at an instant.
 const time = timeYMDHMS(2025, 1, 1, 0, 0, 0)
@@ -9180,6 +10215,21 @@ console.log(toArcmin(error.total), toArcmin(error.azimuth), toArcmin(error.altit
 // from, to: unit ICRF directions of a star before and after an adjustment of the base; the knob turns that explain the shift.
 const knobs = solveAzAltAdjustment(from, to, upAxis, eastAxis)
 console.log(knobs.azimuthAdjustment, knobs.altitudeAdjustment) // rad
+
+// The same knob turns undone, in reverse order: the celestial pole again.
+console.log(applyInverseMountAdjustment(mountPole, upAxis, eastAxis, arcmin(3), arcmin(-10)))
+
+// The mount pole is fixed to the Earth: the same axis one hour later, as an ICRF vector of that instant.
+const later = timeShift(time, 1 / 24)
+later.location = location
+console.log(transportEarthFixed(mountPole, time, later))
+
+// The altitude of the target pole, geometric (22°) or refracted (22.039°), and a geometric -10′ altitude error as the refracted display shows it.
+console.log(toDeg(polarAlignmentReferenceAltitude(deg(22), false)), toDeg(polarAlignmentReferenceAltitude(deg(22))))
+console.log(toArcmin(convertPolarAlignmentAltitudeError(arcmin(-10), deg(22)))) // -9.98
+
+// The two-star formula: the RA and DEC (rad) a mount with this pole error shows for a target at RA 6 h, DEC 30°, at a sidereal time of 5 h.
+console.log(polarAlignmentError(hour(6), deg(30), deg(22), hour(5), arcmin(3), arcmin(-10)))
 ```
 
 ### Polar Alignment Overlay
@@ -9236,6 +10286,12 @@ const next = tracker.track({ image: image1, width: 320, height: 320, timestamp: 
 tracker.commit()
 console.log(next.measurement, solarSystemTrackingOf(next)?.state) // target in pixels; acquiring, tracking, degraded or lost
 
+// A target chosen on that result: the limb center or a clicked surface point inside the measurable envelope (undefined when declined).
+console.log(tracker.select(tracker.lastResult!, [160, 120]))
+
+// Forgets the plane, anchor, keyframes and limb model, for a new object.
+tracker.reset()
+
 // In a guide session, the guide client drives track() and commit() itself.
 // cameraManager, guideOutputManager: the device managers; decodeImage: GuideImageDecoder.
 const guider = new GuiderClient(cameraManager, guideOutputManager, new SolarSystemTracker({ mode: 'planetary' }), { decodeImage })
@@ -9276,9 +10332,10 @@ The inputs are `[rightAscension, declination, time]` with the ICRF (J2000) coord
 The precision depends on the rotation between solves: the seed pole error is about `2.4·σ/φ²` for a per-axis astrometric error `σ` and a rotation `φ` between consecutive solves, whatever the declination, and fields within about 10° of the pole do not separate the mechanical rotation from the celestial one. `tppa.geometry` checks those conditions, and `tppa.runner` acquires the three solves automatically with the mount and camera commanders and refines the estimate afterwards; the runner never restores the slew rate it changed, which is left to the caller. The refresh after a knob turn requires no declination motion, guiding, dither, pier side change or tracking rate change between the two exposures, and the tracking rate must match the mount (0 when the tracking is off). The correction is drawn on the image by the [Polar Alignment Overlay](#polar-alignment-overlay), and the shared geometry is in [Polar Alignment Geometry](#polar-alignment-geometry).
 
 ```ts
-import { toArcmin } from 'nebulosa/src/math/units/angle'
+import { deg, toArcmin } from 'nebulosa/src/math/units/angle'
 import { ThreePointPolarAlignment, threePointPolarAlignmentAfterAdjustment, threePointPolarAlignmentError } from 'nebulosa/src/observation/alignment/tppa'
 import { polarAlignmentGeometryQuality } from 'nebulosa/src/observation/alignment/tppa.geometry'
+import { acquireThreePointPolarAlignment, refineThreePointPolarAlignment } from 'nebulosa/src/observation/alignment/tppa.runner'
 
 // p1, p2, p3: ThreePointPolarAlignmentInput — three solves taken while rotating west only in right ascension;
 // p4: a new solve of the same field after a knob turn.
@@ -9300,6 +10357,18 @@ if (initial) {
 const session = new ThreePointPolarAlignment()
 for (const [rightAscension, declination, time] of [p1, p2, p3, p4]) console.log(session.add(rightAscension, declination, time))
 session.reset()
+
+// With devices: coordinator, mount and camera as in Device Commanders; capture: CenteringCaptureOptions of the auxiliary frames;
+// services: the mount commander, camera capturer, solver, auxiliaryPath(stage, index), clock, site location and listener, as in Plate-Solved Centering.
+// Turns the RA axis west by timed motions at the SLOW preset until three solves are accepted (durations in seconds).
+const acquired = await acquireThreePointPolarAlignment(coordinator, mount, camera, { direction: 'WEST', slewRate: 'SLOW', capture, settle: 1, initialMotion: 2, maximumMotion: 30, maximumAttempts: 6, solveTimeout: 60, abortGrace: 5 }, services)
+
+if (acquired.ok) {
+	const { alignment, points, pierSide, result } = acquired.value
+	console.log(toArcmin(result.azimuthError), toArcmin(result.altitudeError)) // the initial estimate, in arcminutes
+	// Solves new frames while the knobs are turned, until cancelled, reporting each refreshed estimate through the listener; it never moves the mount.
+	await refineThreePointPolarAlignment(coordinator, mount, camera, alignment, points[2], pierSide, { capture, delay: 1, maximumFailures: 3, maximumShift: deg(1), solveTimeout: 60, abortGrace: 5 }, services)
+}
 ```
 
 ### Tracking Rate Correction
@@ -9334,7 +10403,7 @@ The fit is a robust weighted straight line per axis, which clips outliers; a qua
 
 ```ts
 import { arcsec, deg } from 'nebulosa/src/math/units/angle'
-import { EstimatorNonSiderealMotionProvider, TrackingRateEstimator, trackingMotionSampleFromAstrometry, trackingMotionSampleFromImage, trackingRateFromStreak, type TrackingImageTransform } from 'nebulosa/src/observation/guiding/nonsidereal.rate'
+import { EstimatorNonSiderealMotionProvider, TrackingRateEstimator, trackingMotionSampleFromAstrometry, trackingMotionSampleFromBackgroundStars, trackingMotionSampleFromImage, trackingRateFromStreak, type TrackingImageTransform } from 'nebulosa/src/observation/guiding/nonsidereal.rate'
 
 // A guide camera of 2″ per pixel whose +X is east and +Y is south.
 const transform: TrackingImageTransform = { pixelDeltaToSky: ([dx, dy]) => [arcsec(2 * dx), arcsec(-2 * dy)] }
@@ -9347,9 +10416,15 @@ for (const { time, position } of solves) estimator.add(trackingMotionSampleFromA
 // A target shift of (5, -3) pixels is another kind of sample.
 console.log(trackingMotionSampleFromImage(now, [5, -3], transform)?.offset) // [10″, 6″] east and north, in radians
 
+// So is the median drift of three or more background stars matched by id ({ id, x, y } in pixels): the target moved the opposite way.
+const reference = [0, 1, 2].map((id) => ({ id: String(id), x: 40 * id, y: 30 }))
+const current = reference.map((star) => ({ ...star, x: star.x - 2 }))
+console.log(trackingMotionSampleFromBackgroundStars(now, reference, current, transform)?.offset) // [4″, 0] east and north, in radians
+
 // The fitted motion at a time: rate in rad/s, with its confidence from 0 to 1.
 const estimate = estimator.estimate(now)
 console.log(estimate?.rate, estimate?.confidence, estimate?.stale)
+console.log(estimator.generation) // changes when the series is cleared, so a tracker can drop an anchor of the old series
 
 // A 12-pixel target streak in X during 60 s with a known direction.
 console.log(trackingRateFromStreak(now, { axisPixels: [12, 0], exposureSeconds: 60, role: 'target', direction: 1 }, transform)?.rate) // [0.4″/s, 0] in rad/s
@@ -9357,6 +10432,9 @@ console.log(trackingRateFromStreak(now, { axisPixels: [12, 0], exposureSeconds: 
 // The local motion source of the non-sidereal tracker.
 const provider = new EstimatorNonSiderealMotionProvider(estimator)
 console.log(provider.motion(now)) // offset, rate and confidence, or undefined without a fresh fit
+
+// A new target starts a new series: provider.reset() clears the estimator it adapts, as estimator.reset() does.
+provider.reset()
 ```
 
 ### Weather Quality
@@ -9388,18 +10466,27 @@ ASTAP (the plate solver and photometry program) distributes its star databases `
 Positions have the epoch written in the tile header (`Epoch=2025` in the d05 sample) and no proper motion, so they are not J2000 positions. The tile functions select a square field (`|Δα·cos δ| < radius` and `|Δδ| < radius`), not a cone; `AstapCatalog` exposes the tiles through the exact geometry of [Star Catalog Interface and Spatial Query](#star-catalog-interface-and-spatial-query). A query returns only what the tiles in the collection have, so a field whose tiles are not loaded is empty or partial without an error.
 
 ```ts
-import { findAstap1476Areas, findAstap1476Stars, openAstapCatalog } from 'nebulosa/src/catalogs/stars/astap'
+import { astap1476AreaFile, findAstap1476Areas, findAstap1476Region, findAstap1476Stars, openAstapCatalog, readAstap1476Area, readAstap1476Header } from 'nebulosa/src/catalogs/stars/astap'
 import { deg } from 'nebulosa/src/math/units/angle'
 
-// The tile files of a square field of 1° half width at RA 0.1°, Dec 0°.
+// The tile files of a square field of 1° half width at RA 0.1°, Dec 0°, and the tile of an area number (1 to 1476).
 console.log(findAstap1476Areas(deg(0.1), deg(0), deg(1)).map((area) => area.fileName)) // [ "1901.1476", "1969.1476", "1801.1476", "1869.1476" ]
+console.log(astap1476AreaFile(1476).fileName) // 3601.1476 — the north polar cap
 
 // files: tile buffers or File objects keyed by name; here the d05 south polar cap.
 const files = { 'd05_0101.1476': Buffer.from(await Bun.file('data/d05_0101.1476').arrayBuffer()) }
 
 // The stars of a square field, sorted from the brightest, down to magnitude 10.5.
-const bright = await findAstap1476Stars(files, 'd05', { rightAscension: 0, declination: deg(-89.5), radius: deg(0.5), magnitudeLimit: 10.5 })
+const query = { rightAscension: 0, declination: deg(-89.5), radius: deg(0.5), magnitudeLimit: 10.5 }
+const bright = await findAstap1476Stars(files, 'd05', query)
 console.log(bright.length) // 4
+
+// The same search with the touched areas and their headers; findAstap1476Stars keeps only its stars.
+console.log((await findAstap1476Region(files, 'd05', query)).areas.length) // 1
+
+// One tile by hand: its header (description, record size, epoch), then the stars of the field in it.
+const header = readAstap1476Header(files['d05_0101.1476'])
+console.log(header.epoch, [...readAstap1476Area(header, files['d05_0101.1476'], 1, query)].length) // 2025 4
 
 // The same tiles as a star catalog with an exact cone.
 using catalog = openAstapCatalog(files, 'd05')
@@ -9441,18 +10528,30 @@ HNSKY (and the Cartes du Ciel / SkyChart programs) use the `.290` star databases
 The functions mirror those of [ASTAP Tiled Catalog](#astap-tiled-catalog): the tile functions select a square field (`|Δα·cos δ| < radius`, `|Δδ| < radius`), and `HnskyCatalog` exposes the tiles through the exact geometry of [Star Catalog Interface and Spatial Query](#star-catalog-interface-and-spatial-query). A tile that is not in the collection is skipped without an error, so a field whose tiles are missing is empty or partial.
 
 ```ts
-import { decodeHnsky290Designation, findHnsky290Areas, findHnsky290Stars, openHnskyCatalog } from 'nebulosa/src/catalogs/stars/hnsky'
+import { decodeHnsky290Designation, findHnsky290Areas, findHnsky290Region, findHnsky290Stars, hnsky290AreaFile, openHnskyCatalog, readHnsky290Area, readHnsky290Header } from 'nebulosa/src/catalogs/stars/hnsky'
 import { deg } from 'nebulosa/src/math/units/angle'
 
-// The tiles of a square field of 4° half width across a right ascension cell border.
+// The tiles of a square field of 4° half width across a right ascension cell border, and the tile of an area number (1 to 290).
 console.log(findHnsky290Areas(deg(11.1), deg(5), deg(4)).map((area) => area.fileName)) // [ "1002.290", "1001.290" ]
+console.log(hnsky290AreaFile(1).fileName) // 0101.290 — the south polar cap
 
 // The g14 database as a Map of File objects keyed g14_0201.290, read from its tar archive.
 const files = await new Bun.Archive(await Bun.file('data/HNSKY_g14.tar').arrayBuffer()).files()
 
 // The stars of a square field of 0.5° half width at RA 0, Dec 0, sorted from the brightest.
-const stars = await findHnsky290Stars(files, 'g14', { rightAscension: 0, declination: 0, radius: deg(0.5) })
+const query = { rightAscension: 0, declination: 0, radius: deg(0.5) }
+const stars = await findHnsky290Stars(files, 'g14', query)
 console.log(stars.length, stars[0].magnitude) // 97 7.1
+
+// The same search with the touched areas and their headers.
+const region = await findHnsky290Region(files, 'g14', query)
+console.log(region.areas.map((area) => area.fileName)) // [ "1001.290", "1032.290", "0901.290", "0932.290" ]
+
+// One tile by hand: its header (description, record size, epoch), then the stars of the field in it.
+const area = region.areas[0]
+const buffer = Buffer.from(await files.get(`g14_${area.fileName}`)!.arrayBuffer())
+const header = readHnsky290Header(buffer)
+console.log(header.epoch, [...readHnsky290Area(header, buffer, area.area, query)].length) // 2025 27 — Julian year, stars of the field in this tile
 
 // The same tiles as a star catalog with an exact cone.
 using catalog = openHnskyCatalog(files, 'g14')
@@ -9559,11 +10658,52 @@ const catalog = new ListCatalog([
 console.log((await catalog.queryCone(deg(120), 0, deg(10))).length) // 1
 console.log((await catalog.queryBox(deg(359.7), deg(0.3), deg(-0.1), deg(10))).length) // 2
 
-// The tagged form with filters, streamed one entry at a time.
+// A triangle and a convex polygon, with [rightAscension, declination] vertices in radians.
+console.log((await catalog.queryTriangle([deg(110), deg(-5)], [deg(130), deg(-5)], [deg(120), deg(10)])).length) // 1
+console.log(
+	(
+		await catalog.queryPolygon([
+			[deg(358), deg(-2)],
+			[deg(2), deg(-2)],
+			[deg(2), deg(8)],
+			[deg(358), deg(8)],
+		])
+	).length,
+) // 2
+
+// The tagged form with filters, collected or streamed one entry at a time.
+console.log((await catalog.queryRegion({ kind: 'cone', centerRA: 0, centerDEC: 0, radius: deg(10), limit: 1 })).length) // 1
 for await (const star of catalog.streamRegion({ kind: 'box', minRA: deg(90), maxRA: deg(140), minDEC: 0, maxDEC: deg(20), limit: 1 })) console.log(star)
 
 // What a provider receives: a cone at RA 2° reaches across 0 and is split in two boxes.
 console.log(normalizeStarCatalogQuery({ kind: 'cone', centerRA: deg(2), centerDEC: deg(40), radius: deg(5) }).preselectionBoxes.length) // 2
+```
+
+### Stellarium Geodesic Grid
+
+The Stellarium geodesic grid divides the unit sphere into 20 icosahedron faces, each recursively split into four spherical triangles. Level L has 20 × 4^L local zones, numbered from zero; the four children of zone z are 4z through 4z + 3. Equatorial Cartesian directions have x toward RA 0, y toward RA 90° and z toward the north pole. Use this module to locate directions or select candidate zones for custom spatial queries; the file-backed reader is documented in [Stellarium Star Catalog](#stellarium-star-catalog).
+
+A direction on a shared boundary is assigned deterministically with Stellarium's own tests and tie order. The catalog also has an extra global zone, numbered `stellariumLocalZoneCount(level)`, which has no triangle: locating a direction on the grid does not tell whether its star record is stored in that global zone, so catalog readers must always scan it.
+
+A zone cover walks the subdivision tree without materializing the full grid and returns, per level, ascending runs of zones that are either wholly inside the region or candidates that still require an exact per-object test; the selection is conservative and can include zones with no matching object. The built-in classifiers select a cone or a union of non-wrapping RA/Dec boxes (split a box crossing RA 0 in two, or use the preselection boxes of [Star Catalog Interface and Spatial Query](#star-catalog-interface-and-spatial-query)); a custom classifier receives a bounding cap of a zone and returns `outside` only when the cap cannot intersect the region, `inside` only when the whole cap passes, and `border` otherwise.
+
+```ts
+import { stellariumBoxesClassifier, stellariumConeClassifier, stellariumLocalZoneCount, stellariumZoneCover, stellariumZoneForPoint, stellariumZoneTriangle } from 'nebulosa/src/catalogs/stars/stellarium/geodesic'
+import { deg } from 'nebulosa/src/math/units/angle'
+
+// The zone of a unit direction (RA 0, Dec 0) at level 2, and the index of the global zone.
+const direction = [1, 0, 0] as const
+const zone = stellariumZoneForPoint(direction, 2)
+console.log(zone, stellariumLocalZoneCount(2)) // 1 320
+console.log(stellariumZoneTriangle(2, zone)) // three unit corner vectors, counterclockwise from outside
+
+// The zones of levels 2 and 4 that a cone of 1° may touch, as [start, end) runs.
+const cone = stellariumZoneCover(stellariumConeClassifier(direction, deg(1)), [2, 4])
+console.log(cone.ranges.get(2)?.map(({ start, end }) => [start, end])) // [ [ 1, 2 ], [ 4, 5 ], [ 14, 15 ], [ 17, 18 ], [ 20, 21 ], [ 30, 31 ] ]
+
+// The zones of a union of RA/Dec boxes (radians).
+const boxes = stellariumZoneCover(stellariumBoxesClassifier([{ minRA: 0, maxRA: deg(1), minDEC: deg(-1), maxDEC: deg(1) }]), [2])
+console.log(boxes.ranges.get(2)) // runs of { start, end, inside }
 ```
 
 ### Stellarium Nebulae Catalog
@@ -9599,33 +10739,6 @@ for await (const { prefix, id, name } of readNamesDat(namesFile)) {
 }
 ```
 
-### Stellarium Geodesic Grid
-
-The Stellarium geodesic grid divides the unit sphere into 20 icosahedron faces, each recursively split into four spherical triangles. Level L has 20 × 4^L local zones, numbered from zero; the four children of zone z are 4z through 4z + 3. Equatorial Cartesian directions have x toward RA 0, y toward RA 90° and z toward the north pole. Use this module to locate directions or select candidate zones for custom spatial queries; the file-backed reader is documented in [Stellarium Star Catalog](#stellarium-star-catalog).
-
-A direction on a shared boundary is assigned deterministically with Stellarium's own tests and tie order. The catalog also has an extra global zone, numbered `stellariumLocalZoneCount(level)`, which has no triangle: locating a direction on the grid does not tell whether its star record is stored in that global zone, so catalog readers must always scan it.
-
-A zone cover walks the subdivision tree without materializing the full grid and returns, per level, ascending runs of zones that are either wholly inside the region or candidates that still require an exact per-object test; the selection is conservative and can include zones with no matching object. The built-in classifiers select a cone or a union of non-wrapping RA/Dec boxes (split a box crossing RA 0 in two, or use the preselection boxes of [Star Catalog Interface and Spatial Query](#star-catalog-interface-and-spatial-query)); a custom classifier receives a bounding cap of a zone and returns `outside` only when the cap cannot intersect the region, `inside` only when the whole cap passes, and `border` otherwise.
-
-```ts
-import { stellariumBoxesClassifier, stellariumConeClassifier, stellariumLocalZoneCount, stellariumZoneCover, stellariumZoneForPoint, stellariumZoneTriangle } from 'nebulosa/src/catalogs/stars/stellarium/geodesic'
-import { deg } from 'nebulosa/src/math/units/angle'
-
-// The zone of a unit direction (RA 0, Dec 0) at level 2, and the index of the global zone.
-const direction = [1, 0, 0] as const
-const zone = stellariumZoneForPoint(direction, 2)
-console.log(zone, stellariumLocalZoneCount(2)) // 1 320
-console.log(stellariumZoneTriangle(2, zone)) // three unit corner vectors, counterclockwise from outside
-
-// The zones of levels 2 and 4 that a cone of 1° may touch, as [start, end) runs.
-const cone = stellariumZoneCover(stellariumConeClassifier(direction, deg(1)), [2, 4])
-console.log(cone.ranges.get(2)?.map(({ start, end }) => [start, end])) // [ [ 1, 2 ], [ 4, 5 ], [ 14, 15 ], [ 17, 18 ], [ 20, 21 ], [ 30, 31 ] ]
-
-// The zones of a union of RA/Dec boxes (radians).
-const boxes = stellariumZoneCover(stellariumBoxesClassifier([{ minRA: 0, maxRA: deg(1), minDEC: deg(-1), maxDEC: deg(1) }]), [2])
-console.log(boxes.ranges.get(2)) // runs of { start, end, inside }
-```
-
 ### Stellarium Star Catalog
 
 Since version 25.1, Stellarium distributes its star catalog (Gaia DR3 merged with Hipparcos) as one binary file per level, `stars_<level>_<type>v<major>_<minor>.cat`, in the `stars/hip_gaia3` directory of the installation, with a manifest (`defaultStarsConfig.json`, or the user's `starsConfig.json`) that lists the files and their MD5 checksums. Each level is a faintness slice (level 0 holds the stars brighter than about V = 6, level 5 those from V = 12 to about 13.75) indexed by the [Stellarium Geodesic Grid](#stellarium-geodesic-grid) subdivided `level` times, plus one global zone for the stars that Stellarium keeps outside the triangles, such as Sirius. Inside a zone the records are sorted by increasing magnitude. Bright levels use a record with the full space motion and the Hipparcos number, fainter levels a compact one with position, proper motion and parallax, and the faintest level only the position. The files must be obtained from a Stellarium installation or its download page; Nebulosa does not download them.
@@ -9639,7 +10752,9 @@ import { openStellariumStarCatalog } from 'nebulosa/src/catalogs/stars/stellariu
 import { deg, toMas } from 'nebulosa/src/math/units/angle'
 
 // The stars/hip_gaia3 directory of Stellarium 25.x with the levels 0 to 5 installed; levels 0 to 2 are required.
+// Same as await new StellariumStarCatalog(options).open(root); closed by close() or at the end of the scope.
 await using catalog = await openStellariumStarCatalog('/path/to/stars/hip_gaia3', { requiredLevels: [0, 1, 2] })
+console.log(catalog.isOpen, catalog.root) // true and the opened directory
 console.log(
 	catalog.levels.map((level) => [level.level, level.recordCount]),
 	catalog.missingLevels,
@@ -9655,6 +10770,10 @@ for await (const star of catalog.streamRegion({ kind: 'cone', centerRA: deg(266.
 // One record by its address, and the MD5 audit of the opened files against the manifest.
 console.log((await catalog.get(sirius.level, sirius.zone, sirius.recordNumber))?.hipId) // 32349
 console.log((await catalog.verifyChecksums()).map((result) => result.matches))
+
+// The cumulative I/O counters of the queries (bytes read, zones and records scanned...), and their reset.
+console.log(catalog.diagnostics.bytesRead, catalog.diagnostics.zonesScanned)
+catalog.resetDiagnostics()
 ```
 
 ### Tiled Sky Catalog
@@ -9667,13 +10786,30 @@ The tile functions select a square field of half width `radius` in declination a
 
 ```ts
 import type { StarCatalogEntry } from 'nebulosa/src/catalogs/stars/catalog'
-import { createTiledSkyGeometry, createTiledStarRawRecord, findTiledStarAreas, readTiledStarHeader, scanTiledStarRecords, TILED_STAR_DEC_SCALE, TILED_STAR_RA_SCALE, TiledStarCatalog, type TiledStarFileHeader, type TiledStarRawRecord } from 'nebulosa/src/catalogs/stars/tiled.catalog'
+import {
+	createTiledSkyGeometry,
+	createTiledStarRawRecord,
+	findTiledStarAreas,
+	findTiledStarRegion,
+	readTiledStarArea,
+	readTiledStarHeader,
+	scanTiledStarRecords,
+	TILED_STAR_DEC_SCALE,
+	TILED_STAR_RA_SCALE,
+	tiledStarAreaFile,
+	TiledStarCatalog,
+	type TiledStarFileHeader,
+	type TiledStarRawRecord,
+} from 'nebulosa/src/catalogs/stars/tiled.catalog'
 import { PIOVERTWO } from 'nebulosa/src/core/constants'
 import { deg } from 'nebulosa/src/math/units/angle'
 
 // A tiling of a south cap, a band of 4 cells between -30° and +30°, and a north cap (boundaries in radians).
 const geometry = createTiledSkyGeometry([1, 4, 1], [-PIOVERTWO, -deg(30), deg(30), PIOVERTWO], '.demo')
 console.log(findTiledStarAreas(geometry, deg(100), 0, deg(2)).map((area) => area.fileName)) // [ "0202.demo" ]
+
+// The descriptor of a 1-based area number: its band, its cell and its file name.
+console.log(tiledStarAreaFile(geometry, 3)) // { area: 3, ring: 2, index: 2, fileName: "0202.demo", ... }
 
 // A real tile: the south polar cap of the ASTAP d05 database, scanned record by record.
 const buffer = Buffer.from(await Bun.file('data/d05_0101.1476').arrayBuffer())
@@ -9685,10 +10821,17 @@ for (const record of scanTiledStarRecords(header, buffer, createTiledStarRawReco
 	break
 }
 
+// A materializer turns the reused cursor into a star; the square field of a tile, and of a tile collection.
+const star = (area: number, record: Readonly<TiledStarRawRecord>) => ({ area, rightAscension: record.raRaw * TILED_STAR_RA_SCALE, declination: record.decRaw * TILED_STAR_DEC_SCALE, magnitude: record.magnitude })
+const query = { rightAscension: 0, declination: deg(-89.5), radius: deg(0.5), magnitudeLimit: 10.5 }
+console.log([...readTiledStarArea(header, buffer, 1, query, star)].length) // 4
+const capGeometry = createTiledSkyGeometry([1, 1], [-PIOVERTWO, deg(-87.42857143), PIOVERTWO], '.1476')
+console.log((await findTiledStarRegion({ 'd05_0101.1476': buffer }, 'd05', capGeometry, query, 2000, 'demo .1476', star)).stars.length) // 4
+
 // A catalog on top of the engine: the geometry, the default epoch, a label and the database; only buildEntry is needed.
 class DemoCatalog extends TiledStarCatalog<StarCatalogEntry, 'd05'> {
 	constructor() {
-		super(createTiledSkyGeometry([1, 1], [-PIOVERTWO, deg(-87.42857143), PIOVERTWO], '.1476'), 2000, 'demo .1476', 'd05')
+		super(capGeometry, 2000, 'demo .1476', 'd05')
 	}
 
 	protected buildEntry(record: Readonly<TiledStarRawRecord>, header: TiledStarFileHeader) {
@@ -9699,6 +10842,11 @@ class DemoCatalog extends TiledStarCatalog<StarCatalogEntry, 'd05'> {
 const catalog = new DemoCatalog()
 catalog.open({ 'd05_0101.1476': buffer })
 console.log((await catalog.queryCone(0, deg(-89.5), deg(0.5))).length) // 374
+
+// The database, whether any of its tiles is present, one tile loaded and cached, and one record by area and record number.
+console.log(catalog.database, catalog.hasAnyAreaFile(), (await catalog.loadArea(2)) === undefined) // d05 true true — tile 2 is absent
+console.log(await catalog.get('d05', 1, 173)) // the entry of record 173 of tile 1, or undefined
+
 catalog.close()
 ```
 
@@ -9715,14 +10863,17 @@ import { deg } from 'nebulosa/src/math/units/angle'
 // The zone of a declination: 0.2° strips from the south pole.
 console.log(ucac4ZoneForDec(deg(-90)), ucac4ZoneForDec(deg(0)), ucac4ZoneForDec(deg(0.2)), ucac4ZoneForDec(deg(90))) // 1 451 452 900
 
-// Opens the root directory of the downloaded catalog.
+// Opens the root directory of the downloaded catalog; same as await new Ucac4Catalog().open(root).
 const catalog = await openUcac4Catalog('/path/to/ucac4')
+
+// The opened directory, and whether it holds at least one zone file.
+console.log(catalog.root, await catalog.hasAnyZoneFile())
 
 // A cone of 0.1°: each entry carries its native zone and record number.
 const cone = await catalog.queryCone(deg(10), deg(0.07), deg(0.1))
 console.log(cone.map((entry) => [entry.zone, entry.recordNumber, entry.magnitude]))
 
-// One star by its zone and record number (from 1), or undefined beyond the end of the zone.
+// One star by its zone and record number (from 1), or undefined beyond the end of the zone; readRawRecord is the same read.
 console.log(await catalog.get(451, 1))
 
 await catalog.close()
@@ -9753,6 +10904,10 @@ const provider = { get: (client: never, name: string) => mountManager.get(client
 // Reads the configured devices of the server (the address is an example) and polls them every 1000 ms.
 const client = new AlpacaClient('http://localhost:11111', { handler, poolingInterval: 1000 }, provider)
 await client.start()
+
+// Replays every device definition to the handler, like an INDI getProperties; the managers reach the
+// devices through the client's sendText, sendNumber and sendSwitch.
+client.getProperties()
 
 // Connecting through the manager becomes a REST call; capabilities appear after the next polls.
 const mount = mountManager.get(client, 'Mount Simulator (Mount 0)')!
@@ -9807,7 +10962,10 @@ discovery.addPort(11111)
 
 // Binds 0.0.0.0 on the discovery port 32227 and answers each probe with {"AlpacaPort":11111}.
 await discovery.start()
-console.log(discovery.running, discovery.port) // whether it runs, and the bound UDP port
+console.log(discovery.running, discovery.host, discovery.port) // whether it runs, the bound address (also ip), and the bound UDP port
+
+// Stops announcing a port; the socket keeps answering for the others.
+discovery.removePort(11111)
 
 discovery.stop()
 ```
@@ -9825,23 +10983,39 @@ import { AlpacaGuideDirection } from 'nebulosa/src/devices/alpaca/types'
 // One wrapper per device type on the same Alpaca server (the address is an example).
 const api = new AlpacaApi('http://localhost:11111')
 
-// The configured devices: name, type, device number and unique ID.
+// AlpacaManagementApi: the configured devices, with name, type, device number and unique ID.
 const devices = await api.management.configuredDevices()
 if (devices.ok) console.log(devices.value)
 
 // Every device member takes the zero-based device number first and resolves { ok, value } or an error.
+// AlpacaDeviceApi, the base of every class: connect, disconnect, isConnected and the bulk deviceState.
 await api.telescope.connect(0)
+console.log(await api.telescope.deviceState(0))
 
-// An asynchronous slew in ASCOM units (right ascension in hours, declination in degrees), then its state.
+// The members are named after the ASCOM ones, with get, set, is and can prefixes for properties.
+// AlpacaTelescopeApi: an asynchronous slew in ASCOM units (right ascension in hours, declination in degrees), then its state.
 await api.telescope.slewToCoordinatesAsync(0, 5.5, -20)
 console.log(await api.telescope.isSlewing(0))
 
-// A 1.5 s light exposure and a 500 ms guide pulse to the east.
+// AlpacaCameraApi: a 1.5 s light exposure and a 500 ms guide pulse to the east.
 await api.camera.startExposure(0, 1.5, true)
 await api.camera.pulseGuide(0, AlpacaGuideDirection.EAST, 500)
 
 // Once isImageReady is true, the frame in the ImageBytes encoding, as an ArrayBuffer.
 const image = await api.camera.getImageArray(0)
+
+// AlpacaFilterWheelApi, AlpacaFocuserApi and AlpacaRotatorApi: a slot, an absolute position in steps, and a sky angle in degrees.
+await api.filterWheel.setPosition(0, 2)
+await api.focuser.move(0, 12000)
+await api.rotator.moveAbsolute(0, 90)
+
+// AlpacaCoverCalibratorApi and AlpacaDomeApi: open the cover, light the panel at brightness 128, and turn the dome to azimuth 180°.
+await api.coverCalibrator.open(0)
+await api.coverCalibrator.on(0, 128)
+await api.dome.slewToAzimuth(0, 180)
+
+// AlpacaSafetyMonitorApi and AlpacaObservingConditionsApi: the safe flag and the ambient temperature in °C.
+console.log(await api.safetyMonitor.isSafe(0), await api.observingConditions.getTemperature(0))
 ```
 
 ### ASCOM Alpaca Server
@@ -9853,6 +11027,7 @@ Alpaca clients address a device by its type and number, so each device gets a nu
 ```ts
 import { AlpacaDiscoveryServer } from 'nebulosa/src/devices/alpaca/discovery'
 import { AlpacaServer, makeImageBytesFromFits } from 'nebulosa/src/devices/alpaca/server'
+import { defaultDeviceNumberProvider } from 'nebulosa/src/devices/alpaca/types'
 import { IndiClient, IndiClientHandlerSet } from 'nebulosa/src/devices/indi/client'
 import { FocuserManager } from 'nebulosa/src/devices/indi/manager/focuser'
 import { MountManager } from 'nebulosa/src/devices/indi/manager/mount'
@@ -9866,9 +11041,14 @@ await client.connect('localhost', 7624)
 // Serves the mount and the focuser over Alpaca on an ephemeral port of the loopback.
 const server = new AlpacaServer({ mount: mountManager, focuser: focuserManager })
 server.start('localhost', 0)
+console.log(server.running, server.host, server.port) // whether it listens, the bound host and HTTP port
 
 // The devices as /management/v1/configureddevices lists them.
 console.log(server.configuredDevices())
+
+// The device number a client addresses: by default this stable hash of the type and the name.
+const [mount] = mountManager.list()
+console.log(defaultDeviceNumberProvider(mount, 'telescope'))
 
 // Announces the HTTP port to Alpaca discovery probes.
 const discovery = new AlpacaDiscoveryServer()
@@ -9880,6 +11060,12 @@ const bytes = makeImageBytesFromFits(Buffer.from(await Bun.file('data/NGC3372-16
 
 discovery.stop()
 server.stop()
+
+// Embedded in an existing Bun.serve instead of start(): serve server.routes and subscribe to the managers
+// with listen(); unlisten() unsubscribes and forgets the devices.
+using http = Bun.serve({ hostname: 'localhost', port: 0, routes: server.routes })
+server.listen()
+server.unlisten()
 ```
 
 ### Device Availability Lifecycle
@@ -9893,7 +11079,7 @@ import { IndiClientHandlerSet } from 'nebulosa/src/devices/indi/client'
 import { FocuserManager } from 'nebulosa/src/devices/indi/manager/focuser'
 import { ClientSimulator } from 'nebulosa/src/devices/indi/simulator/client'
 import { FocuserSimulator } from 'nebulosa/src/devices/indi/simulator/focuser'
-import { DeviceLifecycle } from 'nebulosa/src/devices/orchestration/device.lifecycle'
+import { affectsDeviceQuiescence, DeviceLifecycle, isDeviceQuiescent } from 'nebulosa/src/devices/orchestration/device.lifecycle'
 import { OperationCoordinator } from 'nebulosa/src/devices/orchestration/operation'
 import { ResourceArbiter, resourceKey } from 'nebulosa/src/devices/orchestration/resource'
 
@@ -9919,6 +11105,9 @@ console.log(arbiter.availability(key)) // 'available'
 focuserManager.moveIn(focuser, 500)
 console.log(arbiter.availability(key)) // 'unavailable'
 
+// The default verifier, and whether a changed device field can alter its answer.
+console.log(isDeviceQuiescent(focuser), affectsDeviceQuiescence(focuser, 'moving')) // false true
+
 stop()
 lifecycle.dispose()
 simulator.dispose()
@@ -9939,10 +11128,10 @@ import { CameraManager } from 'nebulosa/src/devices/indi/manager/camera'
 import { CameraSimulator } from 'nebulosa/src/devices/indi/simulator/camera'
 import { ClientSimulator } from 'nebulosa/src/devices/indi/simulator/client'
 import { DeviceLifecycle } from 'nebulosa/src/devices/orchestration/device.lifecycle'
-import { OperationCoordinator } from 'nebulosa/src/devices/orchestration/operation'
+import { OperationCoordinator, successfulOperationResult } from 'nebulosa/src/devices/orchestration/operation'
 import { ResourceArbiter, resourceKey } from 'nebulosa/src/devices/orchestration/resource'
-import { autoSubFolderName, CameraCapturer } from 'nebulosa/src/observation/capture/capture'
-import { type CameraCaptureStart, DEFAULT_CAMERA_CAPTURE_START } from 'nebulosa/src/observation/capture/types'
+import { autoSubFolderName, CameraCapturer, configureCameraExposure } from 'nebulosa/src/observation/capture/capture'
+import { type CameraCaptureStart, DEFAULT_CAMERA_CAPTURE_START, exposureTimeIn } from 'nebulosa/src/observation/capture/types'
 
 const cameraManager = new CameraManager()
 const arbiter = new ResourceArbiter()
@@ -9951,6 +11140,7 @@ const lifecycle = new DeviceLifecycle(arbiter, coordinator)
 lifecycle.observe(cameraManager)
 
 // The capturer listens to the camera manager; publish receives every decoded frame and its path.
+// The write and decode hooks default to writeFrameExclusively and decodeCameraBlobFromBase64.
 using capturer = new CameraCapturer(cameraManager, arbiter, { capturesDir: tmpdir(), publish: (frame, path) => console.log(path) })
 
 const client = new ClientSimulator('Client Simulator', new IndiClientHandlerSet([cameraManager]))
@@ -9960,7 +11150,18 @@ cameraManager.connect(camera)
 while (arbiter.availability(resourceKey(camera)) !== 'available') await Bun.sleep(10)
 
 // Two 100 ms frames, 0.5 s apart, auto-saved under a folder per night.
-const request: CameraCaptureStart = { ...structuredClone(DEFAULT_CAMERA_CAPTURE_START), exposureTime: 100, exposureTimeUnit: 'millisecond', exposureMode: 'fixed', count: 2, delay: 0.5, autoSave: true }
+const request: CameraCaptureStart = { ...structuredClone(DEFAULT_CAMERA_CAPTURE_START), exposureTime: 100, exposureTimeUnit: 'millisecond', exposureMode: 'fixed', count: 2, delay: 0.5, autoSave: true, autoSubFolderMode: 'noon' }
+console.log(exposureTimeIn(request.exposureTime, request.exposureTimeUnit, 'second')) // 0.1 s
+
+// Device events of a camera no capture owns go to its watcher; the call returns the unregistration.
+const unwatch = capturer.watch(camera, { updated: (_, property) => console.log(property) })
+
+// A feature that owns the camera applies the sensor settings of a request without exposing.
+await coordinator.start('preview', [{ key: resourceKey(camera), device: camera }], () => {
+	configureCameraExposure(cameraManager, camera, request)
+	return successfulOperationResult(undefined)
+}).result
+unwatch()
 
 // Runs as its own operation tree; started resolves when the first exposure is Busy.
 const capture = capturer.start(coordinator, camera, request, { listener: (event) => console.log(event.state) })
@@ -9969,6 +11170,18 @@ await capture.started
 // Resolves after cleanup and release; each frame carries its path and exposure instants (ms).
 const result = await capture.result
 if (result.ok) console.log(result.value.frameCount, result.value.frames[0].exposureStartedMonotonic)
+
+// A suspendable loop pauses after the frame in flight and lends the camera to a reservation, then resumes.
+const loop = capturer.start(coordinator, camera, { ...request, exposureMode: 'loop' }, { suspendable: true })
+await loop.started
+const flip = arbiter.reserve({ id: 'flip-1', kind: 'meridianFlip' }, [])
+const paused = flip.ok ? await loop.suspend(flip.reservation, new AbortController().signal) : undefined
+if (paused?.ok) paused.suspension.resume()
+
+// stop() keeps the frame in flight; cancel() would abort it.
+loop.stop()
+await loop.result
+if (flip.ok) flip.reservation.release()
 
 // 02:00 UTC on 2026-10-10 at offset 0 min belongs to the night of October 9.
 console.log(autoSubFolderName(Date.UTC(2026, 9, 10, 2), 'noon', 0)) // '2026-10-09'
@@ -9984,7 +11197,7 @@ A device command usually completes long after it is sent: the driver accepts a m
 Some work cannot be cancelled at all, such as an external plate solver or an HFD measurement reading a frame from disk. `awaitCooperativeJob` gives it a strictly cooperative timeout: the job receives a signal that aborts at the deadline, and is then still awaited until it ends, so a file it reads is never moved while it runs; a job that ignores the abort is reported as unresponsive. These waits are the building blocks of the [Device Commanders](#device-commanders) and usually run inside the signal of a [Device Operations](#device-operations) context.
 
 ```ts
-import { awaitCooperativeJob, waitForDeviceState } from 'nebulosa/src/devices/orchestration/operation.wait'
+import { abortableDelay, abortReason, awaitCooperativeJob, settlesWithin, settleWithSignal, waitForDeviceState } from 'nebulosa/src/devices/orchestration/operation.wait'
 
 // A toy device whose position reaches 100 steps 50 ms after the command.
 const listeners = new Set<(position: number) => void>()
@@ -10008,18 +11221,34 @@ console.log(moved) // { ok: true, value: 100 }
 
 // A job that ignores its signal: aborted at 50 ms, still awaited until it ends at 120 ms.
 console.log(await awaitCooperativeJob(() => Bun.sleep(120), { signal: new AbortController().signal, timeout: 50, abortGrace: 50 })) // { kind: 'timeout', unresponsive: true }
+
+// A delay that ends early as a failed result when the signal aborts, mapped by abortReason to a failure reason.
+const controller = new AbortController()
+setTimeout(() => controller.abort('timeout'), 10)
+console.log(await abortableDelay(1000, controller.signal), abortReason(controller.signal)) // { ok: false, reason: 'timeout' } timeout
+
+// Whether a promise settles within 50 ms, without cancelling it; and a promise that rejects once a signal aborts.
+console.log(await settlesWithin(Bun.sleep(120), 50)) // false
+await settleWithSignal(Bun.sleep(10), new AbortController().signal)
 ```
 
 ### Device Commanders
 
 The INDI managers send a command and return at once: `FocuserManager.moveTo` only writes the target, and the model changes later when the driver reports it. Commanders are the operation-aware layer above them, one per device type (camera cooling, cover, dew heater, dome, flat panel, focuser, guide output, mount, power, rotator, weather and filter wheel). Each command acquires the device, checks the capability and the connection, sends the command, waits until the driver reports the expected state (see [Device Command Waiting](#device-command-waiting)), and resolves an `OperationResult` without throwing. This holds even for commands that move nothing, so a command the driver ignores ends as a timeout rather than as a success.
 
-Every command takes an `OperationScope` first: the `OperationCoordinator` runs it as its own operation tree, an `OperationContext` nests it in a larger feature that already holds the device, and a [Device Reservations](#device-reservations) scope runs it inside a session. A device that is moving, leased elsewhere, or not yet verified by the [Device Availability Lifecycle](#device-availability-lifecycle) is refused as `busy`. When a motion fails, times out or is cancelled, the commander stops the device and waits for it to settle before the lease is released. `stopMotion` is the emergency stop: it takes no scope and acquires nothing, so it also reaches a device moving under another owner.
-
-Mount targets may be given in any supported frame (J2000, JNOW, horizontal, ecliptic, galactic) and are converted to the equinox of date at the command time (see [INDI Mount Control](#indi-mount-control)). A guide pulse cannot always be cut short, because the standard INDI guider interface and the Alpaca bridge ignore a zero-duration stop, so a cancelled pulse holds its guide output until it has ended. For a meridian flip, `MountCommander.executeMeridianFlip` sends the flip and reports the evidence the motion left (whether the pier side changed and where the mount stopped) rather than a verdict. Commanders listen to their manager's device events, so dispose of one only after the operations that use it have settled.
+Every command takes an `OperationScope` first: the `OperationCoordinator` runs it as its own operation tree, an `OperationContext` nests it in a larger feature that already holds the device, and a [Device Reservations](#device-reservations) scope runs it inside a session. A device that is moving, leased elsewhere, or not yet verified by the [Device Availability Lifecycle](#device-availability-lifecycle) is refused as `busy`. When a motion fails, times out or is cancelled, the commander stops the device and waits for it to settle before the lease is released. `stopMotion` is the emergency stop: it takes no scope and acquires nothing, so it also reaches a device moving under another owner. A target is first resolved to one the driver can reach and will echo back, since a value outside the device range would only end in a timeout. The mount and the guide output have their own topics, [Mount Commander](#mount-commander) and [Guide Output Commander](#guide-output-commander). Commanders listen to their manager's device events, so dispose of one only after the operations that use it have settled.
 
 ```ts
-import { FocuserCommander } from 'nebulosa/src/devices/commanders/focuser'
+import { CameraCommander } from 'nebulosa/src/devices/commanders/camera'
+import { CoverCommander } from 'nebulosa/src/devices/commanders/cover'
+import { DewHeaterCommander } from 'nebulosa/src/devices/commanders/dewheater'
+import { DomeCommander, domeAzimuth } from 'nebulosa/src/devices/commanders/dome'
+import { FlatPanelCommander } from 'nebulosa/src/devices/commanders/flatpanel'
+import { FocuserCommander, focuserPosition } from 'nebulosa/src/devices/commanders/focuser'
+import { PowerCommander } from 'nebulosa/src/devices/commanders/power'
+import { RotatorCommander, rotatorAngle } from 'nebulosa/src/devices/commanders/rotator'
+import { WeatherCommander } from 'nebulosa/src/devices/commanders/weather'
+import { WheelCommander, wheelSlot } from 'nebulosa/src/devices/commanders/wheel'
 import { IndiClientHandlerSet } from 'nebulosa/src/devices/indi/client'
 import { FocuserManager } from 'nebulosa/src/devices/indi/manager/focuser'
 import { ClientSimulator } from 'nebulosa/src/devices/indi/simulator/client'
@@ -10027,6 +11256,7 @@ import { FocuserSimulator } from 'nebulosa/src/devices/indi/simulator/focuser'
 import { DeviceLifecycle } from 'nebulosa/src/devices/orchestration/device.lifecycle'
 import { OperationCoordinator, successfulOperationResult } from 'nebulosa/src/devices/orchestration/operation'
 import { ResourceArbiter, resourceKey } from 'nebulosa/src/devices/orchestration/resource'
+import { deg, toDeg } from 'nebulosa/src/math/units/angle'
 
 const focuserManager = new FocuserManager()
 const arbiter = new ResourceArbiter()
@@ -10055,8 +11285,64 @@ const scan = coordinator.start('focusScan', [{ key: resourceKey(focuser), device
 
 console.log(await scan.result) // { ok: true, value: 1200 }
 
+// Relative moves in steps; syncTo, reverse and setBacklash are confirmed the same way, and position reads the steps.
+await focuserCommander.moveIn(coordinator, focuser, 100)
+await focuserCommander.moveOut(coordinator, focuser, 50)
+console.log(focuserCommander.position(focuser)) // 1150
+
 // The emergency stop needs no scope.
 await focuserCommander.stopMotion(focuser)
+
+// cameraManager, coverManager, dewHeaterManager, domeManager, flatPanelManager, powerManager, rotatorManager,
+// weatherManager, wheelManager: the managers of the other devices, observed by the same lifecycle; camera, cover,
+// dewHeater, dome, panel, power, rotator, weather and wheel: connected devices of those managers.
+using cameraCommander = new CameraCommander(cameraManager)
+using coverCommander = new CoverCommander(coverManager)
+using dewHeaterCommander = new DewHeaterCommander(dewHeaterManager)
+using domeCommander = new DomeCommander(domeManager)
+using flatPanelCommander = new FlatPanelCommander(flatPanelManager)
+using powerCommander = new PowerCommander(powerManager)
+using rotatorCommander = new RotatorCommander(rotatorManager)
+using weatherCommander = new WeatherCommander(weatherManager)
+using wheelCommander = new WheelCommander(wheelManager)
+
+// Camera cooling: the cooler switch, then a sensor set-point in °C.
+await cameraCommander.cooler(coordinator, camera, true)
+await cameraCommander.temperature(coordinator, camera, -10)
+
+// Cover: park closes and unpark opens; stopMotion halts it.
+await coverCommander.park(coordinator, cover)
+
+// Dew heater and flat panel: a duty cycle and an intensity in the driver's range; the panel also has enable, disable and toggle.
+await dewHeaterCommander.dutyCycle(coordinator, dewHeater, 60)
+await flatPanelCommander.intensity(coordinator, panel, 128)
+
+// Dome azimuth in radians; also moveToAltitude, moveBy, move, syncTo, home, park, unpark, setPark, openShutter,
+// closeShutter, slave, setSpeed, setBacklash, setBacklashSteps and stopMotion.
+await domeCommander.moveTo(coordinator, dome, deg(90))
+
+// An open-ended manual rotation keeps the dome leased until stopped; manualMove and manualMoveOf reach it later.
+const rotation = await domeCommander.startManualMove(coordinator, dome, 'CLOCKWISE')
+if (rotation.ok) await rotation.value.stop()
+
+// Power box: switch a channel; voltage and dutyCycle set the variable and dew outputs.
+await powerCommander.toggle(coordinator, power, power.dc[0], true)
+
+// Rotator angle in degrees; also home, syncTo, reverse and stopMotion.
+await rotatorCommander.moveTo(coordinator, rotator, 45)
+
+// Weather station controls: the update period in seconds, the averaging window in hours, and a forced re-read.
+await weatherCommander.setUpdatePeriod(coordinator, weather, 30)
+await weatherCommander.setAveragePeriod(coordinator, weather, 0)
+await weatherCommander.refresh(coordinator, weather)
+
+// Filter wheel: a 0-based slot, and the slot names that later captures stamp into their frames.
+await wheelCommander.moveTo(coordinator, wheel, 3)
+await wheelCommander.setNames(coordinator, wheel, ['L', 'R', 'G', 'B', 'Ha', 'SII', 'OIII', 'Dark'])
+
+// The targets the commands resolve: a focuser position (steps), a wheel slot, a rotator angle (degrees) and a
+// dome azimuth (radians), each rounded, wrapped or clamped to the device; domeAltitude does the same for altitude.
+console.log(focuserPosition(focuser, 1e9), wheelSlot(wheel, 2.6), rotatorAngle(rotator, 370), toDeg(domeAzimuth(dome, deg(-10)))) // 100000 3 10 350 with the simulators
 
 lifecycle.dispose()
 simulator.dispose()
@@ -10091,9 +11377,19 @@ const waitForAbort = (context: OperationContext) => new Promise<OperationResult<
 const capture = coordinator.start('capture', [{ key: 'camera' }], waitForAbort)
 console.log((await coordinator.start('capture', [{ key: 'camera' }], waitForAbort).result).ok) // false
 
+// A running tree by its id; completed trees are no longer retained.
+console.log(coordinator.get(capture.id)?.kind) // 'capture'
+
 // Cancelling resolves once cleanup finished; the result reports the cancellation reason.
 await capture.cancel('timeout')
 console.log(await capture.result) // { ok: false, reason: 'timeout' }
+
+// Bulk cancellation: by id, by resource key, by physical device key, by client id, or every tree.
+await coordinator.cancel(capture.id)
+await coordinator.cancelByResource('camera')
+await coordinator.cancelByDevice('camera')
+await coordinator.cancelByClient('client-id')
+await coordinator.cancelAll('disconnected')
 ```
 
 ### Device Reservations
@@ -10116,17 +11412,24 @@ const session = { id: 'sequence-1', kind: 'sequencer' }
 const reserved = arbiter.reserve(session, [{ key: 'mount' }, { key: 'camera' }])
 if (!reserved.ok) throw new Error('devices in use')
 const { reservation } = reserved
+console.log(arbiter.reservationOwnerOf('mount')) // { id: 'sequence-1', kind: 'sequencer' }
 
 // Outside the reservation, a manual slew is refused.
 console.log(await coordinator.start('slew', [{ key: 'mount' }], () => successfulOperationResult(undefined)).result) // { ok: false, reason: 'busy', error: 'mount is reserved by sequencer sequence-1' }
 
-// A scope whose trees acquire under the reservation token.
+// A scope whose trees acquire under the reservation token; tokenScope(reservation.token) builds the same from the token alone.
 const scope = coordinator.reservedScope(reservation)
 const capture = scope.start('capture', [{ key: 'camera' }], (context) => new Promise<OperationResult<void>>((resolve) => context.signal.addEventListener('abort', () => resolve(failedOperationResult('aborted')), { once: true })))
 
 // Pause: cancels the running trees and keeps the reservation usable.
 await coordinator.drainByReservationOwner(session)
 console.log(await capture.result) // { ok: false, reason: 'aborted' }
+
+// Grows the same reservation, then lends the focuser to another live reservation without freeing it in between.
+reservation.extend([{ key: 'focuser' }])
+const flip = arbiter.reserve({ id: 'flip-1', kind: 'meridianFlip' }, [])
+if (flip.ok) arbiter.transfer(reservation, flip.reservation, ['focuser'])
+console.log(arbiter.reservationOwnerOf('focuser')) // { id: 'flip-1', kind: 'meridianFlip' }
 
 // Stop: closes the reservation to new trees, then releases the devices.
 await coordinator.cancelByReservationOwner(session)
@@ -10140,10 +11443,10 @@ Two features must not command the same hardware at once: a filter that turns dur
 
 A resource is identified by a string key. `resourceKey(device)` is the key an operation acquires to command a device, normally its hardware id, which every INDI interface of one physical device shares: a camera and its integrated wheel, a focuser and the rotator of a combined unit, or a cover and the flat panel of a flip-flat are one resource. The exception is the ST4 guide port of a camera, which has a key of its own so guiding can pulse while the same camera exposes. Resources with no device behind them, such as a remote guiding session, use a `logical:` key.
 
-A key is unavailable for independent causes: the device lifecycle (disconnected or busy, see [Device Availability Lifecycle](#device-availability-lifecycle)), a quarantine (a pending driver payload that must be discarded first), and a guide pulse whose end was not yet observed (see [Device Commanders](#device-commanders)). Clearing one cause leaves the others in place. Durable ownership across operations is covered by [Device Reservations](#device-reservations).
+A key is unavailable for independent causes: the device lifecycle (disconnected or busy, see [Device Availability Lifecycle](#device-availability-lifecycle)), a quarantine (a pending driver payload that must be discarded first), and a guide pulse whose end was not yet observed (see [Guide Output Commander](#guide-output-commander)). Clearing one cause leaves the others in place. Durable ownership across operations is covered by [Device Reservations](#device-reservations).
 
 ```ts
-import { ResourceArbiter } from 'nebulosa/src/devices/orchestration/resource'
+import { deviceKey, guideOutputKey, ResourceArbiter, resourceDevice, resourceKey } from 'nebulosa/src/devices/orchestration/resource'
 
 const arbiter = new ResourceArbiter()
 const capture = { id: 'capture-1', kind: 'capture' }
@@ -10157,6 +11460,9 @@ const acquired = arbiter.acquire(capture, [{ key: camera }, { key: 'logical:guid
 if (!acquired.ok) throw new Error('busy')
 console.log(arbiter.availability(camera)) // 'leased'
 
+// Who holds what: by owner and key, the holders of a key, and the keys of an owner.
+console.log(arbiter.owns(capture, camera), arbiter.ownersOf(camera), arbiter.resourcesOf(capture)) // true [{ id: 'capture-1', kind: 'capture' }] ['camera-hardware-id', 'logical:guider:local']
+
 // All or nothing: the free focuser is not taken because the camera is refused.
 const refused = arbiter.acquire(focus, [{ key: camera }, { key: 'focuser-hardware-id' }])
 console.log(refused.ok ? [] : refused.conflicts) // [{ key: 'camera-hardware-id', by: 'lease', ownerId: 'capture-1', ownerKind: 'capture', causes: [] }]
@@ -10168,6 +11474,22 @@ arbiter.markUnavailable(camera, 'quarantine')
 arbiter.markUnavailable(camera)
 arbiter.markAvailable(camera, 'quarantine')
 console.log(arbiter.snapshot(camera).causes) // ['lifecycle']
+
+// device: Device — a managed INDI device. Its keys: the capability, the guide port, and the physical device;
+// resourceDevice resolves a sub-device proxy to its parent.
+console.log(resourceKey(device), guideOutputKey(device), deviceKey(device), resourceDevice(device).name) // for a focuser: its hardware id, '<hardwareId>:guideOutput', its hardware id, and its own name
+
+// What the lifecycle does on device events: block every capability of one physical device, or one capability
+// (markCapabilityAvailable clears it), and drop a device's association with a key.
+arbiter.markDeviceUnavailable(deviceKey(device))
+arbiter.markCapabilityUnavailable(resourceKey(device))
+arbiter.markCapabilityAvailable(resourceKey(device))
+arbiter.disassociate(resourceKey(device), device)
+
+// A whole client while its server reconnects, and the owners a disconnect must reach (by device or by client).
+arbiter.markClientUnavailable('client-id')
+console.log(arbiter.ownersOfDevice(deviceKey(device)), arbiter.ownersOfClient('client-id'))
+arbiter.markClientAvailable('client-id')
 ```
 
 ### Firmata Accelerometer
@@ -10293,7 +11615,7 @@ await client.connect('192.168.0.50', 3030)
 // A 16x2 module on a PCF8574 backpack at 0x27 (polling disabled), with the common backpack wiring.
 const lcd = new HD44780(new PCF8574(client, 0x27, 0))
 
-// Runs the 4-bit initialization (blocking, about 60 ms) for 16 columns and 2 rows.
+// Starts the expander and runs the 4-bit initialization (blocking, about 60 ms) for 16 columns and 2 rows.
 lcd.begin(16, 2)
 
 // Writes text at a column and row (zero-based).
@@ -10306,6 +11628,21 @@ lcd.print('RH 64 %')
 lcd.createChar(0, [0x00, 0x0a, 0x1f, 0x1f, 0x1f, 0x0e, 0x04, 0x00])
 lcd.write(0)
 
+// A blinking block at the cursor; cursor/noCursor, display/noDisplay and noBlink toggle the other display controls.
+lcd.blink()
+
+// Shifts the whole display one column; scrollDisplayRight shifts the other way.
+lcd.scrollDisplayLeft()
+
+// Text direction and automatic shift on write; leftToRight and noAutoscroll restore the defaults.
+lcd.rightToLeft()
+lcd.autoscroll()
+
+// Returns the cursor and the shift home, then clears the screen.
+lcd.home()
+lcd.clear()
+
+// Turns the backlight off; backlight() turns it on.
 lcd.noBacklight()
 lcd.stop()
 ```
@@ -10389,15 +11726,34 @@ rda.addListener((device) => console.log(device.frequency, device.stereo, device.
 rda.start()
 rda.frequency = 104.3
 
-// A hardware seek up to the next station, and the volume (0–100, in 16 chip steps).
+// A hardware seek up to the next station, and one channel down (frequencyUp moves one channel up).
 rda.seek('up')
+rda.frequencyDown()
+
+// The volume (0–100, in 16 chip steps); volumeUp and volumeDown move one chip step.
 rda.volume = 50
+rda.volumeUp()
+
+// Mutes and unmutes the audio (the same as the muted property); stereo = false forces mono.
+rda.mute()
+rda.unmute()
+rda.stereo = false
+
+// Chip-specific audio settings: the bass boost and the high-impedance audio output.
+rda.bassBoost = true
+rda.audioOutputHighZ = false
 rda.stop()
 
-// A TEA5767 on the Japanese band; frequencyUp() moves one 100 kHz step.
+// A TEA5767 on the Japanese band; frequencyUp() and frequencyDown() move one 100 kHz step.
 const tea = new TEA5767(client, TEA5767.ADDRESS, 1000, { frequency: 80, band: 'japan' })
 tea.start()
 tea.frequencyUp()
+
+// A software seek, one step at a time, down to the next station, wrapping at the band edge.
+tea.seek('down', true)
+
+// Receiver settings of the TEA5767: soft mute; highCutControl, stereoNoiseCancelling and highSideInjection likewise.
+tea.softMute = true
 tea.stop()
 ```
 
@@ -10420,9 +11776,19 @@ await client.connect('192.168.0.50', 3030)
 const transmitter = new KT0803L(client, KT0803L.ADDRESS, { frequency: 100.1, stereo: false, transmitPower: 4, preEmphasis: 50 })
 transmitter.start()
 
-// Each change rewrites the registers that carry it: one 50 kHz channel up, and +6 dB of audio gain.
+// Each change rewrites the registers that carry it: one 50 kHz channel up (frequencyDown moves down), and +6 dB of audio gain.
 transmitter.frequencyUp()
 transmitter.gain = 6
+
+// Mutes and unmutes the audio input (the same as the muted property); stereo = true enables the stereo encoder.
+transmitter.mute()
+transmitter.unmute()
+transmitter.stereo = true
+
+// The RF gain code and the bass boost in dB; preEmphasis, deviation, pilotToneHigh, automaticLevelControl,
+// automaticPowerDown, powerAmplifierBias and audioEnhancement are set the same way.
+transmitter.transmitPower = 8
+transmitter.bassBoost = 5
 
 // Standby.
 transmitter.stop()
@@ -10447,6 +11813,9 @@ await client.connect('192.168.0.50', 3030)
 const sht21 = new SHT21(client)
 sht21.addListener((device) => console.log(device.humidity, device.temperature))
 sht21.start()
+
+// Sends the soft-reset command to the SHT21.
+sht21.reset()
 sht21.stop()
 
 // An AM2320 at 0x5C, read the same way.
@@ -10484,6 +11853,9 @@ expander.flush()
 // Pin 0 back to an input, and the level of pin 7 from the latest snapshot.
 expander.pinMode(0, PinMode.INPUT)
 console.log(expander.pinRead(7))
+
+// Requests a fresh port snapshot without waiting for the next poll.
+expander.refresh()
 expander.stop()
 ```
 
@@ -10496,7 +11868,7 @@ Illuminance, in lux, is the luminous flux per unit area weighted by the photopic
 ```ts
 import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
 import { FirmataClientOverTcp } from 'nebulosa/src/devices/firmata/client.tcp'
-import { BH1750, TEMT6000, TSL2561 } from 'nebulosa/src/devices/firmata/sensors/luxmeter'
+import { BH1750, MAX44009, TEMT6000, TSL2561 } from 'nebulosa/src/devices/firmata/sensors/luxmeter'
 
 // A client over TCP to a board that runs Firmata (the address and port are an example).
 const client = new FirmataClientOverTcp(new ESP8266())
@@ -10506,7 +11878,15 @@ await client.connect('192.168.0.50', 3030)
 const bh1750 = new BH1750(client)
 bh1750.addListener((device) => console.log(device.lux))
 bh1750.start()
+
+// Clears the data register of the BH1750.
+bh1750.reset()
 bh1750.stop()
+
+// A MAX44009 at 0x4A in continuous mode, polled every 1000 ms, for the widest range.
+const max44009 = new MAX44009(client, MAX44009.ADDRESS, 1000, { continuousMode: true })
+max44009.start()
+max44009.stop()
 
 // A TSL2561 at 16x gain and 101 ms integration, for dim light; a clipped reading is SATURATED_LUX.
 const tsl2561 = new TSL2561(client, TSL2561.ADDRESS, 1000, { gain: 16, integrationTime: 101 })
@@ -10579,10 +11959,19 @@ class Probe extends ADCPeripheral<Probe> implements Thermometer {
 	}
 }
 
-// start() puts the pin in analog mode and enables its reports, which then feed calculate().
+// The listener receives the reading on every change; samples counts every completed reading.
 const probe = new Probe(client)
-probe.addListener((device) => console.log(device.temperature, device.samples))
+const listener = (device: Probe) => console.log(device.temperature, device.samples)
+probe.addListener(listener)
+
+// start() puts the pin in analog mode and enables its reports, which then feed calculate().
 probe.start()
+
+// Whether every attached listener has received its first reading.
+console.log(probe.initialized)
+
+// Detaches the listener; stop() disables the reports, and disposing the peripheral (using) also stops it.
+probe.removeListener(listener)
 probe.stop()
 ```
 
@@ -10595,7 +11984,7 @@ A real-time clock keeps the calendar time on a coin cell while the board is off,
 ```ts
 import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
 import { FirmataClientOverTcp } from 'nebulosa/src/devices/firmata/client.tcp'
-import { DS3231 } from 'nebulosa/src/devices/firmata/components/rtc'
+import { DS1307, DS3231 } from 'nebulosa/src/devices/firmata/components/rtc'
 
 // A client over TCP to a board that runs Firmata (the address and port are an example).
 const client = new FirmataClientOverTcp(new ESP8266())
@@ -10612,6 +12001,12 @@ rtc.update(2026, 10, 5, 1, 21, 30, 15)
 // Sets it from the host clock in the host's local time zone.
 rtc.sync()
 rtc.stop()
+
+// A DS1307 in place of the DS3231 (both answer at 0x68) has the same fields, update() and sync().
+const ds1307 = new DS1307(client)
+ds1307.start()
+ds1307.sync(new Date())
+ds1307.stop()
 ```
 
 ### Firmata-to-INDI Bridge
@@ -10626,6 +12021,7 @@ Devices are connected with the usual INDI `CONNECTION` switch. A measurement vec
 import { FirmataIndiClient } from 'nebulosa/src/devices/firmata/adapters/indi.client'
 import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
 import { FirmataClientOverTcp } from 'nebulosa/src/devices/firmata/client.tcp'
+import { DS3231 } from 'nebulosa/src/devices/firmata/components/rtc'
 import { SHT21 } from 'nebulosa/src/devices/firmata/sensors/hygrometer'
 
 // A Firmata client over TCP to a board (the address and port are an example).
@@ -10635,8 +12031,9 @@ await firmata.connect('192.168.0.50', 3030)
 // The bridge publishes INDI events to the handler, normally the device managers.
 const bridge = new FirmataIndiClient(firmata, 'esp8266', { handler: { setNumberVector: (_, message) => console.log(message.device, message.name, message.elements) } })
 
-// Resolves true once the board finished its initialization.
+// Resolves true once the board finished its initialization; ready is the current state.
 await bridge.whenReady()
+console.log(bridge.ready)
 
 // An SHT21 becomes the Weather and Auxiliary device 'SHT21' with WEATHER_PARAMETERS.
 const weather = bridge.createPeripheral(new SHT21(firmata))
@@ -10644,9 +12041,87 @@ const weather = bridge.createPeripheral(new SHT21(firmata))
 // The same as the INDI CONNECTION switch: starts the peripheral and publishes its vectors.
 bridge.sendSwitch({ device: 'SHT21', name: 'CONNECTION', elements: { CONNECT: true, DISCONNECT: false } })
 
-// Disconnects the device, then tears every device down.
+// A DS3231 becomes the writable clock device 'DS3231', connected directly.
+const clock = bridge.createPeripheral(new DS3231(firmata))
+await clock.connect()
+console.log(clock.isConnected)
+
+// Writes the TIME vector to the clock (sendText routes text vectors the same way), and TIME_SYNC writes the host clock.
+bridge.sendNumber({ device: 'DS3231', name: 'TIME', elements: { YEAR: 2026, MONTH: 10, DAY: 5, HOUR: 21, MINUTE: 30, SECOND: 15 } })
+bridge.sendSwitch({ device: 'DS3231', name: 'TIME_SYNC', elements: { SYNC: true } })
+
+// Replays the definitions and current values of every device (or of one, by device and property name).
+bridge.getProperties()
+
+// Disconnects one device, removes another, then tears every device down.
 weather.disconnect()
+clock.dispose()
 bridge.dispose()
+```
+
+### Guide Output Commander
+
+A guide pulse is a timed command: the mount or the camera ST4 port drives one axis for the requested milliseconds and stops by itself. The driver reports the pulse Busy and later Idle, but both reports may be late or missing, and a pulse cannot always be cut short, because the standard INDI guider interface and the Alpaca bridge ignore a zero-duration stop. A pulse therefore has a quiescence window, computed from the instant it was dispatched: a Busy may still begin until its acknowledgement deadline, and the axis is surely stopped by its end. Until the end of a pulse has been observed on the device, its guide output stays blocked in the [Device Resource Arbitration](#device-resource-arbitration), so no other operation starts with an axis still drifting.
+
+`GuideOutputCommander` turns pulses into operations under the guide port key (`guideOutputKey`): a mount's guide output and the mount are one resource, while a camera's ST4 port is separate and pulses while the camera exposes. A single pulse resolves after the device reported it busy and then stopped, perpendicular pulses of one correction run together, and a cancelled pulse holds the device until it has ended. A guiding loop that issues one correction per frame dispatches it synchronously inside the operation that already holds the port. The windows are in milliseconds of `performance.now()`. [Guide Pulse Loop](#guide-pulse-loop) and [Guiding Calibration](#guiding-calibration) are built on it, and [INDI Guide Output](#indi-guide-output) is the manager below it.
+
+```ts
+import { GuideOutputCommander, guidePulseReleaseBound, guidePulseWindow } from 'nebulosa/src/devices/commanders/guideoutput'
+import { IndiClientHandlerSet } from 'nebulosa/src/devices/indi/client'
+import { GuideOutputManager } from 'nebulosa/src/devices/indi/manager/guideoutput'
+import { MountManager } from 'nebulosa/src/devices/indi/manager/mount'
+import { ClientSimulator } from 'nebulosa/src/devices/indi/simulator/client'
+import { MountSimulator } from 'nebulosa/src/devices/indi/simulator/mount'
+import { DeviceLifecycle } from 'nebulosa/src/devices/orchestration/device.lifecycle'
+import { OperationCoordinator, successfulOperationResult } from 'nebulosa/src/devices/orchestration/operation'
+import { guideOutputKey, ResourceArbiter } from 'nebulosa/src/devices/orchestration/resource'
+
+const mountManager = new MountManager()
+const guideOutputManager = new GuideOutputManager(mountManager)
+const arbiter = new ResourceArbiter()
+const coordinator = new OperationCoordinator(arbiter)
+const lifecycle = new DeviceLifecycle(arbiter, coordinator)
+lifecycle.observe(mountManager)
+lifecycle.observe(guideOutputManager)
+
+// The commander needs the arbiter to block a guide port whose pulse end was not yet observed.
+using guideCommander = new GuideOutputCommander(guideOutputManager, arbiter)
+
+const client = new ClientSimulator('Client Simulator', new IndiClientHandlerSet([mountManager, guideOutputManager]))
+const simulator = new MountSimulator('Mount Simulator', client)
+mountManager.connect(mountManager.get(client, simulator.name)!)
+const guide = guideOutputManager.get(client, simulator.name)!
+while (arbiter.availability(guideOutputKey(guide)) !== 'available') await Bun.sleep(10)
+
+// The window of a 2000 ms pulse dispatched at 0 ms, and the longest wait to release the port after stopping one of 2500 ms.
+console.log(guidePulseWindow(0, 2000), guidePulseReleaseBound(2500)) // { busyAckDeadline: 2250, endsBy: 4500 } 20500
+
+// Guide rates as fractions of the sidereal rate (right ascension, declination), confirmed by the driver.
+await guideCommander.setGuideRate(coordinator, guide, 0.5, 0.5)
+
+// A 500 ms pulse north, then perpendicular pulses of one correction in one operation.
+console.log(await guideCommander.pulse(coordinator, guide, 'NORTH', 500)) // { ok: true, value: undefined }
+await guideCommander.pulseAxes(coordinator, guide, [
+	{ direction: 'NORTH', duration: 300 },
+	{ direction: 'EAST', duration: 600 },
+])
+
+// Inside an operation that holds the port: dispatch sends at once and returns the pulse window.
+await coordinator.start('guiding', [{ key: guideOutputKey(guide), device: guide }], (context) => {
+	console.log(guideCommander.dispatch(context, guide, 'WEST', 200), guideCommander.dispatchedPulseWindow(guide)) // { busyAckDeadline, endsBy } in ms, twice
+	return successfulOperationResult(undefined)
+}).result
+
+// Emergency stops that acquire nothing: one direction, or several.
+await guideCommander.stopPulse(guide, 'NORTH')
+await guideCommander.stopPulses(guide, ['NORTH', 'EAST'])
+
+// A pulse sent by someone else, of at most 1000 ms: blocks the port until its end is observed.
+guideCommander.assumeDispatchedPulse(guide, 1000)
+console.log(arbiter.snapshot(guideOutputKey(guide)).causes) // ['guidePulse']
+
+lifecycle.dispose()
+simulator.dispose()
 ```
 
 ### INDI Camera Control
@@ -10678,6 +12153,9 @@ manager.connect(camera)
 await waitUntil(() => camera.connected)
 manager.enableBlob(camera)
 
+// mount, focuser, wheel, rotator: optional devices of their managers, whose state the driver stamps into the frame header.
+manager.snoop(camera, mount, focuser, wheel, rotator)
+
 // Cool the sensor to -10 °C; camera.coolerPower is in percent.
 manager.cooler(camera, true)
 manager.temperature(camera, -10)
@@ -10690,12 +12168,17 @@ manager.offset(camera, 10)
 manager.frameType(camera, 'LIGHT')
 manager.transferFormat(camera, 'FITS')
 
+// The capture format by name (one of camera.frameFormats, such as MONO or RGB on the simulator) and BLOB compression.
+manager.frameFormat(camera, camera.frameFormats[0].name)
+manager.compression(camera, false)
+
 // A 1 s exposure: exposuring is true while it runs, and the image reaches the handler when it ends.
 manager.startExposure(camera, 1)
 await waitUntil(() => camera.exposuring)
 await waitUntil(() => !camera.exposuring)
 
-// stopExposure(camera) aborts an exposure without an image.
+// Aborts an exposure in progress without an image, then stops BLOB delivery.
+manager.stopExposure(camera)
 manager.disableBlob(camera)
 ```
 
@@ -10736,9 +12219,20 @@ simulator.setBin(2, 2)
 simulator.setTargetTemperature(-10)
 console.log(simulator.imageWidth, simulator.imageHeight) // 128 128 (binned pixels)
 
+// What the next frame is rendered from: the sensor, the snooped mount and its centre (radians), and the scene.
+console.log(simulator.sensorWidth, simulator.sensorHeight, simulator.frameType, simulator.cfaPattern, simulator.channels)
+// activeMountSimulator is the simulator behind the mount, and sceneTime the instant of its simulated clock.
+console.log(simulator.activeMount?.name, simulator.reportedCenter, simulator.sceneTime, simulator.activeFocuser, simulator.activeRotator, simulator.activeFilter)
+console.log(simulator.catalogSourceType, simulator.seeing, simulator.telescopeFocalLength, simulator.telescopeAperture) // focal length and aperture in mm
+
 // A 0.5 s exposure; the image reaches CameraManager handlers as the CCD1 BLOB when it ends.
 simulator.startExposure(0.5)
 console.log(simulator.isExposuring) // true
+
+// abortExposure ends it without a frame; pulse drives the ST4 port of the camera, in ms.
+simulator.abortExposure()
+simulator.pulse('NORTH', 500)
+console.log(simulator.isPulsing) // true
 ```
 
 ### INDI Client Simulator
@@ -10766,9 +12260,13 @@ handler.add(manager)
 using client = new ClientSimulator('simulator', handler)
 const simulator = new FlatPanelSimulator('Flat Panel Simulator', client, options)
 
+// The constructor registered the simulator under its name (register and unregister do it by hand).
+console.log(client.get(simulator.name) === simulator) // true
+
 // The manager created the device from DRIVER_INFO; connecting defines the panel vectors.
 const panel = manager.get(client, simulator.name)!
 manager.connect(panel)
+console.log(simulator.isConnected) // true
 
 // Save the configuration, change it, and load it back (asynchronous).
 manager.intensity(panel, 90)
@@ -10776,6 +12274,9 @@ simulator.saveProperties()
 manager.intensity(panel, 0)
 await simulator.loadProperties()
 console.log(panel.intensity.value) // 90
+
+// disconnect() removes the device vectors, as the CONNECTION switch does.
+simulator.disconnect()
 
 // dispose disconnects, deletes the device, and unregisters it from the client.
 simulator.dispose()
@@ -10836,6 +12337,59 @@ await Bun.sleep(COVER_MOVE_TIME_MS + 100)
 simulator.unpark()
 await Bun.sleep(100)
 simulator.stop()
+simulator.park()
+```
+
+### INDI Device Managers
+
+An INDI server publishes devices only as named property vectors, and a device appears, changes and disappears whenever its driver defines, updates or deletes them. A device manager is the layer that turns that stream into typed devices: one manager per device type reads the `DRIVER_INTERFACE` bitmask of `DRIVER_INFO`, creates a device of its type when the matching bit is set, applies every later vector to the device's fields with the library units, and reports each device as added, updated and removed. The same managers serve every `Client` (INDI, Alpaca, Firmata and the simulator), which is why everything above them is backend-independent.
+
+A device has two identities: `id`, unique per interface view, and `hardwareId`, shared by every interface of one physical device (a camera and its built-in filter wheel). A capability that a device of another type publishes, such as the guide port of a mount, the temperature probe of a focuser or the heater of a cover, becomes a sub-device: a proxy of its own type over the parent, created by the capability's manager through a provider that resolves the parent. Each typed topic ([INDI Camera Control](#indi-camera-control), [INDI Mount Control](#indi-mount-control) and the others) adds its commands to this shared lifecycle; the raw vectors stay available in [INDI Property Registry](#indi-property-registry).
+
+```ts
+import { IndiClientHandlerSet } from 'nebulosa/src/devices/indi/client'
+import { DeviceInterfaceType, findDeviceTypes, type Focuser, isFocuser, isInterfaceType, isSubDevice, isThermometer } from 'nebulosa/src/devices/indi/device'
+import { FocuserManager } from 'nebulosa/src/devices/indi/manager/focuser'
+import { ThermometerManager } from 'nebulosa/src/devices/indi/manager/thermometer'
+import { ClientSimulator } from 'nebulosa/src/devices/indi/simulator/client'
+import { FocuserSimulator } from 'nebulosa/src/devices/indi/simulator/focuser'
+
+// The thermometer manager takes the focuser manager as the provider of its parent devices.
+const focusers = new FocuserManager()
+const thermometers = new ThermometerManager(focusers)
+const handler = new IndiClientHandlerSet([focusers, thermometers])
+
+// Lifecycle events of one device type; updated names the changed field, such as connected or position.
+const events = { added: (device: Focuser) => console.log('added', device.name), updated: (device: Focuser, property: string) => property === 'connected' && console.log(device.connected), removed: (device: Focuser) => console.log('removed', device.name) }
+focusers.addHandler(events)
+
+using client = new ClientSimulator('focuser', handler)
+const simulator = new FocuserSimulator('Focuser Simulator', client) // logs: added Focuser Simulator
+
+// The managed devices (a Set, optionally of one client), their number, and a lookup by id, hardware id or name.
+const names = Array.from(focusers.list(client), (e) => e.name)
+console.log(names, focusers.length, focusers.has(client, 'Focuser Simulator')) // ['Focuser Simulator'] 1 true
+const focuser = focusers.get(client, 'Focuser Simulator')!
+console.log(focuser.type, focuser.interfaces) // 'focuser' ['focuser']
+
+// Connect through the CONNECTION switch; ask requests the definitions again; simulation toggles a driver's SIMULATION switch.
+focusers.connect(focuser)
+focusers.ask(focuser)
+focusers.simulation(focuser, false)
+
+// The probe of the focuser is a thermometer sub-device: another id, the same hardware id.
+const thermometer = thermometers.get(client, 'Focuser Simulator')!
+console.log(isFocuser(focuser), isThermometer(focuser), isSubDevice(thermometer), thermometer.hardwareId === focuser.hardwareId) // true true true true
+
+// The device types of a DRIVER_INTERFACE bitmask, and one bit test; isCamera, isMount and the other is* guards test a device.
+console.log(findDeviceTypes(DeviceInterfaceType.CCD | DeviceInterfaceType.FILTER), isInterfaceType(0x1008, DeviceInterfaceType.ROTATOR)) // ['camera', 'wheel'] true
+
+// Disconnect, and the device is removed when its driver deletes it (add and remove register or drop one by hand).
+focusers.disconnect(focuser)
+simulator.dispose() // logs: removed Focuser Simulator
+
+// removeHandler unsubscribes from the events.
+focusers.removeHandler(events)
 ```
 
 ### INDI Dew Heater
@@ -10903,17 +12457,34 @@ await waitUntil(() => dome.connected)
 manager.moveTo(dome, deg(30))
 await waitUntil(() => dome.slewing)
 await waitUntil(() => !dome.slewing)
-console.log(toDeg(dome.azimuth.value)) // 30
+console.log(toDeg(dome.azimuth.value)) // ≈ 30
 manager.moveBy(dome, deg(-10))
 
-// Sync declares the current azimuth without moving.
+// The shutter altitude, for drivers that publish it, and continuous rotation started and stopped by direction.
+manager.moveToAltitude(dome, deg(45))
+manager.move(dome, 'CLOCKWISE', true)
+manager.move(dome, 'CLOCKWISE', false)
+
+// Sync declares the current azimuth without moving; home slews to the reference position.
 manager.syncTo(dome, deg(100))
+manager.home(dome)
+
+// Rotation speed in RPM, controller backlash compensation and its size in driver steps, and driver-side slaving.
+manager.speed(dome, 3)
+manager.backlash(dome, true)
+manager.backlashSteps(dome, 20)
+manager.slave(dome, false)
 
 // The shutter is asynchronous: OPENING, then OPEN.
 manager.openShutter(dome)
 await waitUntil(() => dome.shutterState === 'OPEN')
 
-// Close and park at the end of the night; stop() aborts any motion.
+// Store the current azimuth as the park position; unpark releases a parked dome; stop() aborts any motion.
+manager.setPark(dome)
+manager.unpark(dome)
+manager.stop(dome)
+
+// Close and park at the end of the night.
 manager.closeShutter(dome)
 manager.park(dome)
 ```
@@ -10953,6 +12524,22 @@ client.sendNumber({ device: simulator.name, name: 'ABS_DOME_POSITION', elements:
 // The shutter transition is timed; its target is visible meanwhile.
 simulator.openShutter()
 console.log(simulator.shutterTarget, simulator.isMoving) // OPEN true
+
+// stop() aborts the motion and the shutter, and turns autosync off; activeMount is the followed mount, if any.
+simulator.stop()
+console.log(simulator.activeMount)
+
+// Sync declares an azimuth at once; setPark stores the current one as the park position.
+simulator.syncTo(200)
+simulator.setPark()
+
+// Slews to the home and park azimuths; unpark releases the park, and closeShutter starts the closing transition.
+simulator.home()
+await waitUntil(() => !simulator.isMoving)
+simulator.park()
+await waitUntil(() => !simulator.isMoving)
+simulator.unpark()
+simulator.closeShutter()
 ```
 
 ### INDI Filter Wheel
@@ -11107,6 +12694,10 @@ console.log(focuser.position.value) // 52000
 manager.moveIn(focuser, 1000)
 manager.moveOut(focuser, 500)
 
+// Invert the motor direction, and switch the driver's backlash compensation, when the driver allows it.
+manager.reverse(focuser, false)
+manager.backlash(focuser, true)
+
 // Sync redefines the current position without moving; stop() aborts a move.
 manager.syncTo(focuser, 30000)
 manager.stop(focuser)
@@ -11127,6 +12718,7 @@ import { FocuserSimulator } from 'nebulosa/src/devices/indi/simulator/focuser'
 using client = new ClientSimulator('focuser', new IndiClientHandlerSet())
 using simulator = new FocuserSimulator('Focuser Simulator', client, { backlash: 100 })
 simulator.connect()
+console.log(simulator.backlash) // 100
 
 // waitUntil(condition): a local helper that awaits Bun.sleep until condition() is true.
 // Absolute move, then an outward relative move: the gear train is loaded in the outward direction.
@@ -11142,15 +12734,20 @@ await waitUntil(() => simulator.isMoving)
 await waitUntil(() => !simulator.isMoving)
 console.log(simulator.position, simulator.effectivePosition) // 55000 55100
 
-// The simulated temperature, in °C.
-console.log(simulator.temperature)
+// The simulated temperature, in °C, and whether temperature compensation is on.
+console.log(simulator.temperature, simulator.isTemperatureCompensationEnabled)
+
+// A sync redefines the position at once and unloads the gear train; stop() aborts a move (Alert, or Idle with stop(false)).
+simulator.syncTo(50000)
+simulator.moveTo(60000)
+simulator.stop()
 ```
 
 ### INDI Guide Output
 
 Autoguiding corrects the tracking of a mount with short pulses: for a given duration, the mount moves one axis at a guide rate, a fraction of the sidereal rate (about 15″ per second of time), so a pulse of `t` milliseconds at rate `r` shifts the pointing by about `r × 15.04″ × t / 1000`. The pulses go through the mount driver or through the ST-4 port of a camera; [Guiding Calibration](#guiding-calibration) measures their effect on the image and [Guide Pulse Loop](#guide-pulse-loop) issues them.
 
-`GuideOutputManager` exposes the timed-guide vectors of a mount or camera as a `'guideOutput'` proxy device over its parent, resolved by the provider (usually the mount manager), and marks the parent with `canPulseGuide`. `pulsing` follows the Busy state of the timed-guide vectors, so a pulse is complete when it turns false. The guide rate is shown as the driver publishes it; INDI mounts publish a fraction of the sidereal rate. A command can be given the proxy or the parent.
+`GuideOutputManager` exposes the timed-guide vectors of a mount or camera as a `'guideOutput'` proxy device over its parent, resolved by the provider (usually the mount manager), and marks the parent with `canPulseGuide`. `pulsing` follows the Busy state of the timed-guide vectors, so a pulse is complete when it turns false. The guide rate is shown as the driver publishes it; INDI mounts publish a fraction of the sidereal rate. A command can be given the proxy or the parent. [Guide Output Commander](#guide-output-commander) turns these pulses into operations that wait for their end.
 
 ```ts
 import { IndiClientHandlerSet } from 'nebulosa/src/devices/indi/client'
@@ -11178,7 +12775,7 @@ await waitUntil(() => mount.connected)
 const guide = guides.get(client, simulator.name)!
 console.log(guide.canPulseGuide, guide.guideRate) // true { rightAscension: 0.5, declination: 0.5 }
 
-// A 500 ms pulse north; pulsing is true until the driver finishes it.
+// A 500 ms pulse north (pulseSouth, pulseWest and pulseEast are the other axes); pulsing is true until the driver finishes it.
 guides.pulseNorth(guide, 500)
 await waitUntil(() => guide.pulsing)
 await waitUntil(() => !guide.pulsing)
@@ -11216,15 +12813,19 @@ manager.alignmentDeletePoint(mount, 1)
 manager.alignmentDeleteLastPoint(mount)
 manager.alignmentSave(mount)
 
-// Clear the database; pointCount follows the driver's report.
+// Reload the saved database, or clear it; pointCount follows the driver's report.
+manager.alignmentLoad(mount)
 manager.alignmentClear(mount)
+
+// Re-initialise the math plugin from the current points, as the database commands do afterwards.
+manager.alignmentInitialize(mount)
 ```
 
 ### INDI Mount Control
 
 A telescope mount points the optical axis at a celestial coordinate and then tracks it against the Earth's rotation. INDI mounts work in JNOW, equatorial coordinates of the current date, while catalogs give J2000 positions, so a target must be converted before it is sent. A German equatorial mount can reach most of the sky from either side of the pier, and the side matters for the meridian flip (see [Meridian Flip Planning](#meridian-flip-planning)); a sync tells the mount where it really points, typically after a plate solve, without moving it.
 
-`MountManager` builds a `Mount` device from the INDI Telescope interface and reflects its vectors onto the shared model that also serves the Alpaca telescope. Coordinates are radians (JNOW), the site latitude and longitude are radians and the elevation a distance in AU (`meter` and `toMeter` convert it), and the time is UTC epoch milliseconds with an offset in minutes. A `mountType` of `'UNKNOWN'` means the mount has not reported one and must not be read as equatorial, and a zero coordinate before `hasEquatorialCoordinate` is a default, not a position. The goto, flip and sync commands select the `ON_COORD_SET` mode before sending the coordinate, while `equatorialCoordinate` sends only the coordinate and therefore uses whichever mode was set last. `moveTo` accepts a target in J2000, JNOW, horizontal, ecliptic or galactic coordinates, as angles or sexagesimal text, and converts it to JNOW; `mountTargetEquatorial` performs that conversion alone. The model follows the driver, and the position is republished while the mount moves, so read it after the slew has ended. Pulse guiding is described in [INDI Guide Output](#indi-guide-output) and the pointing model in [INDI Mount Alignment Subsystem](#indi-mount-alignment-subsystem).
+`MountManager` builds a `Mount` device from the INDI Telescope interface and reflects its vectors onto the shared model that also serves the Alpaca telescope. Coordinates are radians (JNOW), the site latitude and longitude are radians and the elevation a distance in AU (`meter` and `toMeter` convert it), and the time is UTC epoch milliseconds with an offset in minutes. A `mountType` of `'UNKNOWN'` means the mount has not reported one and must not be read as equatorial, and a zero coordinate before `hasEquatorialCoordinate` is a default, not a position. The goto, flip and sync commands select the `ON_COORD_SET` mode before sending the coordinate, while `equatorialCoordinate` sends only the coordinate and therefore uses whichever mode was set last. `moveTo` accepts a target in J2000, JNOW, horizontal, ecliptic or galactic coordinates, as angles or sexagesimal text, and converts it to JNOW; `mountTargetEquatorial` performs that conversion alone. The model follows the driver, and the position is republished while the mount moves, so read it after the slew has ended. Pulse guiding is described in [INDI Guide Output](#indi-guide-output), the pointing model in [INDI Mount Alignment Subsystem](#indi-mount-alignment-subsystem), and commands that wait for the mount in [Mount Commander](#mount-commander).
 
 ```ts
 import { IndiClientHandlerSet } from 'nebulosa/src/devices/indi/client'
@@ -11250,12 +12851,22 @@ await waitUntil(() => mount.connected)
 manager.geographicCoordinate(mount, { latitude: deg(-23), longitude: deg(-46), elevation: meter(760) })
 manager.time(mount, { utc: Date.UTC(2026, 9, 5, 12), offset: -180 })
 
-// Track at the sidereal rate and slew to a JNOW coordinate in radians.
+// The tracking rate and the manual slew rate (one of mount.slewRates, by name).
+manager.trackMode(mount, 'SIDEREAL')
+manager.slewRate(mount, 'SPEED_7')
+
+// Track at the selected rate and slew to a JNOW coordinate in radians.
 manager.tracking(mount, true)
 manager.goTo(mount, hour(3.5), deg(25))
 await waitUntil(() => mount.slewing)
 await waitUntil(() => !mount.slewing)
 console.log(toHour(mount.equatorialCoordinate.rightAscension), toDeg(mount.equatorialCoordinate.declination), mount.pierSide) // hours and degrees of date, and the side of the pier
+
+// Sync declares the JNOW position without moving; flipTo slews forcing the other side of the pier;
+// equatorialCoordinate sends a coordinate with the last selected ON_COORD_SET mode.
+manager.syncTo(mount, hour(3.5), deg(25))
+manager.flipTo(mount, hour(3.5), deg(25))
+manager.equatorialCoordinate(mount, hour(3.5), deg(25))
 
 // A J2000 target as sexagesimal text, converted to JNOW without commanding the mount.
 const [rightAscension, declination] = mountTargetEquatorial(mount, { type: 'J2000', J2000: { x: '05 35 17', y: '-05 23 28' } })
@@ -11265,7 +12876,18 @@ console.log(toHour(rightAscension), toDeg(declination)) // ≈ 5.610 -5.373 in 2
 manager.moveTo(mount, 'goto', { type: 'J2000', J2000: { x: '05 35 17', y: '-05 23 28' } })
 manager.stop(mount)
 
-// Park at the end of the night; tracking stops with it.
+// Manual motion at the slew rate, on and off per direction (moveSouth, moveWest and moveEast likewise).
+manager.moveNorth(mount, true)
+manager.moveNorth(mount, false)
+
+// Home: store the current position, search the mechanical index, or slew to the stored home.
+manager.setHome(mount)
+manager.findHome(mount)
+manager.home(mount)
+
+// Store the current position as the park position and unpark; park at the end of the night, which stops tracking.
+manager.setPark(mount)
+manager.unpark(mount)
 manager.park(mount)
 ```
 
@@ -11279,7 +12901,7 @@ The imperfections are independent families switched on by `SIMULATOR_ERROR_FEATU
 import { IndiClientHandlerSet } from 'nebulosa/src/devices/indi/client'
 import { ClientSimulator } from 'nebulosa/src/devices/indi/simulator/client'
 import { MountSimulator } from 'nebulosa/src/devices/indi/simulator/mount'
-import { deg, hour, toArcsec } from 'nebulosa/src/math/units/angle'
+import { deg, hour, toArcsec, toHour } from 'nebulosa/src/math/units/angle'
 
 using client = new ClientSimulator('mount', new IndiClientHandlerSet())
 using simulator = new MountSimulator('Mount Simulator', client)
@@ -11289,25 +12911,70 @@ simulator.connect()
 simulator.pauseAutomaticTicking()
 simulator.setTime({ utc: Date.UTC(2026, 9, 5, 0), offset: 0 })
 client.sendNumber({ device: simulator.name, name: 'GEOGRAPHIC_COORD', elements: { LAT: -23, LONG: 314, ELEV: 760 } })
+console.log(simulator.utcTime, simulator.latitude, simulator.longitude, simulator.elevation) // simulated UTC ms, and the site
+
+// The local sidereal time of the site at a simulated instant, in radians.
+console.log(toHour(simulator.siderealTimeAt(simulator.utcTime))) // hours
+
+// Tracking mode and manual slew rate; the presets are SPEED_1 (0.5°/s) to SPEED_7 (32°/s).
+simulator.setTrackMode('SIDEREAL')
+simulator.setSlewRate('SPEED_7')
+console.log(simulator.trackMode, simulator.slewRate) // SIDEREAL SPEED_7
 
 // Sync places the axes, then a goto (radians, JNOW) advanced in 0.1 s steps until the slew ends.
 simulator.syncTo(hour(3), deg(20))
 simulator.setTrackingEnabled(true)
 simulator.goTo(hour(4), deg(30))
 while (simulator.isSlewing) simulator.advance(0.1)
+console.log(simulator.isTracking, simulator.pierSide, simulator.mechanical) // tracking, the side of the pier, and the axes (radians)
+
+// flipTo slews to a coordinate on the other side of the pier.
+simulator.flipTo(hour(4), deg(30))
+while (simulator.isSlewing) simulator.advance(0.1)
+
+// Manual motion on one axis at the slew rate (moveSouth, moveWest and moveEast likewise); stop() aborts slews and motion.
+simulator.moveNorth(true)
+simulator.advance(1)
+simulator.moveNorth(false)
+simulator.stop()
 
 // A 1 s pulse north at half the sidereal rate moves the declination by about 0.5 × 15.04 arcsec.
 simulator.setGuideRate(0.5, 0.5)
+console.log(simulator.guideRateRightAscension, simulator.guideRateDeclination) // 0.5 0.5
 const declination = simulator.declination
 simulator.pulse('NORTH', 1000)
+console.log(simulator.isPulsing) // true
 for (let i = 0; i < 30; i++) simulator.advance(0.1)
 console.log(toArcsec(simulator.declination - declination)) // ≈ 7.52 arcsec
+
+// Where the optical axis pointed over the last second (simulated ms): its path length in radians, and RA/Dec samples.
+const end = simulator.utcTime
+const samples = new Float64Array(2 * 16)
+console.log(simulator.boresightPathLength(end - 1000, end), simulator.sampleBoresightTrajectory(end - 1000, end, 16, samples)) // radians, samples written
+// sampleBoresightPath writes RA, Dec and time-weight triples spaced by path length instead.
 
 // Polar misalignment and periodic error: the optical axis no longer matches the reported coordinate.
 client.sendSwitch({ device: simulator.name, name: 'SIMULATOR_ERROR_FEATURES', elements: { ALIGNMENT: true, PERIODIC_ERROR: true } })
 const { reported, boresight } = simulator.pointingState
 console.log(toArcsec(boresight.declination - reported.declination)) // pointing error in declination, arcsec
 console.log(toArcsec(simulator.pointingErrorBound)) // upper bound of the pointing error, arcsec
+
+// The same boresight alone, the geometric pointing model, the worm phase and the tracking-rate drift (radians).
+console.log(simulator.boresight, simulator.pointingModel, simulator.wormPhase, simulator.trackingRateOffset)
+
+// Home: store the current pose, seek the home index, or slew to the stored home.
+simulator.setHome()
+simulator.findHome()
+while (simulator.isHoming) simulator.advance(0.1)
+simulator.home()
+while (simulator.isHoming) simulator.advance(0.1)
+
+// Park: store the current pose as the park position, then park and unpark.
+simulator.setPark()
+simulator.park()
+while (simulator.isParking) simulator.advance(0.1)
+console.log(simulator.isParked) // true
+simulator.unpark()
 ```
 
 ### INDI Power Channels
@@ -11341,10 +13008,10 @@ A driver publishes far more than the device managers turn into typed state: port
 `IndiPropertyRegistry` is an `IndiClientHandler` that keeps every vector of every device a client reports, keyed by client and device name. It stores a copy of each definition (other handlers may mutate the parsed message), merges each update into it, and reports every change to its listeners with a kind: `'metadata'` when a numeric range or the timeout changed, `'feedback'` when the state or the message changed, and `'values'` otherwise. BLOB elements keep only the format and size of their latest delivery; the bytes stay with the handler that consumes them. Records are live objects mutated in place, so a listener that keeps one must copy it. A shared registry passed to the manager constructors must be added to the handler set **before** the managers, so that one copy serves them all; without one, each manager keeps a private registry of the devices it manages.
 
 ```ts
-import { handleDefNumberVector, handleSetNumberVector, IndiClient, IndiClientHandlerSet } from 'nebulosa/src/devices/indi/client'
+import { handleDefNumberVector, handleDefSwitchVector, handleSetNumberVector, IndiClient, IndiClientHandlerSet } from 'nebulosa/src/devices/indi/client'
 import { CameraManager } from 'nebulosa/src/devices/indi/manager/camera'
 import { IndiPropertyRegistry } from 'nebulosa/src/devices/indi/properties'
-import { makeNumberVector } from 'nebulosa/src/devices/indi/types'
+import { findOnSwitch, makeNumberVector, makeSwitchVector } from 'nebulosa/src/devices/indi/types'
 
 // One registry shared by the managers, registered on the client before them.
 const properties = new IndiPropertyRegistry()
@@ -11356,13 +13023,24 @@ const client = new IndiClient({ handler })
 const stop = properties.addListener({ propertyUpdated: (_, device, property, change) => console.log(change.kind, property.name, change.elements) })
 
 // A device of any type is tracked from its first vector, even one no manager supports.
+// The handleDef*/handleSet* functions dispatch a parsed message of each kind (Text, Number, Switch, Light, Blob)
+// to a handler; handleDelProperty deletes; makeTextVector, makeLightVector and makeBlobVector build the other kinds.
 handleDefNumberVector(client, handler, makeNumberVector('Relay Box', 'DELAY', 'Delay', 'Options', 'rw', ['SECONDS', 'Seconds', 1, 0, 60, 0.5, '%.1f'], ['REPEAT', 'Repeat', 3, 1, 10, 1, '%.0f']))
+handleDefSwitchVector(client, handler, makeSwitchVector('Relay Box', 'MODE', 'Mode', 'Options', 'OneOfMany', 'rw', ['PULSE', 'Pulse', true], ['LATCH', 'Latch', false]))
 
 // An update merges into the stored copy; the listener reports a 'values' change of the element SECONDS.
 handleSetNumberVector(client, handler, { device: 'Relay Box', name: 'DELAY', elements: { SECONDS: { name: 'SECONDS', value: 2.5 } } })
 
 const device = properties.device(client, 'Relay Box')!
 console.log(device.properties.DELAY.elementNames, device.properties.DELAY.elements.SECONDS.value) // [ 'SECONDS', 'REPEAT' ] 2.5
+
+// Every device of a client, their count across clients, and one vector by device and name.
+console.log(properties.devices(client).length, properties.length, properties.property(client, 'Relay Box', 'DELAY')?.label) // 1 1 Delay
+
+// The names of the members of a switch vector that are on (selectOnSwitch turns one on under the vector rule).
+console.log(findOnSwitch(properties.property(client, 'Relay Box', 'MODE') as never)) // ['PULSE']
+
+// has(device) tells whether the physical device behind a managed device has vectors.
 stop()
 ```
 
@@ -11370,7 +13048,7 @@ stop()
 
 INDI (Instrument Neutral Distributed Interface) is the device protocol of most Linux astronomy software. An `indiserver` runs one driver per device and speaks XML over TCP (port 7624). A device describes itself as named property vectors of five kinds (text, number, switch, light and BLOB), each with a state (Idle, Ok, Busy or Alert): it announces them with `def*Vector`, updates them with `set*Vector` and withdraws them with `delProperty`, while a client asks for definitions with `getProperties`, chooses BLOB delivery with `enableBLOB`, and requests changes with `new*Vector`. Numbers on the wire may be decimal or sexagesimal (`12:30:36`, `-5 30`) and are in the driver's own units, hours or degrees alike; the format of a `defNumber` is a C printf conversion or INDI's sexagesimal `%<w>.<f>m`.
 
-`IndiClient` is the TCP client: it parses the XML stream in any chunking and dispatches every message to an `IndiClientHandler`; `IndiClientHandlerSet` fans the events out to several handlers, such as the device managers and the [INDI Property Registry](#indi-property-registry). The same `Client` contract is implemented by the Alpaca and Firmata adapters and by the in-process simulator ([INDI Client Simulator](#indi-client-simulator)), which is why the device managers work with all of them. The device model they produce (`nebulosa/src/devices/indi/device`) uses radians for mount, dome and site angles (the rotator angle stays in the driver's degrees) and degrees Celsius for temperatures, and also holds two pieces of mount geometry: the pier side a German equatorial mount would use for a target, and the time until the target's next upper transit. `parseIndiNumber` and `formatIndiNumber` live in `nebulosa/src/devices/indi/number`, which has no runtime dependency and runs in a browser.
+`IndiClient` is the TCP client: it parses the XML stream in any chunking and dispatches every message to an `IndiClientHandler`; `IndiClientHandlerSet` fans the events out to several handlers, such as the device managers and the [INDI Property Registry](#indi-property-registry). The same `Client` contract is implemented by the Alpaca and Firmata adapters and by the in-process simulator ([INDI Client Simulator](#indi-client-simulator)), which is why the device managers work with all of them (see [INDI Device Managers](#indi-device-managers)). The device model they produce (`nebulosa/src/devices/indi/device`) uses radians for mount, dome and site angles (the rotator angle stays in the driver's degrees) and degrees Celsius for temperatures, and also holds two pieces of mount geometry: the pier side a German equatorial mount would use for a target, and the time until the target's next upper transit. `parseIndiNumber` and `formatIndiNumber` live in `nebulosa/src/devices/indi/number`, which has no runtime dependency and runs in a browser.
 
 ```ts
 import { DEFAULT_INDI_PORT, IndiClient } from 'nebulosa/src/devices/indi/client'
@@ -11392,11 +13070,19 @@ const client = new IndiClient({
 
 // Opens the socket to an indiserver and asks for every property definition.
 await client.connect('localhost', DEFAULT_INDI_PORT)
+console.log(client.connected, client.id, client.remoteHost, client.remotePort, client.remoteIp, client.localPort) // the endpoint, and an MD5 id derived from it
+
+// Asks again for the definitions of one device (or of all without arguments).
+client.getProperties({ device: 'CCD Simulator' })
 
 // Commands are serialized as XML, e.g.
 // <newNumberVector device="CCD Simulator" name="CCD_EXPOSURE"><oneNumber name="CCD_EXPOSURE_VALUE">2.5</oneNumber></newNumberVector>
 client.enableBlob({ device: 'CCD Simulator', value: 'Also' })
 client.sendNumber({ device: 'CCD Simulator', name: 'CCD_EXPOSURE', elements: { CCD_EXPOSURE_VALUE: 2.5 } })
+
+// The other kinds of request: a switch and a text vector.
+client.sendSwitch({ device: 'CCD Simulator', name: 'CCD_FRAME_TYPE', elements: { FRAME_DARK: true } })
+client.sendText({ device: 'CCD Simulator', name: 'ACTIVE_DEVICES', elements: { ACTIVE_TELESCOPE: 'Telescope Simulator' } })
 
 // Pier side for a target at 3h, +20° with local sidereal time 1h, and seconds until its upper transit.
 console.log(expectedPierSide(hour(3), deg(20), hour(1)), meridianTimeIn(hour(3), hour(1))) // WEST 7180.340875
@@ -11435,6 +13121,9 @@ await waitUntil(() => rotator.moving)
 await waitUntil(() => !rotator.moving)
 console.log(rotator.angle.value) // 45
 
+// Flip the driver's motor direction.
+manager.reverse(rotator, false)
+
 // Sync redefines the current angle without moving, home returns to the reference, stop() aborts.
 manager.syncTo(rotator, 100)
 manager.home(rotator)
@@ -11461,6 +13150,9 @@ simulator.moveTo(10)
 await waitUntil(() => simulator.isMoving)
 await waitUntil(() => !simulator.isMoving)
 console.log(simulator.angle) // 10
+
+// Turns back to the configured home angle.
+simulator.home()
 
 // The same through the INDI vectors; stop() aborts at the angle reached.
 client.sendNumber({ device: simulator.name, name: 'ABS_ROTATOR_ANGLE', elements: { ANGLE: 90 } })
@@ -11580,8 +13272,15 @@ console.log(weather.temperature, weather.humidity, weather.dewPoint, weather.pre
 // Freshness: epoch ms of the last report of a sensor, and ms elapsed since then.
 console.log(manager.updatedAt(weather, 'temperature'), manager.elapsedSince(weather, 'temperature'))
 
-// Driver controls return whether the driver has the writable property: update period (s) and a forced re-read.
+// The same for the most recent report of any sensor.
+console.log(manager.lastUpdatedAt(weather), manager.lastElapsedSince(weather))
+
+// Which driver controls are writable: the update period, the averaging window and a forced re-read.
+console.log(manager.canSetUpdatePeriod(weather), manager.canSetAveragePeriod(weather), manager.canRefresh(weather))
+
+// Driver controls return whether the driver has the writable property: update period (s), averaging window (h) and a forced re-read.
 manager.setUpdatePeriod(weather, 30)
+manager.setAveragePeriod(weather, 0)
 manager.refresh(weather)
 ```
 
@@ -11610,6 +13309,91 @@ client.sendNumber({ device: simulator.name, name: 'SIMULATOR_WEATHER', elements:
 simulator.refresh()
 ```
 
+### Mount Commander
+
+Commanding a mount has more traps than any other device. The target of a catalog is in J2000 while the mount takes coordinates of the equinox of date, so a conversion made at one instant and compared with a position computed at another disagrees; a slew can stop short, at the wrong place, or be refused with an `Alert`; and a meridian flip may or may not change the side of the pier, which the driver reports only as its own belief. `MountCommander` is the [Device Commanders](#device-commanders) layer of the mount: every command resolves only once the mount reports the commanded state, as an `OperationResult` without throwing, and a failed, timed-out or cancelled slew stops the mount before its lease is released.
+
+A target may be given in any supported frame (J2000, JNOW, horizontal, ecliptic, galactic) and is converted to the equinox of date at the command time, or at the instant the caller passes so that both sides use the same conversion (see [INDI Mount Control](#indi-mount-control)). A slew resolves with where the mount stopped and its pier side; `flip` reports whether a pier side change could be verified. For a meridian flip, `executeMeridianFlip` sends the flip by one of the strategies the mount supports, the driver's own flip or a forced goto to the same target, and reports the evidence the motion left (whether the pier side changed, where it comes from, and how far from the target the mount stopped) rather than a verdict, which belongs to the caller (see [Meridian Flip Planning](#meridian-flip-planning)). Manual motion is open-ended: its handle keeps the mount leased until every direction is stopped.
+
+```ts
+import { meridianFlipStrategies, MountCommander, pierSideProvenance } from 'nebulosa/src/devices/commanders/mount'
+import { IndiClientHandlerSet } from 'nebulosa/src/devices/indi/client'
+import { MountManager } from 'nebulosa/src/devices/indi/manager/mount'
+import { ClientSimulator } from 'nebulosa/src/devices/indi/simulator/client'
+import { MountSimulator } from 'nebulosa/src/devices/indi/simulator/mount'
+import { DeviceLifecycle } from 'nebulosa/src/devices/orchestration/device.lifecycle'
+import { OperationCoordinator } from 'nebulosa/src/devices/orchestration/operation'
+import { ResourceArbiter, resourceKey } from 'nebulosa/src/devices/orchestration/resource'
+import { deg, hour, toDeg, toHour } from 'nebulosa/src/math/units/angle'
+import { meter } from 'nebulosa/src/math/units/distance'
+
+const mountManager = new MountManager()
+const arbiter = new ResourceArbiter()
+const coordinator = new OperationCoordinator(arbiter)
+const lifecycle = new DeviceLifecycle(arbiter, coordinator)
+lifecycle.observe(mountManager)
+using mountCommander = new MountCommander(mountManager)
+
+const client = new ClientSimulator('Client Simulator', new IndiClientHandlerSet([mountManager]))
+const simulator = new MountSimulator('Mount Simulator', client)
+const mount = mountManager.get(client, 'Mount Simulator')!
+mountManager.connect(mount)
+while (arbiter.availability(resourceKey(mount)) !== 'available') await Bun.sleep(10)
+
+// The site (radians, elevation as a distance) and the clock (UTC epoch ms, offset in minutes), each confirmed by the driver.
+await mountCommander.setGeographicCoordinate(coordinator, mount, { latitude: deg(-23), longitude: deg(-46), elevation: meter(760) })
+await mountCommander.setTime(coordinator, mount, { utc: Date.now(), offset: -180 })
+
+// Tracking rate, manual slew rate (by name) and the tracking switch.
+await mountCommander.setTrackMode(coordinator, mount, 'SIDEREAL')
+await mountCommander.setSlewRate(coordinator, mount, 'SPEED_7')
+await mountCommander.setTracking(coordinator, mount, true)
+
+// Sync declares where the mount points, here in JNOW radians, and resolves once it reports that position.
+await mountCommander.sync(coordinator, mount, { type: 'JNOW', JNOW: { x: hour(5), y: deg(-30) } })
+
+// A J2000 goto, converted at the command time; resolves with where the mount stopped, in radians of date.
+const slew = await mountCommander.goTo(coordinator, mount, { type: 'J2000', J2000: { x: '05 35 17', y: '-05 23 28' } })
+if (slew.ok) console.log(toHour(slew.value.rightAscension), toDeg(slew.value.declination), slew.value.pierSide) // ≈ 5.610 -5.373 WEST
+
+// Open-ended manual motion: the handle adds or stops directions and keeps the mount leased until stopped.
+const manual = await mountCommander.startManualMove(coordinator, mount, 'NORTH')
+if (manual.ok) {
+	await manual.value.move('EAST', true)
+	console.log(mountCommander.manualMoveOf(mount)?.directions()) // ['NORTH', 'EAST']
+
+	// manualMove is the direct endpoint for the open motion, as a button release would send it.
+	await mountCommander.manualMove(coordinator, mount, 'EAST', false)
+	await manual.value.stop()
+}
+
+// The flip strategies this mount supports, and where its pier side comes from.
+console.log(meridianFlipStrategies(mount), pierSideProvenance(mount)) // ['nativeFlip', 'forcedGoto'] 'simulated'
+
+// A flip to the current target, reporting the pier side before and after and whether the change was verified.
+const target = { type: 'JNOW' as const, JNOW: { x: mount.equatorialCoordinate.rightAscension, y: mount.equatorialCoordinate.declination } }
+const flip = await mountCommander.flip(coordinator, mount, target)
+if (flip.ok) console.log(flip.value.initialPierSide, flip.value.pierSide, flip.value.pierSideVerified) // WEST EAST true
+
+// The meridian flip of a session: the motion's evidence, not a verdict.
+const execution = await mountCommander.executeMeridianFlip(coordinator, mount, target, { strategy: meridianFlipStrategies(mount)[0] })
+if (execution.ok) console.log(execution.value.outcome, execution.value.pierSideChanged, execution.value.arrivalSeparation) // 'moved' true, and the distance to the target in radians
+
+// Home and park: store the current position, seek or go to home, then park and unpark.
+await mountCommander.setHome(coordinator, mount)
+await mountCommander.findHome(coordinator, mount)
+await mountCommander.home(coordinator, mount)
+await mountCommander.setPark(coordinator, mount)
+await mountCommander.park(coordinator, mount)
+await mountCommander.unpark(coordinator, mount)
+
+// The emergency stop needs no scope and also reaches a mount moving under another owner.
+await mountCommander.stopMotion(mount)
+
+lifecycle.dispose()
+simulator.dispose()
+```
+
 ## 🌐 External Services
 
 ### ADES Codec
@@ -11619,7 +13403,7 @@ The Astrometry Data Exchange Standard (ADES) is the IAU format in which the Mino
 The codec reads and writes the PSV form and single records, such as the rows of the ADES payload of the [Minor Planet Center API](#minor-planet-center-api), as the `MPCObservation` union discriminated by `type` (`optical`, `offset`, `occultation`, `radar`). Values are converted to library units: the time is a UTC `Time`, the angles and their uncertainties are radians (ADES writes degrees and arcseconds), the radar delay is in seconds and its frequency in hertz, and spacecraft positions are in AU. The writer emits the time with millisecond resolution and never invents a field the record does not hold. The XML form is not supported.
 
 ```ts
-import { parseADESObservation, parseADESPSV, writeADESPSV } from 'nebulosa/src/adapters/orbits/mpc'
+import { isOpticalObservation, observationDesignation, observationIdentifier, parseADESObservation, parseADESPSV, writeADESPSV } from 'nebulosa/src/adapters/orbits/mpc'
 import { toArcsec, toDeg } from 'nebulosa/src/math/units/angle'
 
 // A PSV document: one metadata block and one optical row (degrees for ra/dec, arcseconds for rmsRA/rmsDec).
@@ -11633,7 +13417,10 @@ permID|obsTime|ra|dec|rmsRA|rmsDec|mag|band|stn|mode|astCat
 // Parses the blocks, each with its context and its observations.
 const document = parseADESPSV(psv)
 const eros = document.blocks[0].observations[0]
-if (eros.type === 'optical') console.log(toDeg(eros.rightAscension), toArcsec(eros.raError!)) // degrees; arcseconds of RA·cos δ
+if (isOpticalObservation(eros)) console.log(toDeg(eros.rightAscension), toArcsec(eros.raError!)) // 123.456789 0.12 — degrees; arcseconds of RA·cos δ
+
+// The object of a record (permanent, else provisional, else tracklet id) and its observation id, when given.
+console.log(observationDesignation(eros), observationIdentifier(eros)) // 433 undefined
 
 // Parses one record given as an object: an observer on a spacecraft, its position in km converted to AU.
 const hubble = parseADESObservation({ obsTime: '2024-03-05T10:20:30Z', stn: 'C51', provID: '2024 AB', ra: 10, dec: 20, sys: 'ICRF_KM', ctr: 399, pos1: 149597870.7, pos2: 0, pos3: 7000 })
@@ -11650,7 +13437,7 @@ AstroBin, the image-hosting community of astrophotographers, keeps an equipment 
 The client reads the AstroBin API v2 with a paged listing and a lookup by id for each kind of equipment; a listing returns the total count and the addresses of the neighbor pages, so a caller walks the database until there is no next page. The decimal specifications (pixel size in µm, aperture and focal lengths in mm) are strings exactly as the API publishes them, and many may be `null`, so a caller converts and checks them.
 
 ```ts
-import { camera, sensor, sensors, telescope } from 'nebulosa/src/adapters/imaging/astrobin'
+import { camera, cameras, sensor, sensors, telescope, telescopes } from 'nebulosa/src/adapters/imaging/astrobin'
 
 // One page of sensors: the total count, the records and the address of the next page.
 const page = await sensors(1)
@@ -11667,6 +13454,10 @@ console.log(body?.brandName, body?.name, body?.cooled)
 // A telescope by id: the focal ratio of a fixed-focal-length instrument from its string specifications.
 const scope = await telescope(5)
 const focalRatio = +scope!.minFocalLength! / +scope!.aperture!
+
+// The camera and telescope listings page the same way as the sensors.
+const [bodies, scopes] = await Promise.all([cameras(1), telescopes(1)])
+console.log(bodies?.count, scopes?.next)
 ```
 
 ### Close Approach Data
@@ -11710,6 +13501,9 @@ for (const star of stars) console.log(star.id, toDeg(star.rightAscension), toDeg
 
 // A region given as a shape, streamed entry by entry.
 for await (const star of catalog.streamRegion({ kind: 'box', minRA: deg(83.7), maxRA: deg(84), minDEC: deg(-5.5), maxDEC: deg(-5.3) })) console.log(star.id, star.pmRA, star.pmDEC) // rad/yr
+
+// The same box collected into an array; queryTriangle, queryPolygon and queryRegion take the other shapes.
+const box = await catalog.queryBox(deg(83.7), deg(84), deg(-5.5), deg(-5.3))
 
 // One source by its Gaia identifier: a string or bigint keeps every digit of the 64-bit id.
 const one = await catalog.get('4472832130942575872')
@@ -11879,30 +13673,99 @@ else if ('message' in result) console.log(result.message)
 
 ### Minor Planet Center API
 
-The Minor Planet Center, under the IAU, is the clearing house for the observations and orbits of minor planets, comets and outer irregular satellites. It assigns the designations, keeps the list of observatory codes with their parallax constants, archives every reported observation, publishes the orbit solutions, and runs the NEO Confirmation Page for new near-Earth candidates. Its API answers these as JSON.
+The Minor Planet Center, under the IAU, is the clearing house for the observations and orbits of minor planets, comets and outer irregular satellites. It assigns the designations, keeps the list of observatory codes, archives every reported observation, publishes the orbit solutions and the lists of objects by dynamical category, and runs the NEO Confirmation Page (NEOCP) for new near-Earth candidates, identified by the temporary designation of their tracklet until they are confirmed. Its API answers these as JSON.
 
-The adapter converts the answers to typed records in radians, AU and UTC. An observatory carries its east longitude and the parallax constants ρ cos φ′ and ρ sin φ′ in Earth radii, from which the adapter gives the geocentric ITRS position in AU or the geodetic location (see [Geographic Observer](#geographic-observer)). Observations come as the records of the [ADES Codec](#ades-codec). An `mpc_orb` solution yields its heliocentric Cartesian state with covariance and a `KeplerOrbit` (see [Two-Body Kepler Propagation](#two-body-kepler-propagation)). Optical records become the input of the [Differential Orbit Correction](#differential-orbit-correction), but the adapter does not look up station positions: the caller supplies the heliocentric observer position of each observation. The service takes `GET` requests with a JSON body, which Bun's `fetch` refuses, so the adapter uses `node:https` directly.
+The adapter converts the answers to typed records in radians, AU and UTC; the observatory codes have their own topic, [MPC Observatory Codes](#mpc-observatory-codes). A designation lookup resolves any identifier to the permanent and provisional designations of the object and their packed forms. Observations of a designated object or of a NEOCP tracklet come as the records of the [ADES Codec](#ades-codec), while the low-level queries return the payload in the encodings asked for, such as the 80-column text of the [MPC1992 Codec](#mpc1992-codec). An `mpc_orb` solution yields its heliocentric Cartesian state with covariance and a `KeplerOrbit` (see [Two-Body Kepler Propagation](#two-body-kepler-propagation)). Optical records become the input of the [Differential Orbit Correction](#differential-orbit-correction), but the adapter does not look up station positions: the caller supplies the heliocentric observer position of each observation. The service takes `GET` requests with a JSON body, which Bun's `fetch` refuses, so the adapter uses `node:https` directly.
 
 ```ts
-import { designations, observations, observationsToOrbitFit, observatory, observatoryItrsPosition, orbit, orbitCartesianState, orbitToKeplerOrbit, primaryDesignation } from 'nebulosa/src/adapters/orbits/mpc'
+import {
+	designation,
+	designationAliases,
+	designations,
+	isOpticalObservation,
+	list,
+	listAll,
+	neocpObservations,
+	observations,
+	observationsToOrbitFit,
+	observationToOrbitFitObservation,
+	orbit,
+	orbitCartesianState,
+	orbitToKeplerOrbit,
+	parseMPC80Lines,
+	primaryDesignation,
+	queryNEOCPObservations,
+	queryObservations,
+} from 'nebulosa/src/adapters/orbits/mpc'
 
 // Up to 100 ids (numbers, provisional designations, names, packed forms) resolved in one request.
 for (const record of await designations(['433', '1898 DQ'])) console.log(record.found, primaryDesignation(record))
 
-// An observatory by code, and its geocentric ITRS position in AU.
-const maunakea = await observatory('568')
-if (maunakea) console.log(observatoryItrsPosition(maunakea))
+// One id, only when it matches a single object, and every packed and unpacked form it is known by.
+const eros = await designation('Eros')
+if (eros) console.log(designationAliases(eros))
 
 // The observations of an object as ADES records (radians, UTC).
 const records = await observations('433')
+
+// The raw payload in the encodings asked for: here the 80-column text, read with the MPC1992 codec.
+const payload = await queryObservations('433', { outputFormats: ['OBS80'] })
+const archived = parseMPC80Lines(payload.obs80 ?? '')
+
+// The observations of a NEOCP tracklet, as ADES records (empty for an unknown tracklet) or as the raw payload.
+const candidate = await neocpObservations('P12abcd')
+const neocp = await queryNEOCPObservations('P12abcd', { outputFormats: ['ADES_DF'] })
 
 // The orbit fit input: resolve(time, observation) gives the heliocentric observer position in AU.
 // resolve: (time: Time, observation: MPCObservation) => Vec3 | undefined
 const { observations: fit, rejected } = observationsToOrbitFit(records, resolve)
 
+// The same conversion for one optical record whose observer position is known.
+// observer: Vec3 — heliocentric position of the observer at the time of the record, AU
+const first = records.find(isOpticalObservation)
+if (first) console.log(observationToOrbitFitObservation(first, observer))
+
 // The first mpc_orb solution: heliocentric state (AU, AU/day, with covariance) and a Kepler orbit.
 const solution = await orbit('433')
 if (solution) console.log(orbitCartesianState(solution)?.position, orbitToKeplerOrbit(solution))
+
+// One page of a List API category, and up to a number of items paged automatically.
+const page = await list('neos', { like: '2010%', limit: 2 })
+const neos = await listAll('neos', { like: '2010%', maxItems: 5 })
+console.log(page.items[0]?.unpackedPrimaryProvisionalDesignation, neos.length)
+```
+
+### MPC Observatory Codes
+
+Every site that reports astrometry to the Minor Planet Center has a three-character observatory code, such as `568` for Maunakea or `500` for the geocenter, and the `stn` field of the records of the [ADES Codec](#ades-codec) and the [MPC1992 Codec](#mpc1992-codec) names it. For each fixed site the MPC list gives the east longitude λ and the parallax constants ρ cos φ′ and ρ sin φ′, where ρ is the geocentric distance in units of the Earth's equatorial radius and φ′ the geocentric latitude, so the geocentric position follows from them and the equatorial radius alone, without a height or a flattening:
+
+```text
+x = ρ cos φ′ cos λ    y = ρ cos φ′ sin λ    z = ρ sin φ′
+```
+
+`observatory` and `observatories` read one code or the whole list from the [Minor Planet Center API](#minor-planet-center-api), and `parseObservatoryCode`, `parseObservatoryCodes` and `writeObservatoryCode` read and write the lines of the fixed-width `ObsCodes.html` list. `observatoryItrsPosition` gives the geocentric ITRS position in AU, scaling ρ by the equatorial radius of an ellipsoid, and `observatoryLocation` the geodetic site derived from it (see [Geographic Observer](#geographic-observer)); both are `undefined` for the geocenter and for a code without fixed geometry, such as a spacecraft, whose observations carry the observer position themselves. The position is Earth-fixed: the heliocentric observer position of an orbit fit also needs the Earth's rotation and heliocentric position at the time of each observation.
+
+```ts
+import { observatories, observatory, observatoryItrsPosition, observatoryLocation, parseObservatoryCode, parseObservatoryCodes, writeObservatoryCode } from 'nebulosa/src/adapters/orbits/mpc'
+import { toDeg } from 'nebulosa/src/math/units/angle'
+import { toKilometer } from 'nebulosa/src/math/units/distance'
+
+// One line of ObsCodes.html: code, east longitude (degrees), ρ cos φ′, ρ sin φ′ and name.
+const line = '310 288.871640.739802+0.670574Minor Planet Center Test Code'
+const site = parseObservatoryCode(line)
+console.log(site.code, toDeg(site.longitude!), site.rhoCosPhi, site.rhoSinPhi) // 310 288.87164 0.739802 0.670574
+
+// Writes it back in the same columns; a whole list is parsed line by line, skipping blank lines.
+console.log(writeObservatoryCode(site) === line, parseObservatoryCodes(`${line}\n\n${line}`).length) // true 2
+
+// The geocentric ITRS position (AU), and the geodetic site derived from it.
+console.log(observatoryItrsPosition(site)?.map(toKilometer)) // ≈ [ 1526.2, -4464.9, 4277.0 ] km
+const location = observatoryLocation(site)!
+console.log(toDeg(location.longitude), toDeg(location.latitude)) // ≈ -71.12836 42.381 — degrees, longitude east-positive
+
+// One code, or every code, from the MPC API, with names and observation type.
+const maunakea = await observatory('568')
+const all = await observatories()
 ```
 
 ### MPC1992 Codec
@@ -11912,7 +13775,7 @@ The MPC1992 format is the historical fixed-width record of the Minor Planet Cent
 Designations are packed into a few characters: `433` is `00433`, `2024 YR4` is `K24Y04R`, and `C/1995 O1` is `CJ95O010`. The codec packs and unpacks designations and reads and writes the 80-column records as the same `MPCObservation` union as ADES, so records can move between the formats; values the format cannot hold, such as uncertainties and catalogs, are not written. The second line of a roving observer stores an east longitude from 0 to 360°, so a west longitude comes back as its east equivalent.
 
 ```ts
-import { packMPCDesignation, parseADESObservation, parseMPC80Lines, unpackMPCDesignation, writeMPC80, writeMPC80Lines } from 'nebulosa/src/adapters/orbits/mpc'
+import { packMPCDesignation, parseADESObservation, parseMPC80, parseMPC80Lines, unpackMPCDesignation, writeMPC80, writeMPC80Lines } from 'nebulosa/src/adapters/orbits/mpc'
 
 // Packed and readable designations.
 console.log(packMPCDesignation('2024 YR4'), unpackMPCDesignation('K24Y04R')) // K24Y04R 2024 YR4
@@ -11920,6 +13783,9 @@ console.log(packMPCDesignation('2024 YR4'), unpackMPCDesignation('K24Y04R')) // 
 // An optical record (here from ADES input) written as one 80-column line.
 const eros = parseADESObservation({ obsType: 'optical', permID: '433', obsTime: '2024-03-05T10:20:30.250Z', ra: 123.456789, dec: -12.345678, mag: 17.4, band: 'V', stn: '568', disc: '*', ref: 'MPEC1' })
 console.log(writeMPC80(eros)) // 00433       * C2024 03 05.43090608 13 49.629-12 20 44.44         17.40VMPEC1 568
+
+// One line read back as a record.
+console.log(parseMPC80(writeMPC80(eros)).station) // 568
 
 // A whole file, read back: two-line records are joined, and the time and angles return to UTC and radians.
 const records = parseMPC80Lines(writeMPC80Lines([eros]))
@@ -11985,6 +13851,9 @@ for (const star of stars) console.log(star.id, star.type && findSimbadObjectType
 // A region streamed through the pages of the service.
 for await (const entry of catalog.streamRegion({ kind: 'box', minRA: deg(83.7), maxRA: deg(84), minDEC: deg(-5.5), maxDEC: deg(-5.3) })) console.log(entry.id, entry.magnitude)
 
+// The same box collected into an array; queryTriangle, queryPolygon and queryRegion take the other shapes.
+const box = await catalog.queryBox(deg(83.7), deg(84), deg(-5.5), deg(-5.3))
+
 // One object by its SIMBAD oid.
 const one = await catalog.get(3755198)
 ```
@@ -12015,7 +13884,7 @@ SkyBoT, a service of the IMCCE, predicts which known solar-system objects (aster
 `coneSearch` asks for the objects within a radius of a J2000 center at an instant (Unix milliseconds in UTC or a `Time`; angles in radians), seen from an IAU observatory code, the geocenter by default. Each object has its astrometric J2000 position in radians, its dynamical class, and when known the visual magnitude, the position uncertainty, the sky motion in radians per day, and its distances in AU. The service accepts a radius up to 10° and epochs from 1889 to 2060, and requests are sent as given, so a caller checks them first. Although it documents a geographic observer, the service refuses one, so a site without an observatory code takes the geocentric positions and corrects them with [Topocentric Parallax](#topocentric-parallax). An ephemeris the service cannot compute for a planet or satellite fails the whole answer, so a search limited to asteroids and comets is more robust. Answers take seconds.
 
 ```ts
-import { coneSearch } from 'nebulosa/src/adapters/orbits/skybot'
+import { coneSearch, coneSearchUrl, parseSkybotResponse } from 'nebulosa/src/adapters/orbits/skybot'
 import { geocentricToTopocentric } from 'nebulosa/src/astronomy/coordinates/astrometry'
 import { Ellipsoid, geodeticLocation } from 'nebulosa/src/astronomy/observer/location'
 import { timeUnix } from 'nebulosa/src/astronomy/time/time'
@@ -12030,6 +13899,11 @@ for (const object of objects) console.log(object.name, object.class, object.magn
 const site = geodeticLocation(deg(-46.63), deg(-23.55), meter(760), Ellipsoid.WGS84)
 const at = timeUnix(Date.UTC(2026, 0, 15) / 1000, true)
 for (const object of objects) if (object.distance !== undefined) console.log(object.name, geocentricToTopocentric(object.rightAscension, object.declination, object.distance, at, site)) // radians
+
+// The same search through the caller's own transport: the request URL, then the parser of its JSON body (no body when the field is empty).
+const response = await fetch(coneSearchUrl(Date.UTC(2026, 0, 15), hour(10), deg(12), deg(0.25)))
+const text = await response.text()
+const parsed = parseSkybotResponse(text ? JSON.parse(text) : undefined)
 ```
 
 ### Small-Body Identification
@@ -12084,7 +13958,7 @@ A read returns `0` at the end, and a negative seek counts from the end (`-1` is 
 ```ts
 import { bufferSink, bufferSource } from 'nebulosa/src/io/io'
 
-// Reads from a fixed buffer through a cursor; a read returns the bytes copied, 0 at the end.
+// Reads from a fixed buffer through a cursor (a BufferSource); a read returns the bytes copied, 0 at the end.
 const source = bufferSource(Buffer.from('Nebulosa 2026'))
 const chunk = Buffer.alloc(8)
 console.log(source.readSync(chunk), chunk.toString()) // 8 Nebulosa
@@ -12096,6 +13970,11 @@ console.log(await source.read(chunk), chunk.toString('latin1', 0, 4)) // 4 2026
 // Writes strings or buffers into a fixed buffer; the count is short once it is full.
 const sink = bufferSink(Buffer.alloc(16))
 console.log(sink.write('Hello'), sink.position) // 5 5
+
+// The sink seeks like the source, writeSync is the same write, and exhausted tells whether the end was reached.
+sink.seek(0)
+sink.writeSync('J')
+console.log(sink.buffer.toString('latin1', 0, 5), source.exhausted, sink.exhausted) // Jello true false
 ```
 
 ### Byte Reading, Writing, and Transfer
@@ -12105,7 +13984,7 @@ The `read` of a source and the `write` of a sink may move fewer bytes than reque
 `readUntil` reads until a buffer is filled or the input ends, `writeFully` repeats short writes until every byte is accepted, `readRemaining` reads to the end into one new buffer (materializing the whole input), and `sourceTransferToSink` copies a source into a sink through one reusable transfer buffer. A sink that stops accepting bytes makes them throw instead of spinning. They neither seek nor close.
 
 ```ts
-import { bufferSink, bufferSource, readRemaining, readUntil, sourceTransferToSink, writeFully } from 'nebulosa/src/io/io'
+import { bufferSink, bufferSource, readRemaining, readUntil, readUntilSync, sourceTransferToSink, writeFully, writeFullySync } from 'nebulosa/src/io/io'
 
 // Fills the buffer, or what is left of the input; the count is smaller only at the end.
 const source = bufferSource(Buffer.from('0123456789abcdefghij'))
@@ -12122,6 +14001,10 @@ await writeFully(sink, Buffer.from('nebulosa'))
 // Copies a whole source into a sink in blocks of 16 bytes; returns the bytes copied.
 const input = bufferSource(Buffer.from('The quick brown fox jumps over the lazy dog'))
 console.log(await sourceTransferToSink(input, bufferSink(Buffer.alloc(64)), 16)) // 43
+
+// The synchronous forms of readUntil and writeFully, for adapters that support synchronous calls.
+const head = Buffer.alloc(4)
+console.log(readUntilSync(bufferSource(Buffer.from('0123456789')), head), writeFullySync(bufferSink(Buffer.alloc(8)), Buffer.from('nebulosa'))) // 4 8
 ```
 
 ### Byte Shuffling
@@ -12255,19 +14138,27 @@ import { readRemaining } from 'nebulosa/src/io/io'
 	sink.writeSync(Buffer.from(' toolkit'))
 }
 
-// Reads it back from an explicit position.
+// Reads it back, synchronously or asynchronously, from an explicit position.
 {
 	await using source = fileHandleSource(await open('data.txt', 'r'))
-	source.seek(2)
-	console.log((await readRemaining(source)).toString()) // bulosa toolkit
+	const head = Buffer.alloc(2)
+	console.log(source.readSync(head), head.toString()) // 2 Ne
+	source.seek(4)
+	console.log((await readRemaining(source)).toString()) // losa toolkit
 }
+
+// Without disposal: seek the sink to overwrite a byte, then close() releases the handle.
+const sink = fileHandleSink(await open('data.txt', 'r+'))
+sink.seek(0)
+await sink.write('n')
+await sink.close()
 ```
 
 ### FITS Containers and HDUs
 
 FITS (Flexible Image Transport System) is the standard file format of astronomical data, maintained under the IAU (FITS Standard 4.0). A file is a sequence of header and data units (HDUs) made of 2880-byte blocks: a header of 80-character ASCII cards that ends with `END`, then the data padded to a whole block. The primary unit comes first and extensions (`IMAGE`, `BINTABLE`, and others) follow. Image data are big-endian samples whose type is `BITPIX`: 8 for unsigned bytes, 16, 32 and 64 for signed integers, −32 and −64 for IEEE floats; unsigned 16-bit data are stored as signed integers with `BZERO = 32768`. A tile-compressed image is stored as a binary table extension.
 
-`readFits` indexes a seekable source: it parses every header (see [FITS Header Cards and Metadata](#fits-header-cards-and-metadata)) and only locates each data segment by offset and size, seeking past the data, so a large file is indexed cheaply and the pixels are read afterwards with [FITS Pixel I/O and Rice Tiles](#fits-pixel-io-and-rice-tiles). `writeFits` writes images from the library arrays, normalized (0 to 1) or digital (the integer range of the `BITPIX`), adding `BZERO` for 16-bit output, and can write them with [FITS Rice Compression](#fits-rice-compression). Only uncompressed images and `RICE_1` tiles are decoded as pixels; other units are indexed but not interpreted.
+`readFits` indexes a seekable source: it parses every header (see [FITS Header Cards and Metadata](#fits-header-cards-and-metadata)) and only locates each data segment by offset and size, seeking past the data, so a large file is indexed cheaply and the pixels are read afterwards with [FITS Pixel I/O and Rice Tiles](#fits-pixel-io-and-rice-tiles). `writeFits` writes images from the normalized library arrays (0 to 1), scaled to the integer range of an integer `BITPIX` and adding `BZERO` for 16-bit output, and can write them with [FITS Rice Compression](#fits-rice-compression). Only uncompressed images and `RICE_1` tiles are decoded as pixels; other units are indexed but not interpreted.
 
 ```ts
 import { isFits, readFits, writeFits } from 'nebulosa/src/io/formats/fits/fits'
@@ -12281,7 +14172,7 @@ const raw = Float32Array.from({ length: width * height }, (_, i) => i / (width *
 // Writes one 16-bit image: one block of header and one block of data.
 const out = Buffer.alloc(2880 * 4)
 const sink = bufferSink(out)
-await writeFits(sink, [{ header: { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: width, NAXIS2: height, OBJECT: 'M42' }, raw, sampleScale: 'normalized' }])
+await writeFits(sink, [{ header: { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: width, NAXIS2: height, OBJECT: 'M42' }, raw }])
 console.log(isFits(out)) // true
 
 // Indexes the file: the headers are parsed, the data are only located (offset and size in bytes).
@@ -12297,8 +14188,25 @@ A FITS header is a list of 80-character cards: a keyword of up to 8 characters, 
 
 ```ts
 import { FitsKeywordReader, FitsKeywordWriter } from 'nebulosa/src/io/formats/fits/fits'
-import { exposureTimeKeyword, observationDateKeyword, rightAscensionKeyword, textKeyword } from 'nebulosa/src/io/formats/fits/util'
-import { toHour } from 'nebulosa/src/math/units/angle'
+import {
+	bitpixKeyword,
+	booleanKeyword,
+	cfaPatternKeyword,
+	declinationKeyword,
+	exposureTimeKeyword,
+	hasKeyword,
+	heightKeyword,
+	isCompressedImageHeader,
+	numberOfAxesKeyword,
+	numberOfChannelsKeyword,
+	numericKeyword,
+	observationDateKeyword,
+	rightAscensionKeyword,
+	textKeyword,
+	uncompressedWidthKeyword,
+	widthKeyword,
+} from 'nebulosa/src/io/formats/fits/util'
+import { toDeg, toHour } from 'nebulosa/src/math/units/angle'
 
 // Formats cards of 80 characters into a buffer, then the END card.
 const writer = new FitsKeywordWriter()
@@ -12307,13 +14215,28 @@ let size = writer.write(['EXPTIME', 120.5], buffer, 0)
 size += writer.write(['OBJECT', "Barnard's Star", 'target'], buffer, size)
 writer.writeEnd(buffer, size)
 
-// Parses the cards until END into a header object.
-const header = new FitsKeywordReader().readAll(buffer)
-console.log(textKeyword(header, 'OBJECT'), exposureTimeKeyword(header, 0)) // Barnard's Star 120.5
+// Parses the cards until END into a header object, or one card into its key, value and comment.
+const reader = new FitsKeywordReader()
+const header = reader.readAll(buffer)
+console.log(reader.read(buffer, 80)) // [ "OBJECT", "Barnard's Star", "target" ]
 
-// The metadata readers: pointing in radians and the observation date in Unix milliseconds (UTC).
+// Formats a whole header object or card list, without the END card; returns the bytes written.
+console.log(writer.writeAll(header, Buffer.alloc(80 * 4))) // 160
+
+// The accessors: presence, then text, number and logical values with a default for a missing key.
+console.log(hasKeyword(header, 'EXPTIME'), textKeyword(header, 'OBJECT'), numericKeyword(header, 'GAIN', 0), booleanKeyword(header, 'SIMPLE')) // true Barnard's Star 0 false
+
+// The metadata readers: geometry, sample type, exposure (s) and CFA pattern.
 const image = { NAXIS: 3, NAXIS1: 100, NAXIS2: 50, NAXIS3: 3, BITPIX: -32, EXPOSURE: 10, BAYERPAT: 'RGGB ', RA: 83.82, DEC: -5.39, 'DATE-OBS': '2026-10-05T03:04:05.250Z' }
-console.log(toHour(rightAscensionKeyword(image, 0)), observationDateKeyword(image)) // 5.587999999999999 1791169445250
+console.log(numberOfAxesKeyword(image, 0), widthKeyword(image, 0), heightKeyword(image, 0), numberOfChannelsKeyword(image, 1), bitpixKeyword(image, 0), exposureTimeKeyword(image, 0), cfaPatternKeyword(image)) // 3 100 50 3 -32 10 RGGB
+
+// The pointing in radians and the observation date in Unix milliseconds (UTC).
+console.log(toHour(rightAscensionKeyword(image, 0)), toDeg(declinationKeyword(image, 0)), observationDateKeyword(image)) // 5.587999999999999 -5.39 1791169445250
+
+// A tile-compressed image: isCompressedImageHeader, isRiceCompressedImageHeader and compressionTypeKeyword identify it, and
+// uncompressedWidthKeyword, uncompressedHeightKeyword, uncompressedNumberOfChannelsKeyword, uncompressedBitpixKeyword,
+// uncompressedScaleKeyword and uncompressedZeroKeyword read the image it stores.
+console.log(isCompressedImageHeader({ ZIMAGE: true }), uncompressedWidthKeyword({ ZIMAGE: true, ZNAXIS1: 100, NAXIS1: 8 }, 0)) // true 100
 ```
 
 ### FITS Instrument Provenance
@@ -12323,9 +14246,10 @@ Besides the pixels, a FITS header says which telescope, camera and sensor took t
 `readFitsProvenance` returns a typed record of the instrument names, the filter, the frame type normalized to light, dark, flat, bias or dark flat (and whether it is a master), the binning, the sensor and set temperatures in °C, the gain, offset and readout mode, the calibration already applied, and the pedestal in ADU. `GAIN` is returned as written: capture software stores the camera's gain setting there, while NOAO-style headers store e⁻/ADU, so the conversion factor is `electronGain` (`EGAIN`). Headers are untrusted, so an unreadable or contradictory value is left out or resolved and reported in `diagnostics` instead of throwing. `writeFitsProvenance` writes the record back in place and deletes the provenance keywords it does not define, so a stale `FRAME` cannot contradict the new `IMAGETYP`. Observation times and the site are read by [FITS Observation Timing and Location](#fits-observation-timing-and-location).
 
 ```ts
+import type { FitsHeader } from 'nebulosa/src/io/formats/fits/fits'
 import { readFitsProvenance, writeFitsProvenance } from 'nebulosa/src/io/formats/fits/provenance'
 
-const header = { SIMPLE: true, INSTRUME: 'ZWO CCD ASI294MM Pro', TELESCOP: 'iOptronV3', IMAGETYP: 'Light Frame', FRAME: 'Light', FILTER: 'L', XBINNING: 4, YBINNING: 4, 'CCD-TEMP': -10.1, 'SET-TEMP': -10, GAIN: 120, OFFSET: 30, EGAIN: 1.0022, CALSTAT: 'BD', OBSERVER: '  ' }
+const header: FitsHeader = { SIMPLE: true, INSTRUME: 'ZWO CCD ASI294MM Pro', TELESCOP: 'iOptronV3', IMAGETYP: 'Light Frame', FRAME: 'Light', FILTER: 'L', XBINNING: 4, YBINNING: 4, 'CCD-TEMP': -10.1, 'SET-TEMP': -10, GAIN: 120, OFFSET: 30, EGAIN: 1.0022, CALSTAT: 'BD', OBSERVER: '  ' }
 
 // Reads the typed provenance; blank strings count as absent.
 const provenance = readFitsProvenance(header)
@@ -12347,8 +14271,9 @@ Nothing is corrected: a barycentric TDB time is returned as written and a timest
 
 ```ts
 import { exposureInterval } from 'nebulosa/src/astronomy/time/exposure'
-import { fitsExposure, readFitsTime, writeFitsTime } from 'nebulosa/src/astronomy/time/fits'
+import { fitsExposure, formatFitsDateTime, readFitsTime, writeFitsTime } from 'nebulosa/src/astronomy/time/fits'
 import { timeToDate } from 'nebulosa/src/astronomy/time/time'
+import { parseFitsDateTimeFields } from 'nebulosa/src/io/formats/fits/util'
 
 // A capture-software header: DATE-OBS at the shutter opening, a 60 s EXPTIME and the site.
 const header = { TIMESYS: 'UTC', 'DATE-OBS': '2016-12-31T23:59:30.250', EXPTIME: 60, SITELAT: '-29 15 22.7', SITELONG: -70.7313, SITEELEV: 2400, OBJECT: 'WASP-12' }
@@ -12362,6 +14287,10 @@ console.log(metadata.diagnostics.map((e) => `${e.kind} ${e.keyword}`)) // ["defa
 const interval = exposureInterval(fitsExposure(metadata)!)
 console.log(timeToDate(interval.midpoint)) // [2016, 12, 31, 23, 59, 60, 250]
 
+// The FITS datetime syntax both ways: an instant formatted in its own scale with 3 decimals, and a string split into its fields.
+console.log(formatFitsDateTime(interval.midpoint, 3)) // 2016-12-31T23:59:60.250
+console.log(parseFitsDateTimeFields('2016-12-31T23:59:60.25')) // { year: 2016, month: 12, day: 31, hour: 23, minute: 59, second: 60.25, resolution: 0.01, ... }
+
 // Writes the interval back with the FITS 4.0 keywords; OBJECT passes through.
 const out = writeFitsTime({ OBJECT: 'WASP-12' }, { start: interval.start, end: interval.end, exposure: interval.duration, referencePosition: 'topocenter', location: metadata.location, digits: 3 })
 console.log(out['DATE-BEG'], out['DATE-END'], out.TELAPSE) // 2016-12-31T23:59:30.250 2017-01-01T00:00:29.250 60
@@ -12374,7 +14303,7 @@ FITS stores an image as planes: all the samples of the first channel, then those
 The reader takes an HDU indexed by [FITS Containers and HDUs](#fits-containers-and-hdus) and reads a tile-compressed `RICE_1` image through the same call, decoding the tiles with [FITS Rice Compression](#fits-rice-compression); other tile compressions are not supported. The writer writes only the data segment for the `BITPIX` and dimensions of the header, optionally scaling each sample by a normalization (see [Scientific Image Loading and Export](#scientific-image-loading-and-export)). An image too large for one buffer goes through rows: `readRows` reads a range of rows of one channel from an uncompressed image (tile-compressed data are not row-addressable), and `FitsImageRowWriter` writes a floating-point primary image in file order, storing the samples as given.
 
 ```ts
-import { FitsImageReader, FitsImageRowWriter, readFits, writeFits } from 'nebulosa/src/io/formats/fits/fits'
+import { FitsImageReader, FitsImageRowWriter, FitsImageWriter, readFits, writeFits } from 'nebulosa/src/io/formats/fits/fits'
 import { bufferSink, bufferSource } from 'nebulosa/src/io/io'
 
 // raw: Float32Array of 6 x 4 normalized samples (0 to 1), a ramp, written as a 16-bit file.
@@ -12383,7 +14312,7 @@ const height = 4
 const raw = Float32Array.from({ length: width * height }, (_, i) => i / (width * height - 1))
 const file = Buffer.alloc(2880 * 4)
 const sink = bufferSink(file)
-await writeFits(sink, [{ header: { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: width, NAXIS2: height }, raw, sampleScale: 'normalized' }])
+await writeFits(sink, [{ header: { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: width, NAXIS2: height }, raw }])
 const hdu = (await readFits(bufferSource(file.subarray(0, sink.position))))!.hdus[0]
 
 // Reads the pixels in the digital scale (0 to 65535 for 16 bits); 'normalized' is the default.
@@ -12391,9 +14320,14 @@ const digital = new Float32Array(width * height)
 await new FitsImageReader(hdu).read(bufferSource(file), digital, 'digital')
 console.log(digital.slice(0, 4), digital.at(-1)) // Float32Array(4) [ 0, 2849, 5699, 8548 ] 65535
 
-// Reads 2 rows of channel 0 starting at zero-based row 1.
+// Reads 2 rows of channel 0 starting at zero-based row 1, when the data are row-addressable (not tile-compressed).
+const reader = new FitsImageReader(hdu)
 const rows = new Float32Array(width * 2)
-await new FitsImageReader(hdu).readRows(bufferSource(file), rows, 1, 2)
+if (reader.rowAddressable) await reader.readRows(bufferSource(file), rows, 1, 2)
+
+// Writes only the data segment for the BITPIX and dimensions of a header, without header or padding; returns its bytes.
+const data = bufferSink(Buffer.alloc(width * height * 4))
+console.log(await new FitsImageWriter({ SIMPLE: true, BITPIX: -32, NAXIS: 2, NAXIS1: width, NAXIS2: height }).write(raw, data)) // 96
 
 // Writes a 32-bit float image in file order: header, the samples (whole channels in turn), padding.
 const writer = new FitsImageRowWriter(bufferSink(Buffer.alloc(2880 * 4)), { SIMPLE: true, BITPIX: -32, NAXIS: 2, NAXIS1: width, NAXIS2: height })
@@ -12445,6 +14379,12 @@ console.log(buffer.length, buffer.toBuffer()) // 6 <Buffer ca fe 01 02 02 01>
 const record = Buffer.from(buffer.toBuffer())
 buffer.reset()
 console.log(buffer.length) // 0
+
+// writeInt16LE/BE, writeUInt32LE/BE and writeInt32LE/BE append the other widths and byte orders.
+buffer.writeInt32BE(0x204f4b0a)
+
+// Decodes the region, trimming the leading and trailing bytes up to 0x20 (toBuffer(true) trims the same way).
+console.log(buffer.toString(true), buffer.toString(true).length) // OK 2
 ```
 
 ### HTTP Range Byte Sources
@@ -12480,13 +14420,16 @@ JPEG is the lossy compression of 8-bit images by the discrete cosine transform: 
 `Jpeg` wraps the native libjpeg-turbo library, a SIMD-accelerated implementation loaded through `bun:ffi` on first use from the shared library bundled for Windows (x64) and Linux (x64 and arm64); no library is bundled for other platforms. It encodes raw 8-bit pixels in a given layout (RGB, BGR, gray, with or without alpha), reads the header without decoding, and decodes to the requested layout. A decoded image differs from the source by the usual lossy error, not just by rounding.
 
 ```ts
-import { isJpeg, Jpeg } from 'nebulosa/src/bindings/imaging/libturbojpeg'
+import { isJpeg, Jpeg, unload } from 'nebulosa/src/bindings/imaging/libturbojpeg'
 
 // rgb: Buffer — 64 x 32 pixels, 3 bytes per pixel (R, G, B), rows tightly packed
 const jpeg = new Jpeg()
 
-// Encode with quality 90 (1 to 100) and full-resolution chrominance.
-const encoded = jpeg.compress(rgb, 64, 32, 'RGB', 90, '4:4:4')!
+// The worst-case encoded size in bytes, to preallocate a destination buffer that compress can reuse.
+const output = Buffer.alloc(jpeg.estimateBufferSize(64, 32, '4:4:4'))
+
+// Encode with quality 90 (1 to 100) and full-resolution chrominance; the result is a view of the destination.
+const encoded = jpeg.compress(rgb, 64, 32, 'RGB', 90, '4:4:4', output)!
 console.log(isJpeg(encoded)) // true: the stream starts with the FF D8 start-of-image marker
 
 // Dimensions, chrominance subsampling and colour space, without decoding the pixels.
@@ -12496,8 +14439,11 @@ console.log(jpeg.readHeader(encoded)) // { width: 64, height: 32, subsampling: "
 const decoded = jpeg.decompress(encoded)!
 const rgba = jpeg.decompress(encoded, 'RGBA')!
 
-// A lower quality and subsampled chrominance give a smaller preview.
+// A lower quality and subsampled chrominance give a smaller preview; without a destination one is allocated.
 const preview = jpeg.compress(rgb, 64, 32, 'RGB', 40, '4:2:0')!
+
+// Closes the native library when JPEG work is over; existing Jpeg instances must not be used after it, and a new one loads it again.
+unload()
 ```
 
 ### Portable Path Segments
@@ -12530,14 +14476,54 @@ import { readableStreamSource, readRemaining, readUntil } from 'nebulosa/src/io/
 
 // Any web stream works; here the body of a Response.
 const response = new Response('stellar data from a response')
-await using source = readableStreamSource(response.body!)
+const source = readableStreamSource(response.body!)
 
-// Fill a buffer exactly, joining chunks as needed.
-const buffer = Buffer.alloc(7)
-console.log(await readUntil(source, buffer), buffer.toString()) // 7 stellar
+try {
+	// Fill a buffer exactly, joining chunks as needed.
+	const buffer = Buffer.alloc(7)
+	console.log(await readUntil(source, buffer), buffer.toString()) // 7 stellar
 
-// Read the rest of the stream into one buffer.
-const rest = await readRemaining(source)
+	// Read the rest of the stream into one buffer.
+	const rest = await readRemaining(source)
+} finally {
+	// Cancels the stream, as `await using` disposal does; an unfinished download stops here.
+	await source.close()
+}
+```
+
+### Socket Write Backpressure
+
+TCP delivers a byte stream with flow control: when a peer reads more slowly than it is written to, its receive window and the local send buffer fill, and a write can accept only part of the bytes. The sender must then keep the rest, in order, and resume when the socket can take more; this is backpressure. Bun's `socket.write` returns the number of bytes the socket took and drops the rest instead of buffering it, so a protocol message written to a slow peer, such as an INDI XML element or a telescope reply, would arrive truncated in the middle.
+
+`SocketWriteQueue` is the ordered output queue of one socket, which the INDI and Firmata TCP clients and the LX200 and Stellarium servers of the toolkit use. It writes straight through while it is empty and otherwise queues a copy of what the socket did not take, so the caller may reuse its buffer at once; the socket's `drain` handler flushes it. A write reports a stalled peer when more than a limit of bytes is pending, and the caller is expected to close that connection, because the queue would otherwise grow without bound. Create one queue per connection and clear it when the connection ends.
+
+```ts
+import { SocketWriteQueue } from 'nebulosa/src/io/socket'
+
+// An echo server whose replies keep their order and integrity whatever the speed of the peer.
+const server = Bun.listen<SocketWriteQueue>({
+	hostname: 'localhost',
+	port: 10001,
+	socket: {
+		// One queue per connection; a peer with more than 1 MiB pending counts as stalled.
+		open(socket) {
+			socket.data = new SocketWriteQueue(1024 * 1024)
+		},
+		// Writes after the queued bytes; false means the peer stopped reading, so the connection ends.
+		data(socket, chunk) {
+			if (!socket.data.write(socket, chunk)) socket.end()
+		},
+		// Writes the queued bytes the socket now takes, keeping the rest for the next drain.
+		drain(socket) {
+			socket.data.drain(socket)
+			console.log(socket.data.pending) // bytes still queued
+		},
+		// Discards what was never delivered.
+		close(socket) {
+			socket.data.clear()
+		},
+	},
+})
 ```
 
 ### Streaming Base64
@@ -12555,13 +14541,25 @@ const buffer = Buffer.alloc(32)
 const n = await source.read(buffer)
 console.log(n, buffer.toString('latin1', 0, n)) // 16 Nebulosa toolkit
 
+// The source seeks in decoded bytes; readSync decodes synchronously from a string or a synchronous source.
+source.seek(9)
+console.log(source.readSync(buffer), buffer.toString('latin1', 0, 7), source.position) // 7 toolkit 16
+
 // Encode bytes into another sink; end() writes the final group with its padding.
 const text = Buffer.alloc(64)
 const output = bufferSink(text)
 const sink = base64Sink(output)
 await sink.write(Buffer.from('Nebulosa!'))
 await sink.end()
-console.log(text.toString('latin1', 0, output.position)) // TmVidWxvc2Eh
+console.log(text.toString('latin1', 0, output.position), sink.encodedSize) // TmVidWxvc2Eh 12 — encoded characters
+
+// The URL-safe alphabet, written synchronously.
+const url = Buffer.alloc(8)
+const urlOutput = bufferSink(url)
+const urlSink = base64Sink(urlOutput, 'base64url')
+urlSink.writeSync(Buffer.from([0xfb, 0xff, 0xfe]))
+await urlSink.end()
+console.log(url.toString('latin1', 0, urlOutput.position)) // -__-
 ```
 
 ### Streaming Text Lines
@@ -12602,7 +14600,7 @@ const header = { SIMPLE: true, BITPIX: 16, NAXIS: 3, NAXIS1: 8, NAXIS2: 4, NAXIS
 //   <FITSKeyword name="OBJECT" value="&apos;M42&apos;" comment=""/><FITSKeyword name="EXPTIME" value="30" comment=""/></Image>
 const out = Buffer.alloc(8192)
 const sink = bufferSink(out)
-await writeXisf(sink, [{ header, raw, sampleScale: 'normalized' }])
+await writeXisf(sink, [{ header, raw }])
 const file = out.subarray(0, sink.position)
 console.log(isXisf(file)) // true
 
@@ -12629,7 +14627,7 @@ const header = { SIMPLE: true, BITPIX: 16, NAXIS: 3, NAXIS1: 8, NAXIS2: 4, NAXIS
 // Write 16-bit samples, byte-shuffled and zlib-compressed.
 const out = Buffer.alloc(8192)
 const sink = bufferSink(out)
-await writeXisf(sink, [{ header, raw, sampleScale: 'normalized' }], { compression: { format: 'zlib', shuffled: true } })
+await writeXisf(sink, [{ header, raw }], { compression: { format: 'zlib', shuffled: true } })
 const file = out.subarray(0, sink.position)
 const [image] = (await readXisf(bufferSource(file)))!.images
 console.log(image.compression) // the codec, the shuffling item size and the uncompressed size of the block
@@ -12644,6 +14642,9 @@ await new XisfImageReader(image).read(bufferSource(file), digital, 'digital')
 const writer = new XisfImageWriter({ byteOrder: 'little', bitpix: -32, geometry: { width: 8, height: 4, channels: 3 }, pixelStorage: 'Planar', compression: undefined })
 const block = await writer.encode(raw)
 console.log(block.data.byteLength) // 384: 8 x 4 x 3 Float32 samples
+
+// Encodes the same way and writes the block to a sink; returns the bytes written.
+console.log(await writer.write(raw, bufferSink(Buffer.alloc(384)))) // 384
 ```
 
 ### XML Parsing
@@ -12681,25 +14682,75 @@ Planar vectors appear wherever the library works on an image or a tangent plane:
 The helpers cover construction, dot and cross products (the 2D cross product is the z component of the 3D one, positive when the second vector is counterclockwise from the first), length and distance, the unsigned angle between two vectors, the polar angle, rotation, normalization and component-wise arithmetic. A function that builds a vector writes into an optional output, which may be one of its inputs, and allocates a new vector otherwise; the `...Mut` variants work in place. Normalizing the zero vector returns it unchanged instead of `NaN`, and the midpoint direction of two opposite vectors is undefined and returned as zero.
 
 ```ts
-import { type MutVec2, vec2Angle, vec2Cross, vec2Dot, vec2Length, vec2Midpoint, vec2Normalize, vec2Plus, vec2Rot } from 'nebulosa/src/math/linear-algebra/vec2'
+import {
+	type MutVec2,
+	vec2Angle,
+	vec2Clone,
+	vec2Cross,
+	vec2CrossLength,
+	vec2Distance,
+	vec2Div,
+	vec2DivScalar,
+	vec2DivScalarMut,
+	vec2Dot,
+	vec2Fill,
+	vec2FillWith,
+	vec2Length,
+	vec2Longitude,
+	vec2Midpoint,
+	vec2Minus,
+	vec2MinusScalar,
+	vec2Mul,
+	vec2MulScalar,
+	vec2Negate,
+	vec2NegateMut,
+	vec2Normalize,
+	vec2NormalizeMut,
+	vec2Plus,
+	vec2PlusScalar,
+	vec2Rot,
+	vec2RotMut,
+	vec2XAxis,
+	vec2YAxis,
+	vec2Zero,
+} from 'nebulosa/src/math/linear-algebra/vec2'
 
 const a: MutVec2 = [3, 4]
 const b: MutVec2 = [0, 2]
 
-// Length, dot product and the signed cross product (positive: b is counterclockwise from a).
-console.log(vec2Length(a), vec2Dot(a, b), vec2Cross(a, b)) // 5 8 6
+// New vectors: the zero vector and the unit axes.
+console.log(vec2Zero(), vec2XAxis(), vec2YAxis()) // [ 0, 0 ] [ 1, 0 ] [ 0, 1 ]
 
-// The unsigned angle between two vectors (radians, in [0, π]).
-console.log(vec2Angle([1, 0], [0, 1])) // 1.5707963267948966
+// Length, distance between two points, dot product and the signed cross product (positive: b is counterclockwise from a).
+console.log(vec2Length(a), vec2Distance(a, b), vec2Dot(a, b), vec2Cross(a, b)) // 5 3.605551275463989 8 6
 
-// Element-wise sum into a new vector, or into an output that is returned.
+// The absolute cross product, the area of the parallelogram spanned by the two vectors.
+console.log(vec2CrossLength(b, a)) // 6
+
+// The polar angle from +x in [0, 2π), and the unsigned angle between two vectors in [0, π] (radians).
+console.log(vec2Longitude([0, -1]), vec2Angle([1, 0], [0, 1])) // 4.71238898038469 1.5707963267948966
+
+// Element-wise sum into a new vector, or into an output that is returned; difference, product and quotient work alike.
 const out: MutVec2 = [0, 0]
 console.log(vec2Plus(a, b), vec2Plus(a, b, out) === out) // [ 3, 6 ] true
+console.log(vec2Minus(a, b), vec2Mul(a, b), vec2Div(b, a)) // [ 3, 2 ] [ 0, 8 ] [ 0, 0.5 ]
+
+// Arithmetic with a scalar, and the opposite vector.
+console.log(vec2PlusScalar(a, 1), vec2MinusScalar(a, 1), vec2MulScalar(a, 2), vec2DivScalar(a, 2), vec2Negate(a)) // [ 4, 5 ] [ 2, 3 ] [ 6, 8 ] [ 1.5, 2 ] [ -3, -4 ]
 
 // Normalize, rotate a quarter turn counterclockwise, and the unit midpoint direction.
 console.log(vec2Normalize(a)) // [ 0.6, 0.8 ]
 console.log(vec2Rot([1, 0], Math.PI / 2)) // [ 6.123233995736766e-17, 1 ]
 console.log(vec2Midpoint([1, 0], [0, 1]).map((v) => Number(v.toFixed(6)))) // [ 0.707107, 0.707107 ]
+
+// In place on a mutable copy: set both components or fill them with one value, then the ...Mut operations.
+const v = vec2Clone(a)
+vec2Fill(v, 0, 4)
+vec2DivScalarMut(v, 2) // [0, 2]
+vec2NegateMut(v) // [0, -2]
+vec2NormalizeMut(v) // [0, -1]
+vec2RotMut(v, Math.PI) // [0, 1] up to roundoff
+console.log(vec2FillWith(out, 1)) // [ 1, 1 ]
 ```
 
 ### 2x2 Matrices
@@ -12709,21 +14760,65 @@ A 2x2 matrix is a linear map of the plane: a rotation and scale between two pixe
 `mat2Rot(angle)` is the rotation of the coordinate frame by an angle in radians, `[cos, sin, -sin, cos]`, so a vector expressed in the rotated frame turns by the opposite angle; given an existing matrix it returns the product `R·m`. The other helpers are the determinant and trace, transpose, flips, scalar and element-wise arithmetic, the products (including the fused forms with a transposed operand, which avoid building the transpose) and the products with a `Vec2`. A function that builds a matrix writes into an optional output and returns it, and allocates otherwise. There is no inverse here: the general solvers are in [Dense Linear System Solvers](#dense-linear-system-solvers).
 
 ```ts
-import { mat2Determinant, mat2Mul, mat2MulVec, mat2Rot, mat2Transpose, mat2TransposeMulVec, type MutMat2 } from 'nebulosa/src/math/linear-algebra/mat2'
+import {
+	mat2Clone,
+	mat2Copy,
+	mat2Determinant,
+	mat2DivScalar,
+	mat2Fill,
+	mat2FlipX,
+	mat2FlipY,
+	mat2Identity,
+	mat2Minus,
+	mat2MinusScalar,
+	mat2Mul,
+	mat2MulScalar,
+	mat2MulTranspose,
+	mat2MulVec,
+	mat2Negate,
+	mat2Plus,
+	mat2PlusScalar,
+	mat2Rot,
+	mat2Trace,
+	mat2Transpose,
+	mat2TransposeMul,
+	mat2TransposeMulTranspose,
+	mat2TransposeMulVec,
+	mat2Zero,
+	type MutMat2,
+} from 'nebulosa/src/math/linear-algebra/mat2'
 import { deg } from 'nebulosa/src/math/units/angle'
 
 const a: MutMat2 = [1, 2, 3, 4]
 const b: MutMat2 = [0, 1, 1, 0]
 
-// Scalar properties and the transpose.
-console.log(mat2Determinant(a), mat2Transpose(a)) // -2 [ 1, 3, 2, 4 ]
+// New matrices: zero and identity.
+console.log(mat2Zero(), mat2Identity()) // [ 0, 0, 0, 0 ] [ 1, 0, 0, 1 ]
 
-// The product a·b, and the product with a vector, a·v and aᵀ·v.
-console.log(mat2Mul(a, b)) // [ 2, 1, 4, 3 ]
+// Scalar properties and the transpose.
+console.log(mat2Determinant(a), mat2Trace(a), mat2Transpose(a)) // -2 5 [ 1, 3, 2, 4 ]
+
+// Swap the rows (flip about the x axis) or the columns (flip about the y axis).
+console.log(mat2FlipX(a), mat2FlipY(a)) // [ 3, 4, 1, 2 ] [ 2, 1, 4, 3 ]
+
+// Element-wise sum and difference, the negation, and arithmetic with a scalar.
+console.log(mat2Plus(a, b), mat2Minus(a, b), mat2Negate(a)) // [ 1, 3, 4, 4 ] [ 1, 1, 2, 4 ] [ -1, -2, -3, -4 ]
+console.log(mat2PlusScalar(a, 1), mat2MinusScalar(a, 1), mat2MulScalar(a, 2), mat2DivScalar(a, 2)) // [ 2, 3, 4, 5 ] [ 0, 1, 2, 3 ] [ 2, 4, 6, 8 ] [ 0.5, 1, 1.5, 2 ]
+
+// The product a·b, and the fused aᵀ·b; mat2MulTranspose (a·bᵀ) and mat2TransposeMulTranspose (aᵀ·bᵀ) work alike.
+console.log(mat2Mul(a, b), mat2TransposeMul(a, b)) // [ 2, 1, 4, 3 ] [ 3, 1, 4, 2 ]
+console.log(mat2MulTranspose(a, b), mat2TransposeMulTranspose(a, b))
+
+// The product with a vector, a·v and aᵀ·v.
 console.log(mat2MulVec(a, [1, 1]), mat2TransposeMulVec(a, [1, 1])) // [ 3, 7 ] [ 4, 6 ]
 
 // The frame rotation by 90° (the residues stand for exact zeros).
 console.log(mat2Rot(deg(90))) // [ 6.123233995736766e-17, 1, -1, 6.123233995736766e-17 ]
+
+// A mutable copy, overwritten with four elements and copied into an existing output.
+const c = mat2Clone(a)
+mat2Fill(c, 5, 6, 7, 8)
+console.log(mat2Copy(c, mat2Zero())) // [ 5, 6, 7, 8 ]
 ```
 
 ### 3D Vectors
@@ -12733,26 +14828,99 @@ Directions on the celestial sphere and positions in space are three-component ve
 Besides the products (dot, cross, the triple product as a signed volume), norms and arithmetic, the helpers extract spherical coordinates from a vector of any length: the longitude in the xy plane in [0, 2π), the latitude above it in [-π/2, π/2] and the colatitude from +z, all stable at the poles. The angle between two vectors uses a stable `atan2` form that stays accurate for tiny and nearly opposite separations. Rotations about the axes follow the right-hand rule (counterclockwise seen from the positive axis), and `vecRotateByRodrigues` rotates about any axis. `vecPositionAngle(a, b)` is the position angle of `b` seen from `a`, counterclockwise from the direction of the pole (north) through east. As in 2D, a function that builds a vector writes into an optional output and returns it, and the `...Mut` variants work in place.
 
 ```ts
-import { type MutVec3, vecAngle, vecCross, vecLatitude, vecLongitude, vecNormalize, vecPositionAngle, vecRotateByRodrigues, vecRotZ, vecX, vecY } from 'nebulosa/src/math/linear-algebra/vec3'
+import {
+	type MutVec3,
+	vecAngle,
+	vecAngleUnit,
+	vecClone,
+	vecCross,
+	vecCrossLength,
+	vecDistance,
+	vecDiv,
+	vecDivScalar,
+	vecDivScalarMut,
+	vecDot,
+	vecFill,
+	vecFillWith,
+	vecLatitude,
+	vecLength,
+	vecLongitude,
+	vecMidpoint,
+	vecMinus,
+	vecMinusScalar,
+	vecMul,
+	vecMulScalar,
+	vecNegate,
+	vecNegateMut,
+	vecNormalize,
+	vecNormalizeMut,
+	vecPlane,
+	vecPlus,
+	vecPlusScalar,
+	vecPolarAngle,
+	vecPositionAngle,
+	vecRotateByRodrigues,
+	vecRotX,
+	vecRotXMut,
+	vecRotY,
+	vecRotYMut,
+	vecRotZ,
+	vecRotZMut,
+	vecTripleProduct,
+	vecX,
+	vecY,
+	vecZ,
+	vecZero,
+} from 'nebulosa/src/math/linear-algebra/vec3'
 
+// New vectors: zero and the axes, optionally scaled.
 const x = vecX()
 const y = vecY()
+console.log(vecZero(), vecZ(), vecX(2)) // [ 0, 0, 0 ] [ 0, 0, 1 ] [ 2, 0, 0 ]
 
-// The cross product and the angle between two directions (radians).
-console.log(vecCross(x, y)) // [ 0, 0, 1 ]
-console.log(vecAngle(x, y)) // 1.5707963267948966
+// Length, distance between two points and the dot product.
+const a: MutVec3 = [1, 2, 2]
+const b: MutVec3 = [0, 0, 3]
+console.log(vecLength(a), vecDistance(a, b), vecDot(a, b)) // 3 2.449489742783178 6
 
-// Spherical coordinates of a vector of any length: longitude 45° and latitude about 35.26° for (1, 1, 1).
+// The cross product, its length, and the triple product x · (y × z), the signed volume.
+console.log(vecCross(x, y), vecCrossLength(x, y), vecTripleProduct(x, y, vecZ())) // [ 0, 0, 1 ] 1 1
+
+// The angle between two directions (radians); vecAngleUnit is the form for vectors already of unit length.
+console.log(vecAngle(x, y), vecAngleUnit(x, y)) // 1.5707963267948966 1.5707963267948966
+
+// Spherical coordinates of a vector of any length: longitude 45° and latitude about 35.26° for (1, 1, 1), and the colatitude from +z.
 const d: MutVec3 = [1, 1, 1]
 console.log(vecLongitude(d), vecLatitude(d)) // 0.7853981633974483 0.6154797086703873
+console.log(vecPolarAngle([1, 0, 0])) // 1.5707963267948966
 console.log(vecNormalize([1, 2, 2])) // [ 0.3333333333333333, 0.6666666666666666, 0.6666666666666666 ]
 
-// A quarter turn of +x about +z gives +y, about a coordinate axis or any axis (residues stand for exact zeros).
+// Element-wise arithmetic, the negation, and arithmetic with a scalar, into a new vector or an output.
+console.log(vecPlus(a, b), vecMinus(a, b), vecMul(a, b), vecDiv(b, a), vecNegate(a)) // [ 1, 2, 5 ] [ 1, 2, -1 ] [ 0, 0, 6 ] [ 0, 0, 1.5 ] [ -1, -2, -2 ]
+console.log(vecPlusScalar(a, 1), vecMinusScalar(a, 1), vecMulScalar(a, 2), vecDivScalar(a, 2)) // [ 2, 3, 3 ] [ 0, 1, 1 ] [ 2, 4, 4 ] [ 0.5, 1, 1 ]
+
+// The unit direction halfway between two vectors, and the (unnormalized) normal of the plane through three points.
+console.log(vecMidpoint(x, y)) // [ 0.7071067811865475, 0.7071067811865475, 0 ]
+console.log(vecPlane([0, 0, 0], x, y)) // [ 0, 0, 1 ]
+
+// Quarter turns by the right-hand rule: +y about +x gives +z, +z about +y gives +x, +x about +z gives +y (residues stand for exact zeros).
+console.log(vecRotX(y, Math.PI / 2), vecRotY(vecZ(), Math.PI / 2)) // [ 0, 6.123233995736766e-17, 1 ] [ 1, 0, 6.123233995736766e-17 ]
 console.log(vecRotZ(x, Math.PI / 2)) // [ 6.123233995736766e-17, 1, 0 ]
+
+// The same about any axis, whose length is ignored.
 console.log(vecRotateByRodrigues(x, [0, 0, 5], Math.PI / 2)) // [ 6.123233995736766e-17, 1, 0 ]
 
 // The position angle of a point seen from another: east (π/2) and north (0) of +x.
 console.log(vecPositionAngle([1, 0, 0], [1, 0.1, 0]), vecPositionAngle([1, 0, 0], [1, 0, 0.1])) // 1.5707963267948966 0
+
+// In place on a mutable copy: set the components or fill them with one value, then the ...Mut operations.
+const v = vecClone(a)
+vecFill(v, 0, 0, 4)
+vecDivScalarMut(v, 2) // [0, 0, 2]
+vecNegateMut(v) // [0, 0, -2]
+vecNormalizeMut(v) // [0, 0, -1]
+vecRotXMut(v, Math.PI / 2) // [0, 1, 0] up to roundoff; vecRotYMut and vecRotZMut turn about y and z
+console.log(vecFillWith(v, 1)) // [ 1, 1, 1 ]
 ```
 
 ### 3x3 Matrices
@@ -12762,12 +14930,65 @@ Every change of celestial reference frame (precession, nutation, the bias betwee
 The rotation builders `matRotX`, `matRotY` and `matRotZ` follow ERFA (`eraRx`, `eraRy`, `eraRz`): they rotate the coordinate frame by the angle, so the components of a fixed vector turn by the opposite angle, and given an existing matrix they return the product `R·m`, which composes a chain of frame rotations. `matRodriguesRotation(axis, angle)` is instead the rotation of a vector about a unit axis by the right-hand rule, the opposite sense. `matToVec3` and `matFromVec3` convert between a rotation matrix and its rotation vector (the axis scaled by the angle) in the frame-rotation sense. Because the transpose of a rotation is its inverse, `matTransposeMulVec` takes a vector back to the original frame. The determinant uses cofactor expansion, so prefer a decomposition for ill-conditioned matrices.
 
 ```ts
-import { matFromVec3, matMul, matMulVec, matRodriguesRotation, matRotX, matRotZ, matToVec3, matTransposeMulVec } from 'nebulosa/src/math/linear-algebra/mat3'
+import {
+	matClone,
+	matCopy,
+	matDeterminant,
+	matDivScalar,
+	matFill,
+	matFlipX,
+	matFlipY,
+	matFromVec3,
+	matIdentity,
+	matIsIdentity,
+	matMinus,
+	matMinusScalar,
+	matMul,
+	matMulScalar,
+	matMulTranspose,
+	matMulVec,
+	matNegate,
+	matPlus,
+	matPlusScalar,
+	matRodriguesRotation,
+	matRotX,
+	matRotY,
+	matRotZ,
+	matToVec3,
+	matTrace,
+	matTranspose,
+	matTransposeMul,
+	matTransposeMulTranspose,
+	matTransposeMulVec,
+	matZero,
+	type MutMat3,
+} from 'nebulosa/src/math/linear-algebra/mat3'
 import { deg } from 'nebulosa/src/math/units/angle'
+
+// New matrices: zero and identity, and the exact identity test.
+console.log(matZero(), matIdentity(), matIsIdentity(matIdentity())) // [ 0, 0, 0, 0, 0, 0, 0, 0, 0 ] [ 1, 0, 0, 0, 1, 0, 0, 0, 1 ] true
+
+// Scalar properties and the transpose of a general matrix.
+const n: MutMat3 = [1, 2, 3, 4, 5, 6, 7, 8, 10]
+console.log(matDeterminant(n), matTrace(n), matTranspose(n)) // -3 16 [ 1, 4, 7, 2, 5, 8, 3, 6, 10 ]
+
+// Reverse the row order (flip about the x axis) or the column order (flip about the y axis).
+console.log(matFlipX(n), matFlipY(n)) // [ 7, 8, 10, 4, 5, 6, 1, 2, 3 ] [ 3, 2, 1, 6, 5, 4, 10, 8, 7 ]
+
+// Element-wise sum and difference, the negation, and arithmetic with a scalar.
+const s: MutMat3 = [2, 0, 0, 0, 3, 0, 0, 0, 4]
+console.log(matPlus(n, s), matMinus(n, s), matNegate(s))
+console.log(matPlusScalar(s, 1), matMinusScalar(s, 1), matMulScalar(s, 2), matDivScalar(s, 2))
+
+// The fused products with a transposed operand, aᵀ·b, a·bᵀ and aᵀ·bᵀ, without building the transpose.
+console.log(matTransposeMul(n, s), matMulTranspose(n, s), matTransposeMulTranspose(n, s)) // [ 2, 12, 28, 4, 15, 32, 6, 18, 40 ] [ 2, 6, 12, 8, 15, 24, 14, 24, 40 ] [ 2, 12, 28, 4, 15, 32, 6, 18, 40 ]
 
 // A frame rotation of 90° about z: the +x direction has the components (0, -1, 0) in the new frame.
 const r = matRotZ(deg(90))
 console.log(r) // [ 6.123233995736766e-17, 1, 0, -1, 6.123233995736766e-17, 0, 0, 0, 1 ]
+
+// The frame rotation of 90° about y: the +z direction has the components (-1, 0, 0) in the new frame.
+console.log(matMulVec(matRotY(deg(90)), [0, 0, 1])) // [ -1, 0, 6.123233995736766e-17 ]
 
 // Compose two frame rotations (first about x, then about z) and transform a vector back and forth.
 const chain = matMul(r, matRotX(deg(23.44)))
@@ -12781,6 +15002,11 @@ console.log(matMulVec(q, [1, 0, 0])) // [ 6.123233995736766e-17, 1, 0 ]
 // The rotation vector of a matrix, in the frame-rotation sense, and back.
 console.log(matToVec3(q)) // [ 0, 0, -1.5707963267948966 ]
 console.log(matFromVec3([0, 0, Math.PI / 2])) // [ 6.123233995736766e-17, 1, 0, -1, 6.123233995736766e-17, 0, 0, 0, 1 ] (equal to matRotZ(deg(90)))
+
+// A mutable copy, overwritten with nine elements and copied into an existing output.
+const c = matClone(r)
+matFill(c, 1, 0, 0, 0, 1, 0, 0, 0, 1)
+console.log(matCopy(c, matZero())) // [ 1, 0, 0, 0, 1, 0, 0, 0, 1 ]
 ```
 
 ### Angle Parsing and Formatting
@@ -12790,7 +15016,7 @@ Astronomers write angles in sexagesimal notation: right ascension and hour angle
 `parseAngle` reads a number or a string into radians: numbers and plain numeric strings are degrees, or hours when requested, and up to three fields may be separated by unit letters (`h`, `d`, `°`, `m`, `'`, `s`, `"`, and the Unicode primes and minus) or by any non-digit; an `h` unit makes the value hours. Unparseable input gives `undefined` or a supplied default. `formatAngle` writes the sexagesimal string with configurable separators, padding, sign and fraction digits, carrying a seconds field that rounds to 60 into the minutes; `formatRA`, `formatDEC`, `formatHMS`, `formatDMS`, `formatAZ` and `formatALT` are the presets for the usual coordinates. The output is text for display, not for further arithmetic.
 
 ```ts
-import { DEFAULT_RA_FORMAT, deg, formatAngle, formatDEC, formatRA, hms, parseAngle, toDeg, toHour } from 'nebulosa/src/math/units/angle'
+import { DEFAULT_DEC_NO_FRACTION_FORMAT, DEFAULT_RA_FORMAT, deg, formatALT, formatAngle, formatAZ, formatDEC, formatDMS, formatHMS, formatRA, formatSignedDMS, hms, parseAngle, toDeg, toHour } from 'nebulosa/src/math/units/angle'
 
 // Parse text into radians: degrees by default, hours with `true` or with an `h` unit.
 console.log(toDeg(parseAngle('-12d 45m 23.123s')!)) // about -12.756423
@@ -12804,9 +15030,18 @@ const dec = deg(-5.390555)
 console.log(formatRA(ra)) // 05 35 17.30
 console.log(formatDEC(dec)) // -05 23 26.00
 
+// The other presets; false drops the fraction and a number sets its digits.
+console.log(formatHMS(ra), formatHMS(ra, false)) // 05:35:17.30 05:35:17
+console.log(formatDMS(deg(-12.51)), formatSignedDMS(deg(12.51), 0)) // -12d30m36.00s +12d30m36s
+console.log(formatAZ(deg(5.25)), formatALT(deg(45.5))) // 005 15 00.00 +45 30 00.00
+
 // Custom separators and precision, starting from the defaults or from a preset.
 console.log(formatAngle(deg(12.51), { separators: [':', ':', ''], fractionDigits: 0 })) // +12:30:36
 console.log(formatAngle(ra, { ...DEFAULT_RA_FORMAT, fractionDigits: 3 })) // 05 35 17.300
+
+// Every preset is also an options object: DEFAULT_HMS_FORMAT, DEFAULT_DMS_FORMAT, DEFAULT_SIGNED_DMS_FORMAT, DEFAULT_RA_FORMAT, DEFAULT_DEC_FORMAT and DEFAULT_AZ_FORMAT,
+// and without the fraction DEFAULT_HMS_NO_FRACTION_FORMAT, DEFAULT_DMS_NO_FRACTION_FORMAT, DEFAULT_SIGNED_DMS_NO_FRACTION_FORMAT, DEFAULT_RA_NO_FRACTION_FORMAT, DEFAULT_DEC_NO_FRACTION_FORMAT and DEFAULT_AZ_NO_FRACTION_FORMAT.
+console.log(formatAngle(dec, DEFAULT_DEC_NO_FRACTION_FORMAT)) // -05 23 26
 ```
 
 ### Angle Units and Wrapping
@@ -12816,16 +15051,25 @@ An `Angle` in the library is a plain number in radians, whatever the quantity: r
 Angles are circular, so comparisons and arithmetic need wrapping: `normalizeAngle` wraps into [0, 2π), `normalizePI` into (-π, π], and `safeAngularDifference(a, b)` is the shortest signed difference `a - b` between two scalar directions, which a plain subtraction across the 0/360° line gets wrong. The separation of two points on the sky is a different, spherical quantity: see [Angular Separation and Position Angle](#angular-separation-and-position-angle). `unwrapAngles` restores the continuity of a sampled phase, such as an interpolated longitude or hour angle, by removing the 2π jumps; it can only recover the motion when consecutive samples move by less than half a turn.
 
 ```ts
-import { deg, dms, hour, normalizeAngle, normalizePI, safeAngularDifference, signedDms, toArcsec, toDeg, toDms, unwrapAngles } from 'nebulosa/src/math/units/angle'
+import { arcmin, arcsec, deg, dms, hms, hour, mas, normalizeAngle, normalizePI, safeAngularDifference, secondsOfTime, signedDms, signedHms, toArcmin, toArcsec, toDeg, toDms, toHms, toHour, toMas, toSecondsOfTime, unwrapAngle, unwrapAngles } from 'nebulosa/src/math/units/angle'
 
 // Every angle is radians; constructors convert from other units and the to... functions back.
 console.log(deg(180), hour(12)) // 3.141592653589793 3.141592653589793
 console.log(toArcsec(deg(1))) // about 3600
 
+// One degree from arcminutes, arcseconds and milliarcseconds, and one hour from seconds of time.
+console.log(arcmin(60), arcsec(3600), mas(3.6e6), secondsOfTime(3600)) // 0.017453292519943295 (three times) 0.2617993877991494
+console.log(toArcmin(deg(1)), toMas(arcsec(1)), toSecondsOfTime(hour(1))) // about 60 1000 3600
+
 // Sexagesimal fields: the sign of the leading field, -0 included, applies to the whole angle.
 console.log(toDeg(dms(-12, 30, 36))) // -12.51
 console.log(toDeg(dms(-0, 30)), toDeg(signedDms(true, 0, 30))) // -0.5 -0.5
+console.log(toHour(signedHms(true, 0, 30))) // about -0.5 (hours)
 console.log(toDms(deg(-12.51))) // [ 12, 30, 35.99999999999923, -1 ] (degrees, minutes, seconds, sign)
+
+// Split into hours, minutes and seconds after wrapping into [0, 24) hours.
+console.log(toHms(hms(5, 35, 17.3))) // about [5, 35, 17.3]
+console.log(toHms(hour(-1.5))) // about [22, 30, 0]
 
 // Wrap into [0, 2π) or (-π, π], and take the shortest difference across the 0/360° line.
 console.log(toDeg(normalizeAngle(deg(-90))), toDeg(normalizePI(deg(270)))) // 270 -90
@@ -12833,6 +15077,9 @@ console.log(toDeg(safeAngularDifference(deg(359), deg(1)))) // about -2
 
 // Remove the 2π jumps of a sampled phase (a new Float64Array in radians).
 console.log(Array.from(unwrapAngles([359, 0, 1, 0].map(deg)), toDeg)) // about [359, 360, 361, 360]
+
+// One step of the same unwrapping, for a stream: current sample, previous sample, previous unwrapped value.
+console.log(toDeg(unwrapAngle(deg(1), deg(359), deg(359)))) // about 361
 ```
 
 ### Barometric Pressure and Altitude
@@ -12858,6 +15105,36 @@ console.log(pressureFrom(kilometer(15))) // 120.44570862423203
 // The pressure altitude (m) of a reading, and the round trip in the troposphere.
 console.log(toMeter(fromPressure(800))) // 1948.9891722205734
 console.log(toMeter(fromPressure(pressureFrom(meter(2000))))) // 2000.0000000000023
+```
+
+### Binary Search
+
+Much of the numerical data of the library is tabulated against an increasing abscissa: ephemeris and Earth orientation samples against time, boundary tables against right ascension or declination, control points of a curve against position. Finding where a value falls in such a table is the first step of every lookup and interpolation, and binary search does it in `O(log n)` comparisons by halving the candidate range, against `O(n)` for a scan.
+
+`binarySearch` searches an ascending-sorted numeric array, and `binarySearchWithComparator` any array ordered consistently with a comparator that tells whether an element comes before or after the target, such as a table of records keyed by time. A hit returns the index of a matching element, which for repeated values may be any of them. A miss returns, as Java's `Arrays.binarySearch` does, the negative encoding `-(insertion + 1)`, or the insertion index itself on request, where the insertion index is the position of the first element greater than the target; both search an optional sub-range. The input must already be sorted, or the result is meaningless. JavaScript's `Array.prototype.sort` compares elements as strings by default, so `NumberComparator` and `NumberComparatorDescending` are the comparators that sort numbers by value.
+
+```ts
+import { binarySearch, binarySearchWithComparator, NumberComparator, NumberComparatorDescending } from 'nebulosa/src/core/util'
+
+// The default sort compares strings; the comparators sort numbers ascending or descending.
+console.log([10, 9, 1, 100].sort(), [10, 9, 1, 100].sort(NumberComparator)) // [ 1, 10, 100, 9 ] [ 1, 9, 10, 100 ]
+console.log([10, 9, 1, 100].sort(NumberComparatorDescending)) // [ 100, 10, 9, 1 ]
+
+// A hit gives the index; a miss gives -(insertion + 1), or the insertion index with positive.
+const time = [0, 0.5, 1, 1.5, 2]
+console.log(binarySearch(time, 1.5), binarySearch(time, 1.2), binarySearch(time, 1.2, { positive: true })) // 3 -4 3
+
+// Only the sub-range [from, to) is searched.
+console.log(binarySearch(time, 1.5, { from: 0, to: 3 })) // -4
+
+// Records ordered by a key: the comparator is negative when the element comes before the target.
+const samples = [
+	{ jd: 10, value: 'a' },
+	{ jd: 20, value: 'b' },
+	{ jd: 30, value: 'c' },
+]
+console.log(binarySearchWithComparator(samples, (s) => s.jd - 20)) // 1
+console.log(binarySearchWithComparator(samples, (s) => s.jd - 25, { positive: true })) // 2, the slot between jd 20 and jd 30
 ```
 
 ### Box Least Squares Transit Search
@@ -12926,6 +15203,7 @@ console.log(lu.invert().toArray()) // [ 0.6, -0.2, -0.2, 0.4 ] (up to roundoff)
 
 // QR: the least-squares line y = c0 + c1·t through four samples at t = 0, 1, 2, 3.
 const tall = new QrDecomposition(new Matrix(4, 2, [1, 0, 1, 1, 1, 2, 1, 3]))
+console.log(tall.isFullRank) // true: the least-squares solution is unique
 console.log(tall.solve([1, 2, 2, 4])) // Float64Array(2) [ 0.9000000000000001, 0.8999999999999999 ] (0.9 for both)
 
 // Gaussian elimination consumes the matrix and the right-hand side, so pass copies.
@@ -12939,29 +15217,50 @@ The fixed-size `mat2` and `mat3` helpers cover rotations and planar maps, but fi
 It provides construction (zero-filled, from data, identity, single row or column), element access, structural queries (square, identity, diagonal, symmetric, with exact comparisons), the transpose, determinant, trace and inverse, element-wise and scalar arithmetic, and products with matrices and vectors. Operations on incompatible shapes, and the inverse of a singular or non-square matrix, throw. `mulMTxN(a, b)` and `mulMxNT(a, b)` compute `aᵀ·b` and `a·bᵀ` directly on arrays of rows, the form used to build normal equations without creating `Matrix` objects. To solve systems, use the decompositions of [Dense Linear System Solvers](#dense-linear-system-solvers).
 
 ```ts
-import { Matrix, mulMTxN } from 'nebulosa/src/math/linear-algebra/matrix'
+import { Matrix, mulMTxN, mulMxNT } from 'nebulosa/src/math/linear-algebra/matrix'
 
-// A 2x3 and a 3x2 matrix from row-major data.
+// A 2x3 and a 3x2 matrix from row-major data; without data the matrix is zero-filled.
 const a = new Matrix(2, 3, [1, 2, 3, 4, 5, 6])
 const b = new Matrix(3, 2, [1, 0, 0, 1, 1, 1])
 
-// Products: a 2x3 times a 3x2 gives a 2x2, and with a vector.
+// Other constructors: the identity, a square matrix, and a single row or column.
+console.log(Matrix.identity(2).toArray(), Matrix.square(2, new Float64Array([1, 2, 3, 4])).rows) // [ 1, 0, 0, 1 ] 2
+console.log(Matrix.row([1, 2, 3]).rows, Matrix.column([1, 2, 3]).rows) // 1 3
+
+// Element access by flat row-major index or by row and column, and the number of cells.
+console.log(a.at(4), a.get(1, 2), a.size) // 5 6 6
+a.set(0, 0, 1)
+
+// Structural queries, with exact comparisons.
+const s = new Matrix(2, 2, [1, 2, 2, 1])
+console.log(s.isSquare, s.isSymmetric, s.isDiagonal, s.isIdentity, s.isZero) // true true false false false
+
+// Products: a 2x3 times a 3x2 gives a 2x2, and with a vector, a·v and aᵀ·v.
 console.log(a.mul(b).toArray()) // [ 4, 5, 10, 11 ]
-console.log(a.mulVec([1, 1, 1])) // Float64Array(2) [ 6, 15 ]
+console.log(a.mulVec([1, 1, 1]), a.mulTransposedVec([1, 1])) // Float64Array(2) [ 6, 15 ] Float64Array(3) [ 5, 7, 9 ]
 console.log(a.transposed.toArray()) // [ 1, 4, 2, 5, 3, 6 ]
+
+// Element-wise and scalar arithmetic into a new matrix or an output: also minus, negate, minusScalar, mulScalar and divScalar.
+console.log(s.plus(s).toArray(), s.plusScalar(1).toArray()) // [ 2, 4, 4, 2 ] [ 2, 3, 3, 2 ]
+console.log(s.minus(s).toArray(), s.negate().toArray(), s.minusScalar(1).toArray(), s.mulScalar(2).toArray(), s.divScalar(2).toArray())
 
 // Scalar properties and the inverse of a square matrix.
 const m = new Matrix(2, 2, [1, 2, 3, 4])
 console.log(m.determinant, m.trace, m.isSingular) // -2 5 false
 console.log(m.invert().toArray()) // [ -2, 1, 1.5, -0.5 ]
 
-// aᵀ·b on arrays of rows, as in the normal equations of a fit.
+// In place: reverse the row order (flipX) or the column order (flipY) of a copy, fill it, and copy into a matrix of the same shape.
+console.log(a.clone().flipX().toArray(), a.clone().flipY().toArray()) // [ 4, 5, 6, 1, 2, 3 ] [ 3, 2, 1, 6, 5, 4 ]
+console.log(new Matrix(2, 2).fill('identity').toArray(), a.copyInto(new Matrix(2, 3)).toArray()) // [ 1, 0, 0, 1 ] [ 1, 2, 3, 4, 5, 6 ]
+
+// aᵀ·b and a·bᵀ on arrays of rows, as in the normal equations of a fit.
 const rows = [
 	[1, 2],
 	[3, 4],
 	[5, 6],
 ]
 console.log(mulMTxN(rows, [[1], [1], [1]])) // [ Float64Array(1) [ 9 ], Float64Array(1) [ 12 ] ]
+console.log(mulMxNT([[1, 2]], rows)) // [ Float64Array(3) [ 5, 11, 17 ] ]
 ```
 
 ### Descriptive Statistics
@@ -12971,17 +15270,29 @@ Image processing and photometry constantly summarize samples: the sky background
 The reducers work on any `NumberArray` and keep the units of the samples. The mean uses compensated summation, the geometric mean accumulates logarithms so a wide dynamic range does not overflow, and the standard deviation is the population one (divided by `n`). `medianOf` and `percentileOf` require an ascending-sorted input and silently give wrong results otherwise; for unsorted data use the selection functions of [Quickselect Order Statistics](#quickselect-order-statistics). `pearsonCorrelationOf` is the linear correlation coefficient, and `geometricMedian` is the point that minimizes the sum of Euclidean distances to a set of 2D points, a robust centre that a few far points barely move, unlike the centroid.
 
 ```ts
-import { geometricMedian, meanOf, medianAbsoluteDeviationOf, medianOf, pearsonCorrelationOf, standardDeviationOf } from 'nebulosa/src/math/numerical/statistics'
+import { geometricMeanOf, geometricMedian, maxOf, meanOf, medianAbsoluteDeviationOf, medianOf, minOf, pearsonCorrelationOf, percentileOf, rmsOf, STANDARD_DEVIATION_SCALE, standardDeviationOf } from 'nebulosa/src/math/numerical/statistics'
 
 const data = [2, 4, 4, 4, 5, 5, 7, 9]
 
+// The smallest and largest values with their indexes, as [value, index].
+console.log(minOf(data), maxOf(data)) // [ 2, 0 ] [ 9, 7 ]
+
 // Mean, population standard deviation and the median of a sorted array.
 console.log(meanOf(data), standardDeviationOf(data), medianOf(data)) // 5 2 4.5
+
+// The geometric mean (for ratios and fluxes) and the root mean square.
+console.log(geometricMeanOf([1, 10, 100]), rmsOf([3, 4])) // 10.000000000000002 3.5355339059327378
+
+// The interpolated 90th percentile of a sorted array.
+console.log(percentileOf(data, 0.9)) // 7.6
 
 // The MAD about the median, scaled to a standard deviation; an outlier barely moves it.
 const dirty = [...data, 1000]
 console.log(medianAbsoluteDeviationOf(dirty, 5, true, dirty.length, new Float64Array(dirty.length))) // 1.482602218505602
 console.log(standardDeviationOf(dirty)) // 312.7040173536883 (dragged by the outlier)
+
+// The same scaling by hand: the raw MAD times STANDARD_DEVIATION_SCALE.
+console.log(medianAbsoluteDeviationOf(dirty, 5, false) * STANDARD_DEVIATION_SCALE) // 1.482602218505602
 
 // The correlation coefficient of two series.
 console.log(pearsonCorrelationOf([1, 2, 3, 4], [8, 6, 4, 2])) // -1
@@ -12997,7 +15308,7 @@ A `Distance` in the library is a plain number in astronomical units, the natural
 The constructors `meter`, `kilometer`, `lightYear` and `parsec` convert into AU and `toMeter`, `toKilometer`, `toLightYear` and `toParsec` convert back, each a single multiplication or division. The same module has the pressure altitude `fromPressure`, described in [Barometric Pressure and Altitude](#barometric-pressure-and-altitude).
 
 ```ts
-import { kilometer, lightYear, parsec, toKilometer, toMeter, toParsec } from 'nebulosa/src/math/units/distance'
+import { kilometer, lightYear, parsec, toKilometer, toLightYear, toMeter, toParsec } from 'nebulosa/src/math/units/distance'
 
 // One AU in metres and kilometres.
 console.log(toMeter(1), toKilometer(1)) // 149597870700 149597870.7
@@ -13008,6 +15319,9 @@ console.log(kilometer(384400)) // about 0.002570
 
 // Proxima Centauri at 4.2465 light years, in parsecs.
 console.log(toParsec(lightYear(4.2465))) // about 1.302
+
+// One parsec in light years.
+console.log(toLightYear(parsec(1))) // about 3.2616
 ```
 
 ### Ellipse Containment Geometry
@@ -13018,6 +15332,7 @@ Some measurements compare two ellipses: in the collimation analysis of a defocus
 
 ```ts
 import { type EllipseGeometry, maximumNormalizedBoundaryRadiusSquared } from 'nebulosa/src/math/numerical/ellipse.geometry'
+import { signedDistanceToEllipse } from 'nebulosa/src/math/numerical/geometry'
 
 const circle = (x: number, y: number, r: number): EllipseGeometry => ({ center: { x, y }, semiMajor: r, semiMinor: r, theta: 0 })
 
@@ -13032,6 +15347,9 @@ console.log(maximumNormalizedBoundaryRadiusSquared(circle(0, 0, 2), circle(1.5, 
 const outer: EllipseGeometry = { center: { x: 0, y: 0 }, semiMajor: 5, semiMinor: 2, theta: 0 }
 console.log(maximumNormalizedBoundaryRadiusSquared(outer, { center: { x: 0, y: 0 }, semiMajor: 4, semiMinor: 0.5, theta: 0 })) // 0.6400000000000001
 console.log(maximumNormalizedBoundaryRadiusSquared(outer, { center: { x: 0, y: 0 }, semiMajor: 4, semiMinor: 0.5, theta: Math.PI / 2 })) // 4
+
+// The same question for a single point: its signed distance to the origin-centred ellipse with semi-axes 2 along x and 1 along y, negative inside.
+console.log(signedDistanceToEllipse(0, 0, 2, 1), signedDistanceToEllipse(0, 1, 2, 1), signedDistanceToEllipse(3, 0, 2, 1)) // -1 0 1
 ```
 
 ### Ellipse Fitting
@@ -13117,7 +15435,10 @@ The discrete Fourier transform decomposes `N` complex samples into frequencies, 
 `math/numerical/fft` is an in-place radix-2 FFT over separate real and imaginary `Float64Array` buffers, so every length must be a power of two: pad the input with zeros (`fftPaddedSize` gives the next power of two). The forward transform is unscaled; the inverse uses `exp(+i·2π·k·n/N)` and divides by `N`, so a forward-then-inverse round trip restores the input. A plan with the bit-reversal and twiddle tables is built once per length, and a 2D workspace holds a padded row-major grid that is transformed by rows and then by columns, so repeated transforms allocate nothing. These are the primitives behind the [FFT Image Filter](#fft-image-filter) and the phase correlation of [Surface Registration](#surface-registration).
 
 ```ts
-import { fft2DWorkspace, fftComplex1D, fftComplex2D, fftPlan } from 'nebulosa/src/math/numerical/fft'
+import { fft2DWorkspace, fftComplex1D, fftComplex2D, fftPaddedSize, fftPlan } from 'nebulosa/src/math/numerical/fft'
+
+// The power-of-two length to pad 5 or 8 samples to.
+console.log(fftPaddedSize(5), fftPaddedSize(8)) // 8 8
 
 // A 1D transform of 8 samples in place, and the inverse that restores them.
 const plan = fftPlan(8)
@@ -13142,7 +15463,7 @@ On a sphere the shortest path between two points is an arc of a great circle, th
 `sphericalSeparation` is the angular length of the arc between two points, in [0, π], with an `atan2` formula that stays accurate both for tiny separations and for nearly antipodal points, where the plain arccosine of the dot product loses precision. `sphericalPositionAngle` is the direction of the second point seen from the first, east of north in [0, 2π). `sphericalDestination` is the inverse problem, the point reached by moving a distance along a position angle, and `sphericalInterpolate` the point at a fraction of the arc, moving at constant angular speed. `sphericalGreatCirclePole` is the unit normal of the great circle through two direction vectors, or zero when they are parallel or opposite.
 
 ```ts
-import { sphericalDestination, sphericalGreatCirclePole, sphericalInterpolate, sphericalPositionAngle, sphericalSeparation } from 'nebulosa/src/math/numerical/geometry'
+import { sphericalDestination, sphericalGreatCirclePole, sphericalInterpolate, sphericalPoleVector, sphericalPositionAngle, sphericalSeparation } from 'nebulosa/src/math/numerical/geometry'
 import { deg } from 'nebulosa/src/math/units/angle'
 
 // The separation of two points on the equator a quarter turn apart (radians).
@@ -13159,6 +15480,9 @@ console.log(sphericalInterpolate(0, 0, deg(90), 0, 0.5)) // [ 0.7853981633974483
 
 // The pole of the great circle through two directions (x toward longitude 0, z toward the north pole).
 console.log(sphericalGreatCirclePole([1, 0, 0], [0, 1, 0])) // [ 0, 0, 1 ]
+
+// The pole of the great circle leaving a direction along a position angle: heading north from +x, the same as the pole through +x and +z.
+console.log(sphericalPoleVector([1, 0, 0], 0), sphericalGreatCirclePole([1, 0, 0], [0, 0, 1])) // [ 0, -1, 0 ] [ 0, -1, 0 ]
 ```
 
 ### Histogram Analysis
@@ -13178,8 +15502,15 @@ const h = new Histogram(bins, 7)
 console.log(h.mode, h.count) // [ 0.42857142857142855, 20 ] [ 50, 20 ]
 console.log(h.mean, h.median, h.standardDeviation) // 0.42857142857142855 0.5 0.1690308509457033
 
-// The 25% and 75% quantiles, with interpolation inside the bin.
+// The variance of the normalized positions, and the shape: zero skewness for this symmetric peak, and the excess kurtosis.
+console.log(h.variance, h.skewness, h.kurtosis) // 0.02857142857142857 0 0.16326530612244916
+
+// The first and last populated bins as [position, count], and the Shannon entropy (bits).
+console.log(h.minimum, h.maximum, h.entropy) // [ 0, 1 ] [ 0.8571428571428571, 1 ] 2.2663137138648346
+
+// The 25% and 75% quantiles, with interpolation inside the bin, and the cumulative fraction at a position, the inverse.
 console.log(h.quantile(0.25), h.quantile(0.75)) // 0.39285714285714285 0.6071428571428571
+console.log(h.cdf(0.5)) // 0.5
 
 // After editing the bins, reset the cached statistics before reading them again.
 bins[7] = 50
@@ -13237,7 +15568,7 @@ Many models are linear in their unknown coefficients even when they are not line
 `linearLeastSquares(design, target, options?)` solves this with a QR decomposition, which avoids the loss of precision of the normal equations, and reports the fitted values, residuals and condition number of the design; a very large condition number flags strongly correlated columns, whose coefficients are unstable. Optional non-negative per-row weights multiply the squared residuals (zero removes a row), a ridge (Tikhonov) term shrinks the coefficients to stabilize a poorly conditioned problem, and leverages (the diagonal of the hat matrix) identify the samples that pull the fit most. `leastSquaresCoefficients` returns only the coefficients, for inner loops. `robustLinearLeastSquares` resists outliers by iteratively reweighted least squares with a Huber loss, which down-weights large residuals, or a Tukey biweight, which can reject gross outliers entirely.
 
 ```ts
-import { estimateLeastSquaresConditioning, linearLeastSquares, predictLinearLeastSquares, robustLinearLeastSquares } from 'nebulosa/src/math/numerical/least.squares'
+import { estimateLeastSquaresConditioning, leastSquaresCoefficients, linearLeastSquares, predictLinearLeastSquares, robustLinearLeastSquares } from 'nebulosa/src/math/numerical/least.squares'
 
 // Fit y = a + b·x: each design row is [1, x].
 const xs = [0, 1, 2, 3, 4]
@@ -13246,11 +15577,14 @@ const fit = linearLeastSquares(design, [1, 3, 5, 7, 9])
 console.log(fit.coefficients) // Float64Array(2) [ 0.9999999999999977, 2.0000000000000004 ]
 console.log(predictLinearLeastSquares(fit.coefficients, [1, 10])) // 21 (the model at x = 10)
 
+// Only the coefficients, without the fitted values and diagnostics, for inner loops.
+console.log(leastSquaresCoefficients(design, [1, 3, 5, 7, 9])) // Float64Array(2) [ 0.9999999999999977, 2.0000000000000004 ]
+
 // A contaminated last sample: removed by a zero weight, or down-weighted by a robust fit.
 const wy = [1, 3, 5, 7, 40]
 console.log(linearLeastSquares(design, wy, { weights: [1, 1, 1, 1, 0] }).coefficients) // Float64Array(2) [ 1, 2 ]
-const tukey = robustLinearLeastSquares(design, wy, { method: 'tukey', tuning: 4.685 })
-console.log(tukey.coefficients, tukey.weights) // the coefficients, and the final weight of each row
+const tukey = robustLinearLeastSquares(design, wy, { method: 'tukey' })
+console.log(tukey.coefficients, tukey.weights[4]) // ≈ [1, 2], and 0: the final weight of the contaminated row
 
 // A duplicated column makes the design degenerate.
 console.log(estimateLeastSquaresConditioning(xs.map((x) => [x, 2 * x]))) // { conditionNumber: Infinity, rankDeficient: true }
@@ -13263,7 +15597,7 @@ A straight line is the simplest model relating two measured quantities: magnitud
 `simpleLinearRegression(x, y)` is ordinary least squares computed on mean-subtracted sums, so a large offset in `x` does not cause cancellation. `weightedLinearRegression(x, y, weights)` minimizes the weighted squared residuals, and `weightedLinearRegressionScore` adds the standard errors of the slope and intercept. `theilSenRegression(x, y)` is the robust fit: the slope is the median of the pairwise slopes and the intercept the median of `y - slope·x`, so it tolerates a sizable fraction of outliers, at a cost growing with the square of the number of samples. Every line gives `predict(x)` and the inverse `x(y)`. `regressionScore` judges any regression of the library by its correlation, coefficient of determination r², residual sum of squares and RMS deviation, and `intersect` finds the crossing of two lines.
 
 ```ts
-import { intersect, regressionScore, simpleLinearRegression, theilSenRegression, weightedLinearRegression } from 'nebulosa/src/math/numerical/regression'
+import { intersect, regressionScore, simpleLinearRegression, theilSenRegression, weightedLinearRegression, weightedLinearRegressionScore } from 'nebulosa/src/math/numerical/regression'
 
 const x = [0, 1, 2, 3, 4, 5]
 const y = [1.1, 2.9, 5.2, 7.1, 8.8, 11.2]
@@ -13275,7 +15609,13 @@ console.log(fit.predict(6)) // 13.059999999999999
 console.log(regressionScore(fit)) // { r: 0.9990408626775663, r2: 0.9980826452995359, rss: 0.1348571428571428, rmsd: 0.14992061391346576 }
 
 // Weights: the last sample counts 10 times and pulls the line toward it.
-console.log(weightedLinearRegression(x, y, [1, 1, 1, 1, 1, 10]).slope) // 2.0349999999999997
+const weights = [1, 1, 1, 1, 1, 10]
+const weighted = weightedLinearRegression(x, y, weights)
+console.log(weighted.slope) // 2.0349999999999997
+
+// The weighted score adds the standard errors of the slope and intercept.
+const score = weightedLinearRegressionScore(weighted, x, y, weights)
+console.log(score.slopeStandardError, score.interceptStandardError) // 0.032307119958300136 0.13958271144140033
 
 // A wild sample drags the ordinary slope to about 6, while Theil-Sen ignores it.
 const dirty = [1.1, 2.9, 5.2, 7.1, 8.8, 40]
@@ -13313,28 +15653,6 @@ console.log(others.map((p) => [p.frequency, p.aliasOf]))
 const bootstrap = lombScargle(time, magnitude, error, { maxFrequency: 4, falseAlarm: { method: 'bootstrap', samples: 200, random: mulberry32(2) } })
 ```
 
-### Multivariate Minimization
-
-Many problems reduce to finding the parameters that minimize a scalar cost: the tilt and offset of a focus surface, the parameters of a model with no convenient derivatives, a quality metric measured on images. When the gradient is unavailable or the cost is noisy, derivative-free methods search with function evaluations alone.
-
-`nelderMead` is the downhill-simplex method: robust for a few variables and tolerant of noisy or non-smooth objectives, but slow, and it can stall in narrow curved valleys. `coordinateDescent` minimizes along each axis in turn, which suits separable or weakly coupled problems and is slow when the variables are strongly correlated. `powell` learns conjugate directions with line searches and usually needs the fewest evaluations on smooth problems. All three return a local minimum that depends on the starting point, with a flag telling whether they converged; the objective must be finite everywhere they evaluate it.
-
-```ts
-import { coordinateDescent, nelderMead, powell } from 'nebulosa/src/math/numerical/optimization'
-
-// A paraboloid with its minimum at (1, -2) and value 3.
-const bowl = (p: Readonly<ArrayLike<number>>) => (p[0] - 1) ** 2 + 2 * (p[1] + 2) ** 2 + 3
-
-// The three methods from the same start: the minimum, its value, the iterations and convergence.
-console.log(nelderMead(bowl, [0, 0])) // { minimum: Float64Array(2) [ 0.9999999996947966, -2.0000000063373644 ], value: 3, iterations: 66, converged: true }
-console.log(powell(bowl, [0, 0])) // { minimum: Float64Array(2) [ 0.9999999999999998, -1.99999999 ], value: 3, iterations: 2, converged: true }
-
-// The curved Rosenbrock valley, minimum at (1, 1): easy for Powell, too correlated for coordinate steps.
-const rosenbrock = (p: Readonly<ArrayLike<number>>) => (1 - p[0]) ** 2 + 100 * (p[1] - p[0] ** 2) ** 2
-console.log(powell(rosenbrock, [-1.2, 1], { maxIterations: 2000 }).minimum) // Float64Array(2) [ 0.9999999992476296, 0.9999999984934277 ]
-console.log(coordinateDescent(rosenbrock, [-1.2, 1], { maxIterations: 2000 }).converged) // false
-```
-
 ### Modulo and Integer Division
 
 Astronomy is full of cyclic quantities: angles wrap at 360° or 2π, hours at 24, days of the week at 7, and calendar algorithms divide integers. JavaScript's `%` operator keeps the sign of the dividend (`-1 % 360` is `-1`), which is wrong for wrapping, and integer division by truncation rounds toward zero instead of down. These helpers follow the Euclidean (floored) convention that calendar and ephemeris algorithms assume.
@@ -13355,6 +15673,28 @@ console.log(divmod(-1, 360)) // [ -1, 359 ]
 
 // Floor division rounds toward minus infinity, unlike truncation.
 console.log(floorDiv(-7, 2), Math.trunc(-7 / 2)) // -4 -3
+```
+
+### Multivariate Minimization
+
+Many problems reduce to finding the parameters that minimize a scalar cost: the tilt and offset of a focus surface, the parameters of a model with no convenient derivatives, a quality metric measured on images. When the gradient is unavailable or the cost is noisy, derivative-free methods search with function evaluations alone.
+
+`nelderMead` is the downhill-simplex method: robust for a few variables and tolerant of noisy or non-smooth objectives, but slow, and it can stall in narrow curved valleys. `coordinateDescent` minimizes along each axis in turn, which suits separable or weakly coupled problems and is slow when the variables are strongly correlated. `powell` learns conjugate directions with line searches and usually needs the fewest evaluations on smooth problems. All three return a local minimum that depends on the starting point, with a flag telling whether they converged; the objective must be finite everywhere they evaluate it.
+
+```ts
+import { coordinateDescent, nelderMead, powell } from 'nebulosa/src/math/numerical/optimization'
+
+// A paraboloid with its minimum at (1, -2) and value 3.
+const bowl = (p: Readonly<ArrayLike<number>>) => (p[0] - 1) ** 2 + 2 * (p[1] + 2) ** 2 + 3
+
+// The three methods from the same start: the minimum, its value, the iterations and convergence.
+console.log(nelderMead(bowl, [0, 0])) // { minimum: Float64Array(2) [ 0.9999999996947966, -2.0000000063373644 ], value: 3, iterations: 66, converged: true }
+console.log(powell(bowl, [0, 0])) // { minimum: Float64Array(2) [ 0.9999999999999998, -1.99999999 ], value: 3, iterations: 2, converged: true }
+
+// The curved Rosenbrock valley, minimum at (1, 1): easy for Powell, too correlated for coordinate steps.
+const rosenbrock = (p: Readonly<ArrayLike<number>>) => (1 - p[0]) ** 2 + 100 * (p[1] - p[0] ** 2) ** 2
+console.log(powell(rosenbrock, [-1.2, 1], { maxIterations: 2000 }).minimum) // Float64Array(2) [ 0.9999999992476296, 0.9999999984934277 ]
+console.log(coordinateDescent(rosenbrock, [-1.2, 1], { maxIterations: 2000 }).converged) // false
 ```
 
 ### Nonlinear Least Squares
@@ -13414,11 +15754,15 @@ Image work needs a few planar primitives: the position of a star, the size of a 
 The helpers give the midpoint and the Euclidean distance of two points (the squared distance avoids the square root when only comparisons are needed) and the overlap of two axis-aligned rectangles, for example to clip a region of interest to the sensor. Rectangles that only share an edge or a corner do not overlap, reversed edges are treated as if sorted, and the result is always normalized. A function that builds a point or rectangle writes into an optional output, which for `rectIntersection` must not be one of its inputs.
 
 ```ts
-import { euclideanDistance, midPoint, type Rect, rectIntersection } from 'nebulosa/src/math/numerical/geometry'
+import { euclideanDistance, euclideanSquaredDistance, fillPoint, midPoint, type Point, type Rect, rectIntersection } from 'nebulosa/src/math/numerical/geometry'
 
-// The midpoint of and the distance between two points, in their own unit.
+// The midpoint of and the distance between two points, in their own unit; the squared distance skips the square root.
 console.log(midPoint({ x: 0, y: 0 }, { x: 4, y: 2 })) // { x: 2, y: 1 }
-console.log(euclideanDistance({ x: 0, y: 0 }, { x: 3, y: 4 })) // 5
+console.log(euclideanDistance({ x: 0, y: 0 }, { x: 3, y: 4 }), euclideanSquaredDistance({ x: 0, y: 0 }, { x: 3, y: 4 })) // 5 25
+
+// Write coordinates into an existing point, or create one when the output is undefined.
+const star: Point = { x: 0, y: 0 }
+console.log(fillPoint(star, 12.5, 40.25) === star, fillPoint(undefined, 1, 2)) // true { x: 1, y: 2 }
 
 // The overlap of two rectangles, or undefined when they only touch or are apart.
 const sensor: Rect = { left: 0, top: 0, right: 10, bottom: 10 }
@@ -13485,11 +15829,17 @@ Statistical tests turn a statistic into a probability: a chi-square test asks wh
 `logGamma` is the natural logarithm of the gamma function (Lanczos approximation), `regularizedGammaP(a, x)` the regularized lower incomplete gamma function `P(a, x)`, and `regularizedIncompleteBeta(x, a, b)` the regularized incomplete beta function `I_x(a, b)`. On top of them, `chiSquareCdf` and its inverse `chiSquareQuantile` give the chi-square distribution for a number of degrees of freedom, and `fDistributionSurvival` the upper-tail probability `P(F >= value)`, the p-value of an F test. A small p-value means the statistic is unlikely under the null hypothesis. The functions are iterative approximations, and their accuracy has not been compared against a published bound.
 
 ```ts
-import { chiSquareCdf, chiSquareQuantile, fDistributionSurvival, logGamma, regularizedGammaP } from 'nebulosa/src/math/numerical/statistics'
+import { chiSquareCdf, chiSquareQuantile, erfc, fDistributionSurvival, logGamma, regularizedGammaP, regularizedIncompleteBeta } from 'nebulosa/src/math/numerical/statistics'
 
 // ln Γ(5) = ln 24, and P(1, x) = 1 - exp(-x).
 console.log(logGamma(5), Math.log(24)) // 3.178053830347944 3.1780538303479458
 console.log(regularizedGammaP(1, 2), 1 - Math.exp(-2)) // 0.8646647167633872 0.8646647167633873
+
+// I_x(1, 1) = x, the uniform distribution, and I_0.5(2, 2) = 0.5 by symmetry.
+console.log(regularizedIncompleteBeta(0.25, 1, 1), regularizedIncompleteBeta(0.5, 2, 2)) // about 0.25 0.5
+
+// The complementary error function 1 - erf(x), accurate in the far tail: twice the one-sided Gaussian tail beyond x·√2 sigma.
+console.log(erfc(1), erfc(5)) // 0.157299207050285 1.537459794428035e-12
 
 // The 95% quantile of the chi-square distribution with 1 and 10 degrees of freedom, and the CDF that inverts it.
 console.log(chiSquareQuantile(0.95, 1), chiSquareQuantile(0.95, 10)) // 3.841458820694112 18.30703805327515
@@ -13528,7 +15878,7 @@ Simulations need random numbers with a physical distribution: Gaussian read nois
 Each sampler takes a base `Random` (see [Seeded Random Sources](#seeded-random-sources)) and returns a new `Random` that draws from the distribution, with the parameters in the units of the samples: uniform, Bernoulli, exponential, Weibull, geometric, Pareto, normal (Marsaglia's polar method), log-normal, Rayleigh, Cauchy and triangular. Degenerate parameters, such as a zero standard deviation, collapse the sampler to a constant. The Cauchy distribution has no mean or variance, so its sample statistics never converge. `shuffle` permutes an array or typed array in place with the Fisher-Yates algorithm.
 
 ```ts
-import { cauchy, normal, rayleigh, shuffle, splitmix32, uniform } from 'nebulosa/src/math/numerical/random'
+import { bernoulli, cauchy, exponential, gaussian, geometric, logNormal, normal, pareto, rayleigh, shuffle, splitmix32, triangular, uniform, weibull } from 'nebulosa/src/math/numerical/random'
 
 // A seeded base source per sampler, so the values are reproducible.
 const source = () => splitmix32(7)
@@ -13541,6 +15891,17 @@ console.log(draw(normal(source(), 10, 2))) // [ 7.620195128319255, 9.11717324990
 // The magnitude of a 2D Gaussian error with sigma 2 per axis, and a heavy-tailed Cauchy profile.
 console.log(draw(rayleigh(source(), 2))) // [ 4.234571161890883, 5.608378546528587, 1.2854235212826943, 1.967919701664893, 1.9568086518427816 ]
 console.log(draw(cauchy(source(), 0, 1))) // [ 2.882167921011094, 16.21185339242954, -1.5057473534132182, -0.3823941082766783, -0.3945733156997695 ] (one draw far from the others)
+
+// Exponential waiting times with rate 0.5 (mean 2), and a triangular distribution on [0, 10] peaking at 2.
+console.log(draw(exponential(source(), 0.5))) // [ 4.482898231279476, 7.863477480290525, 0.41307840726670025, 0.9681769880502105, 0.9572750249816911 ]
+console.log(draw(triangular(source(), 0, 10, 2))) // [ 7.083778534889637, 8.747497002403911, 1.931867630987543, 2.9785547682005555, 2.9593917816402744 ]
+
+// Discrete counts: Bernoulli trials (1 with probability 0.3), and the number of trials until the first success.
+console.log(draw(bernoulli(source(), 0.3)), draw(geometric(source(), 0.3))) // [ 0, 0, 1, 0, 0 ] [ 7, 12, 1, 2, 2 ]
+
+// The other samplers: Weibull (scale λ, shape k), Pareto (α), zero-mean Gaussian (σ) and log-normal (μ, σ of the logarithm).
+const samplers = [weibull(source(), 1, 1.5), pareto(source(), 2), gaussian(source(), 0.5), logNormal(source(), 0, 0.25)]
+console.log(samplers.map((r) => r())) // one draw from each
 
 // Shuffle an array in place.
 const items = [1, 2, 3, 4, 5, 6, 7, 8]
@@ -13687,7 +16048,7 @@ Finding `x` with `f(x) = 0` is how many astronomical events are timed and many e
 Bracketed methods (bisection, Brent's method, and the Illinois variant of false position) need an interval whose ends give `f` opposite signs, and then the root is guaranteed to stay inside it: bisection halves the interval each step, slow but unconditional, and Brent's method, which combines bisection, the secant method and inverse quadratic interpolation, is the usual choice. The secant method needs no bracket but can leave the region, diverge or stop at a flat spot, so check whether it converged. With several roots in the bracket, which one is found depends on the method. The tolerances are absolute, in the units of `x` and `f`, so scale them for very large or very small roots.
 
 ```ts
-import { bisection, brentRoot, secantRoot } from 'nebulosa/src/math/numerical/optimization'
+import { bisection, brentRoot, falsePositionRoot, secantRoot } from 'nebulosa/src/math/numerical/optimization'
 
 // Kepler's equation E - e·sin(E) = M for e = 0.3 and M = 1 rad, bracketed on [0, π].
 const kepler = (E: number) => E - 0.3 * Math.sin(E) - 1
@@ -13695,6 +16056,9 @@ console.log(brentRoot(kepler, 0, Math.PI).root) // 1.2880913132122689 rad
 
 // Bisection on the same bracket: guaranteed, but more iterations.
 console.log(bisection(kepler, 0, Math.PI).iterations)
+
+// The Illinois false-position method on the same bracket.
+console.log(falsePositionRoot(kepler, 0, Math.PI).root) // ≈ 1.28809131321 rad
 
 // The secant method from two starting points, without a bracket; converged says whether a tolerance was met.
 const { root, converged } = secantRoot((x) => x * x - 2, 1, 2)
@@ -13708,16 +16072,19 @@ Simulations, synthetic star fields, device simulators and tests need random numb
 The generators trade speed against quality and period: `mulberry32` and `xorshift32` are tiny and fast, `splitmix32` and `sfc32` (the Small Fast Counter, a 128-bit state) give good quality for most uses, and `mt19937`, the Mersenne Twister with a period of 2¹⁹⁹³⁷ − 1, is the heaviest and the one to use when a long period matters. The seed is a 32-bit integer and defaults to the current time, so pass one for reproducibility. None of them is cryptographically secure. To sample a distribution other than uniform, wrap a generator (see [Random Distributions and Shuffling](#random-distributions-and-shuffling)).
 
 ```ts
-import { mt19937, mulberry32, splitmix32 } from 'nebulosa/src/math/numerical/random'
+import { mt19937, mulberry32, sfc32, splitmix32, xorshift32 } from 'nebulosa/src/math/numerical/random'
 
 // The same seed gives the same sequence.
 const a = mulberry32(42)
 const b = mulberry32(42)
 console.log(a(), b()) // 0.6011037519201636 0.6011037519201636
 
-// A good general-purpose generator for synthetic data.
+// A good general-purpose generator for synthetic data; sfc32 has the same contract and a 128-bit state.
 const noise = splitmix32(2024)
-console.log(noise()) // uniform in [0, 1)
+console.log(noise(), sfc32(2024)()) // uniform in [0, 1)
+
+// The smallest and fastest generator, for bulk noise where quality matters little.
+console.log(xorshift32(42)()) // 0.002643892541527748
 
 // The Mersenne Twister: seed 5489 reproduces the reference MT19937 stream.
 console.log(mt19937(5489)()) // 0.8147236919030547
@@ -13803,7 +16170,7 @@ Tabulated data is everywhere in astronomy: ephemerides sampled at fixed times, r
 Besides the piecewise interpolators over strictly increasing control points, a single polynomial can be defined on one interval and differentiated or integrated, and the cubic Hermite through two values and two slopes interpolates between two samples whose derivatives are known, such as positions and velocities of an ephemeris (`hermiteVec3` does it for vectors, with the slopes per unit of the interval width). Outside the control points a query is clamped to the end value unless extrapolation is asked for. The control-point arrays are kept by reference, so changing them after building the spline silently corrupts it. The `LUT` variants sample the whole range at evenly spaced positions into a `Float32Array`, for tone curves and lookup tables.
 
 ```ts
-import { akimaSpline, naturalCubicSpline, naturalCubicSplineLUT, pchip, spline, splineGivenEnds } from 'nebulosa/src/math/numerical/spline'
+import { akimaSpline, akimaSplineLUT, catmullRomSpline, catmullRomSplineLUT, cubicHermiteSpline, cubicHermiteSplineLUT, hermiteVec3, linearSpline, naturalCubicSpline, naturalCubicSplineLUT, pchip, spline, splineGivenEnds } from 'nebulosa/src/math/numerical/spline'
 
 // A single polynomial 2t² + 1 on [0, 4] in the normalized t = (x - lower) / (upper - lower), with its derivative and integral.
 const p = spline(0, 4, [2, 0, 1])
@@ -13812,16 +16179,29 @@ console.log(p.compute(2), p.derivative().compute(2), p.integral().compute(4)) //
 // The cubic through (0, 0) and (1, 1) with zero slope at both ends.
 console.log(splineGivenEnds(0, 0, 0, 1, 1, 0).compute(0.25)) // 0.15625
 
-// Step-like data: PCHIP and Akima stay inside the data range, the natural cubic overshoots.
+// The Hermite cubic of a vector halfway between two states (value, slope), over an interval of width 1.
+console.log(hermiteVec3([0, 0, 0], [1, 0, 0], [1, 1, 0], [1, 0, 0], 1, 0.5)) // [ 0.5, 0.5, 0 ]
+
+// Step-like data: PCHIP, Fritsch-Carlson and Akima stay inside the data range, Catmull-Rom and the natural cubic overshoot.
 const x = [0, 1, 2, 3, 4, 5]
 const y = [0, 0, 0, 1, 1, 1]
-console.log(pchip(x, y).compute(3.5), akimaSpline(x, y).compute(3.5), naturalCubicSpline(x, y).compute(3.5)) // 1 1 1.1022727272727273
+console.log(pchip(x, y).compute(3.5), cubicHermiteSpline(x, y).compute(3.5), akimaSpline(x, y).compute(3.5)) // 1 1 1
+console.log(catmullRomSpline(x, y).compute(3.5), naturalCubicSpline(x, y).compute(3.5)) // 1.0625 1.1022727272727273
+
+// Straight segments between the control points.
+console.log(linearSpline(x, y).compute(2.5)) // 0.5
+
+// The slopes at the control points, and reset() of the cached segment lookup before an unordered stream of queries.
+const s = pchip(x, y)
+console.log(s.slopes) // Float64Array(6) [ 0, 0, 0, 0, 0, 0 ]
+s.reset()
 
 // Extrapolation beyond the control points continues the end segment instead of clamping.
 console.log(naturalCubicSpline(x, y, true).compute(6))
 
-// A lookup table of 256 evenly spaced samples over [x[0], x[last]].
+// A lookup table of 256 evenly spaced samples over [x[0], x[last]]; also cubicHermiteSplineLUT, akimaSplineLUT and catmullRomSplineLUT.
 console.log(naturalCubicSplineLUT(x, y, 256)) // Float32Array(256)
+console.log(cubicHermiteSplineLUT(x, y, 4), akimaSplineLUT(x, y, 4), catmullRomSplineLUT(x, y, 4)) // Float32Array(4) [ 0, 0, 1, 1 ] for the first two
 ```
 
 ### Temperature Units
@@ -13892,27 +16272,64 @@ Firmata is a protocol that lets host software control a microcontroller board as
 ```ts
 import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
 import { FirmataClientOverTcp } from 'nebulosa/src/devices/firmata/client.tcp'
-import { PinMode } from 'nebulosa/src/devices/firmata/types'
+import { type FirmataClientHandler, PinMode } from 'nebulosa/src/devices/firmata/types'
 
-const client = new FirmataClientOverTcp(new ESP8266())
+// The pin map classifies a GPIO number by capability (isPinDigital, isPinAnalog, isPinPWM, isPinServo, isPinTwoWire,
+// isPinSPI, isPinSerial, isPinLED) and converts it to a channel (pinToDigital, pinToAnalog, pinToPWM, pinToServo).
+const board = new ESP8266()
+console.log(board.isPinPWM(ESP8266.D6), board.pinToAnalog(ESP8266.A0)) // true 0
 
-// Handlers receive the board messages: here the end of the handshake and the reported analog values.
-client.addHandler({ ready: () => console.log('pins:', client.pinCount), analogMessage: (_, port, value) => console.log(port, value) })
+const client = new FirmataClientOverTcp(board)
+
+// Handlers receive the board messages: here the end of the handshake and the reported analog values; removeHandler stops one.
+const handler: FirmataClientHandler = { ready: () => console.log('pins:', client.pinCount), analogMessage: (_, port, value) => console.log(port, value) }
+client.addHandler(handler)
 
 // Opens the socket (the address and port are an example) and waits for the handshake, up to 2000 ms.
 await client.connect('192.168.0.50', 3030)
 await client.ensureInitializationIsDone(2000)
 
 try {
+	// The cached pins discovered by the handshake (modes, resolutions, last values), all or one.
+	console.log([...client.pins].length, client.pinAt(ESP8266.D6)?.modes)
+
 	// Drives the built-in LED as a digital output, and a PWM output on D6.
 	client.pinMode(ESP8266.LED_BUILTIN, PinMode.OUTPUT)
 	client.digitalWrite(ESP8266.LED_BUILTIN, true)
 	client.analogWrite(ESP8266.D6, 512)
 
-	// Reports the analog input A0 every 100 ms.
+	// A servo on D7 with its pulse range in µs.
+	client.pinMode(ESP8266.D7, PinMode.SERVO)
+	client.servoConfig(ESP8266.D7, 544, 2400)
+
+	// Reports the analog input A0 every 100 ms; requestAnalogReport switches every analog channel at once.
 	client.samplingInterval(100)
 	client.requestAnalogPinReport(ESP8266.A0, true)
+
+	// Digital inputs are reported by 8-pin port: the port of one pin, or all ports.
+	client.requestDigitalPinReport(ESP8266.D5, true)
+	client.requestDigitalReport(false)
+
+	// The handshake steps, which the client runs itself, can be repeated to refresh the cached state:
+	// requestFirmware, requestPinCapability, requestAnalogMapping, and the state of one pin.
+	client.requestPinState(ESP8266.D6)
+
+	// Queries whose replies arrive through handler callbacks: protocol version, sampling interval (ms),
+	// and a firmware-defined signed 32-bit system variable (id 1 here), read and written.
+	client.requestProtocolVersion()
+	client.querySamplingInterval()
+	client.querySystemVariable(1)
+	client.setSystemVariable(1, 0)
+
+	// A text string for the firmware, and a raw framed message (here the protocol-version request 0xf9).
+	client.sendString('hello')
+	client.send(Buffer.from([0xf9]))
+
+	// sendSystemReset resets the board and runs the handshake again; reset only clears the cached state of the client.
+	client.reset()
+	client.removeHandler(handler)
 } finally {
+	// Ends the session and notifies the handlers; disconnect() closes the transport and clears the cached state.
 	client.close()
 }
 ```
@@ -13960,9 +16377,13 @@ client.addHandler({ encoderPositions: (_, positions) => console.log(positions) }
 client.encoderAttach(0, ESP8266.D5, ESP8266.D6)
 client.encoderReset(0)
 
-// A single report, then periodic reports of every attached encoder.
+// A single report of one encoder or of all of them, then periodic reports of every attached encoder.
 client.encoderReport(0)
+client.encoderReportAll()
 client.encoderAutoReport(true)
+
+// Releases the pins of encoder 0.
+client.encoderDetach(0)
 ```
 
 ### Firmata Frequency Measurement
@@ -14026,6 +16447,9 @@ client.twoWireRead(0x40, 0x02, 2)
 // Reads six bytes from register 0x02 continuously, then stops.
 client.twoWireRead(0x40, 0x02, 6, true)
 client.twoWireStop(0x40)
+
+// The general request that the calls above build: an operation mode and raw bytes (here a read of register 0x02, 2 bytes).
+client.twoWireReadWrite(0x40, 'read', [0x02, 2])
 ```
 
 ### Firmata One-Wire
@@ -14060,6 +16484,13 @@ client.oneWireSearch(ESP8266.D4)
 const rom = [0x28, 0xff, 0x64, 0x1e, 0x0f, 0x16, 0x03, 0x4b]
 client.oneWireWrite(ESP8266.D4, [0x44])
 console.log(client.oneWireWriteAndRead(ESP8266.D4, [0xbe], 9, rom)) // the correlation ID of its reply
+
+// A read without a command (9 bytes of that ROM), and a bus reset alone.
+console.log(client.oneWireRead(ESP8266.D4, 9, rom)) // the correlation ID of its reply
+client.oneWireReset(ESP8266.D4)
+
+// The general command that the calls above build: reset, Skip ROM or Match ROM, write, a delay (µs) and a read.
+client.oneWireCommand(ESP8266.D4, { reset: true, skip: true, data: [0x44] })
 ```
 
 ### Firmata Scheduler
@@ -14085,9 +16516,14 @@ client.schedulerAdd(1, [0xf5, ESP8266.LED_BUILTIN, 0])
 client.schedulerDelay(500)
 client.schedulerAdd(1, [0xf5, ESP8266.LED_BUILTIN, 1])
 
-// Runs the task in 2000 ms, and asks for the list of tasks.
+// Runs the task in 2000 ms, and asks for the list of tasks and for the details of task 1.
 client.schedulerSchedule(1, 2000)
 client.schedulerQueryAll()
+client.schedulerQuery(1)
+
+// Deletes task 1, or every task and pending run at once.
+client.schedulerDelete(1)
+client.schedulerReset()
 ```
 
 ### Firmata Serial
@@ -14109,12 +16545,20 @@ await client.ensureInitializationIsDone(2000)
 // The bytes received on each port.
 client.addHandler({ serialReply: (_, port, data) => console.log(port, data.toString()) })
 
+// The RX and TX pins of a hardware port, as reported by the board (empty for a software port).
+console.log(client.serialPins(1)) // { rx, tx } GPIO numbers
+
 // Opens hardware port 1 at 9600 bit/s, writes a command and starts reading.
 client.serialConfig(1, 9600)
 client.serialWrite(1, Buffer.from('AT\r\n'))
 client.serialStartRead(1)
 
-// Stops reading and closes the port.
+// A software port (8-15) needs its RX and TX pins, and only the selected one listens at a time.
+client.serialConfig(8, 9600, ESP8266.D5, ESP8266.D6)
+client.serialListen(8)
+
+// Flushes, stops reading and closes the port.
+client.serialFlush(1)
 client.serialStopRead(1)
 client.serialClose(1)
 ```
@@ -14143,6 +16587,10 @@ client.spiConfig({ channel: 0, deviceId: 1, dataMode: 0, bitOrder: 'msb', maxSpe
 // A full-duplex transfer (a JEDEC ID read of a flash memory), and a read of 4 words; each returns its request ID.
 console.log(client.spiTransfer(0, 1, [0x9f, 0x00, 0x00]), client.spiRead(0, 1, 4))
 
+// Writes without a reply (here the write-enable command 0x06), or with an empty acknowledgement reply.
+client.spiWrite(0, 1, [0x06])
+console.log(client.spiWriteAck(0, 1, [0x06])) // the request ID of the acknowledgement
+
 // Releases the channel.
 client.spiEnd()
 ```
@@ -14167,14 +16615,24 @@ client.addHandler({ stepperPosition: (_, report) => console.log(report.device, r
 // Motor 0: a step/direction driver on D1 (step) and D2 (direction) with an enable pin on D5.
 client.stepperConfig({ device: 0, interface: 'driver', pin1: ESP8266.D1, pin2: ESP8266.D2, enablePin: ESP8266.D5 })
 
-// Speed limit (steps/s) and acceleration (steps/s²), then an absolute move to step 20000.
+// Speed limit (steps/s) and acceleration (steps/s²), the current position taken as step 0, then an absolute move to step 20000.
 client.stepperSetMaxSpeed(0, 1500)
 client.stepperSetAcceleration(0, 400)
 client.stepperEnable(0, true)
+client.stepperZero(0)
 client.stepperMoveTo(0, 20000)
+
+// A relative move of -500 steps, and a request of the current position.
+client.stepperMove(0, -500)
+client.stepperReportPosition(0)
 
 // Decelerates to a stop.
 client.stepperStop(0)
+
+// Group 0 of motors 0 and 1 moved to absolute targets so that they arrive together (multiStepperComplete reports the end), then stopped.
+client.multiStepperConfig(0, [0, 1])
+client.multiStepperMoveTo(0, [1000, 2000])
+client.multiStepperStop(0)
 ```
 
 ### Firmata Wire Protocol
@@ -14208,6 +16666,9 @@ const client = new FirmataClient({ write() {}, flush() {}, close() {} }, new ESP
 client.addHandler({ version: (_, major, minor) => console.log('version', major, minor), analogMessage: (_, port, value) => console.log('analog', port, value) })
 client.process(Buffer.from([0xf9, 2, 5])) // version 2 5
 client.process(Buffer.from([0xe0 | 3, 0x7f, 0x07])) // analog 3 1023
+
+// The same parser fed one byte at a time.
+for (const byte of [0xf9, 2, 5]) client.processByte(byte) // version 2 5
 ```
 
 ### LX200 Telescope Protocol
@@ -14246,10 +16707,13 @@ const handler: Lx200ProtocolHandler = {
 // Listens on a free port (0), reported back by port.
 const server = new Lx200ProtocolServer({ handler, name: 'Nebulosa', version: '1.0' })
 server.start('localhost', 0)
-console.log(server.port)
+console.log(server.hostname, server.port)
 
-// The connected clients, then stops listening and closes every connection.
-console.log(server.clients())
+// The connected clients, and one of them disconnected by its id.
+const [first] = server.clients()
+if (first) server.disconnectClient(first.id)
+
+// Stops listening and closes every connection.
 server.stop()
 ```
 
@@ -14265,22 +16729,75 @@ import { DEFAULT_PHD2_PORT } from 'nebulosa/src/observation/guiding/phd2/types'
 
 const client = new PHD2Client()
 
-// Events arrive asynchronously; the end of a guide or dither request is a SettleDone event.
+// Events arrive asynchronously; the end of a guide or dither request is a SettleDone event. removeHandler stops a handler.
 client.addHandler({ event: (_, event) => (event.Event === 'SettleDone' ? console.log('settled', event.Status, event.Error) : undefined) })
 
 // Connects to the machine that runs PHD2 (the address is an example), port 4400.
 await client.connect('localhost', DEFAULT_PHD2_PORT)
 
 try {
-	// Connects the PHD2 equipment and reads the guide camera pixel scale (arcsec/pixel).
-	console.log(await client.setConnected(true))
-	console.log(await client.getPixelScale()) // { success: true, result } or { success: false, error }
+	// The id of the connection and its endpoints (localAddress and localPort on this side).
+	console.log(client.id, client.remoteAddress, client.remotePort)
 
-	// Starts guiding, settling within 1.5 pixels for 10 s, giving up after 60 s.
+	// Equipment and profiles: connects the equipment of the current profile; getConnected, getCurrentEquipment,
+	// getProfile and setProfile (by id or profile) have the same form.
+	console.log(await client.setConnected(true))
+	console.log(await client.getProfiles()) // { success: true, result } or { success: false, error }
+
+	// Camera: the guide camera pixel scale (arcsec/pixel); getCameraBinning, getCameraFrameSize, getExposure,
+	// getExposureDurations (ms), getUseSubframes, getSearchRegion and getStarImage are read the same way.
+	console.log(await client.getPixelScale())
+	await client.setExposure(2000)
+
+	// Looping exposures and the guide star: findStar selects one (in a region of interest in pixels), deselectStar drops it.
+	await client.loop()
+	await client.findStar()
+	await client.deselectStar()
+
+	// One frame of 1000 ms, and stops looping or guiding.
+	await client.startCapture(1000)
+	await client.stopCapture()
+
+	// Calibration: getCalibrated and getCalibrationData read it, clearCalibration discards it, flipCalibration mirrors it after a meridian flip.
+	console.log(await client.getCalibrationData('MOUNT'))
+	await client.flipCalibration()
+
+	// Starts guiding, settling within 1.5 pixels for 10 s, giving up after 60 s; true as first argument forces a new calibration.
 	await client.guide(false, { pixels: 1.5, time: 10, timeout: 60 })
 
-	// Dithers by up to 5 pixels between exposures, with the default settle criteria.
+	// Dithers by up to 5 pixels between exposures, with the default settle criteria; getSettling tells whether a settle is in progress.
 	await client.dither(5)
+
+	// Pausing and the guide output: getPaused, getGuideOutputEnabled and setGuideOutputEnabled have the same form; getAppState gives the state.
+	await client.setPaused(true)
+	await client.setPaused(false)
+	console.log(await client.getAppState()) // Guiding, Looping, Stopped...
+
+	// The lock position (pixels), and lock-position shifting to follow a moving target (rate per hour in RA/Dec or X/Y);
+	// getLockPosition, getLockShiftEnabled and getLockShiftParams read them back.
+	await client.setLockPosition(512.5, 384.5, true)
+	await client.setLockShiftParams({ rate: [3.6, -1.2], units: 'arcsec/hr', axes: 'RA/Dec' })
+	await client.setLockShiftEnabled(true)
+
+	// The declination guide mode (Off, Auto, North, South), read back with getDeclinationGuideMode.
+	await client.setDeclinationGuideMode('Auto')
+
+	// Guide algorithm parameters per axis (RA or DEC): their names, then one value read and changed.
+	const names = await client.getAlgorithmParamNames('RA')
+
+	if (names.success) {
+		console.log(await client.getAlgorithmParam('RA', names.result[0]))
+		await client.setAlgorithmParam('RA', names.result[0], 0.5)
+	}
+
+	// A manual guide pulse of 500 ms to the north.
+	await client.guidePulse(500, 'North')
+
+	// Saves the current frame on the PHD2 machine; shutdown() closes PHD2 itself.
+	console.log(await client.saveImage()) // the file name on the PHD2 machine, in result.filename
+
+	// Any JSON-RPC method by name, with its parameters and a timeout in ms.
+	console.log(await client.send('get_app_state', undefined, 5000))
 } finally {
 	client.close()
 }
@@ -14313,14 +16830,21 @@ declare const decodeImage: GuideImageDecoder
 const guider = new GuiderClient(cameraManager, guideOutputManager, tracker, { decodeImage })
 using server = new PHD2Server(guider, { devices: { camera, guideOutput, options: { focalLength: 400, pixelSize: 3.76 } }, profile: { id: 1, name: 'Observatory' } })
 
+// Observes the sockets and every executed request; a shutdown handler lets clients request shutdown. removeHandler stops one.
+server.addHandler({ connect: (_, connection) => console.log('connected', connection), command: (_, connection, request, response) => console.log(request.method, response) })
+
 // Listens on a free port of the loopback interface.
-console.log(server.start('127.0.0.1', 0), server.port) // true and the chosen port
+console.log(server.start('127.0.0.1', 0), server.hostname, server.port) // true, the bound host and the chosen port
 
 // Any PHD2 client now drives the local guider.
 using client = new PHD2Client()
 await client.connect('127.0.0.1', server.port)
 console.log(await client.setConnected(true)) // { success: true, result: 0 }
 console.log(await client.loop()) // { success: true, result: 0 }
+console.log(server.connections) // the number of connected sockets
+
+// Stops listening and closes every socket (also done at the end of the scope).
+server.stop()
 ```
 
 ### Stellarium Telescope Control Protocol
@@ -14343,10 +16867,14 @@ const server = new StellariumProtocolServer({
 
 // Listens on a free port (0), reported back by port.
 server.start('localhost', 0)
-console.log(server.port)
+console.log(server.hostname, server.port)
 
 // Broadcasts the position of the mount: RA 5h35m and Dec -5.4°, J2000.
 server.send(hour(5 + 35 / 60), deg(-5.4))
+
+// The connected clients, and one of them disconnected by its id.
+const [first] = server.clients()
+if (first) server.disconnectClient(first.id)
 
 // Stops listening and closes every connection.
 server.stop()

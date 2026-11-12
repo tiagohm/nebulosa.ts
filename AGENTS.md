@@ -163,7 +163,7 @@ Public documentation lives in `docs/README.md` and is governed by `docs/AGENTS.m
 
 Each topic explains the scientific or technical context of a capability and shows its use in a single short example; the API contract (options, defaults, result fields, failure behavior, mutation) lives in the source documentation comments, not in `docs/README.md`.
 
-Update the owning topic, following `docs/AGENTS.md`, only when a change adds, removes, or renames a capability, changes the name, import path, or signature of an entry point used by its example, or changes its science (quantity, model, frame, time scale, unit, sign convention, or a limitation that changes correct use). New options, fields, diagnostics, defaults, internal steps, and refactors do not change the documentation.
+Update the owning topic, following `docs/AGENTS.md`, only when a change adds, removes, or renames a capability or a public function or method (each appears in its topic's example as a comment line and a call), changes the import path or signature of a call used by the example, or changes its science (quantity, model, frame, time scale, unit, sign convention, or a limitation that changes correct use). New options, fields, diagnostics, defaults, internal steps, and refactors do not change the documentation.
 
 Search for an existing topic before creating a new one. Create a new topic only for a distinct user-facing capability; otherwise update the topic that already owns the behavior.
 

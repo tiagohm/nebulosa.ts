@@ -13,9 +13,9 @@ Write documentation in **English**.
 A topic has two parts, and the weight is deliberately on the first:
 
 1. **Context**: the scientific, physical, mathematical, or technical background that makes the capability meaningful. What quantity, effect, model, or workflow it represents; why an astronomer or developer needs it; the defining equation or convention when it prevents misuse; the model or approximation and its validity; and the important distinction from a nearby capability. This is the most valuable part of the documentation and should be kept and improved.
-2. **One example**: a single `ts` code block that calls the main public entry points of the topic. Each function or step is explained by one or two comment lines in the example, not by prose paragraphs.
+2. **One example**: a single `ts` code block that calls every public function and method of the topic. Each function or step is explained by one or two comment lines in the example, not by prose paragraphs.
 
-The reason for this methodology is maintenance: documenting every option, field, default, and diagnostic in prose made every internal change produce lines of documentation that added nothing for the reader. A topic must stay valid across internal changes; it changes only when its science, its main entry points, or a limitation that changes correct use changes.
+The reason for this methodology is maintenance: documenting every option, field, default, and diagnostic in prose made every internal change produce lines of documentation that added nothing for the reader. A topic must stay valid across internal changes; it changes only when its science, its public functions and methods, or a limitation that changes correct use changes.
 
 ## Documentation architecture
 
@@ -83,7 +83,7 @@ Rules:
 - **Exactly one code block per topic**, a `ts` example. A topic may also hold one short `text` block for defining equations when inline code would be unreadable; it is context, not an example. Wire formats, file samples, or protocol messages belong as comments or strings in the `ts` example.
 - **No prose after the example.** Everything a reader needs to interpret the topic comes before the code, or as a comment in it.
 - Do not add `Context`, `Overview`, `Inputs`, `Outputs`, or `API` headings, parameter tables, or warning boxes.
-- Keep paragraphs short. A typical topic is two or three paragraphs of context and scope and one example of roughly 10 to 30 lines.
+- Keep paragraphs short. A typical topic is two or three paragraphs of context and scope and one example only as long as its functions require, one or two comment lines and one call each.
 
 ## What belongs in the prose
 
@@ -102,7 +102,7 @@ Do not write in the prose:
 - failure reasons, diagnostics, error classes, or validation behavior;
 - mutation, aliasing, `out` arguments, allocation, buffer reuse, or caching, unless misuse would silently produce wrong results;
 - internal algorithm steps, thresholds, iteration counts, tolerances, or implementation trade-offs;
-- source file walkthroughs, helper functions, or types that only support the main entry point;
+- source file walkthroughs, or explanations of functions that the example already shows;
 - a restatement of what the example already shows.
 
 That information belongs in the documentation comments of the source code.
@@ -111,7 +111,8 @@ That information belongs in the documentation comments of the source code.
 
 The example is the only API documentation of the topic. Keep it short and direct:
 
-- Call the main public entry points owned by the topic: the function or functions a caller uses for the capability, the constructor and main methods of a class, or the smallest correct lifecycle of a stateful or device API. Functions with the same contract share one call. Do not enumerate every export, option, or mode.
+- Call every public function and method owned by the topic: the functions a caller uses for the capability, the constructor and public methods of a class, and the lifecycle of a stateful or device API. Functions with the same contract (variants for other bodies, frames, or precisions) may share one call with a comment naming the others. Do not enumerate options, modes, or enumeration values.
+- Leave out exports that are not part of the caller-facing capability: error classes, validation helpers, implementation helpers exported only for sibling modules or tests (codecs, simulator internals, geometry primitives of a detector), and type-only exports.
 - Explain each call with one or two comment lines above it: what it does, and the meaning and unit of inputs that are not obvious.
 - Show results with `console.log(x) // meaning and unit`. Write a concrete value only when it helps interpretation and is verified (see Expected outputs); otherwise write its meaning.
 - Use small deterministic inputs. When building an input would take many lines (a synthetic image, a star list, a device), declare it in a comment instead, such as `// frames: StackingFrame[] — normalized images with their detected stars`, or use a repository fixture (`data/...`).
@@ -152,7 +153,7 @@ When a comment shows a concrete value, verify it, in this order of preference: a
 Documentation changes only when the reader's understanding would otherwise be wrong:
 
 - a capability is added, removed, or renamed;
-- the main entry point used by the example changes its name, import path, or signature;
+- a public function or method is added, removed, or renamed, or one used by the example changes its import path or signature: add it to, or update it in, the example of its topic as a comment line and a call;
 - the science changes: the quantity, model, frame, time scale, unit, sign convention, or a limitation that changes correct use.
 
 Adding an option, a result field, a diagnostic, a failure reason, a default, or an internal step does not change the documentation; document it in the source comments. Internal refactors never change it.
@@ -160,6 +161,8 @@ Adding an option, a result field, a diagnostic, a failure reason, a default, or 
 ## Topics
 
 Before creating a topic, search `docs/README.md` for the symbol, the capability, and related terms. Prefer editing the existing topic when the change is another operation, variant, mode, or helper of the same capability. Create a new topic only for a capability with an independent user goal and its own scientific or technical context; a new file, class, helper, or table is not a reason.
+
+Split a topic only when it has become genuinely complex: it covers several distinct capabilities, each with its own context and its own group of functions, so that one example can no longer show them clearly. Merge topics when they describe the same capability or call the same functions, so that each capability has one canonical topic. Do not split or merge for length alone. When a title changes or disappears, update every link to it.
 
 Name a topic with the established scientific or technical term a user would search for, such as `Satellite Conjunctions`, `Earth Orientation Parameters`, or `Three-Point Polar Alignment`, and preserve standard names and acronyms (ERFA, SOFA, Meeus, SGP4, WCS, FITS, HEALPix, INDI, ASCOM Alpaca, PHD2).
 
@@ -177,7 +180,7 @@ Before finishing a new topic or an edit, check that:
 
 1. the topic has the context that explains why it exists and what it represents;
 2. it has exactly one `ts` example block and no prose after it;
-3. every documented symbol and import exists, and every call matches its current signature;
+3. every documented symbol and import exists, every call matches its current signature, and every public function and method owned by the topic appears in the example;
 4. every concrete output is verified;
 5. units, signs, frames, origins, and time scales are correct;
 6. broad claims survive non-default call paths;
