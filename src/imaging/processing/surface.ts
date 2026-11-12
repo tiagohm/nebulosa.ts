@@ -64,7 +64,13 @@ export interface SurfaceFitSample extends SurfaceSample {
 // - `asymmetric`: use `high` above the surface and `low` below it.
 export type SurfaceRejectionMode = 'none' | 'symmetric' | 'asymmetric'
 
-// Iterative residual rejection settings.
+// Iterative residual rejection settings. Rejection starts from a least-squares fit that still includes
+// the outliers and scales its thresholds by the robust dispersion of the residuals, so it needs samples
+// well beyond the basis size (d+1)(d+2)/2. With fewer than about 2.5 times that size, a high-leverage
+// outlier near an edge or corner pulls the first fit toward itself and survives (for example 9 samples at
+// degree 1 or 2, or 16 at degree 3). At that redundancy no residual statistic separates it reliably from
+// noise: leave-one-out studentized residuals recover it only from noiseless data and reject many clean
+// samples once noise is present.
 export interface SurfaceRejectionOptions {
 	// Rejection strategy. Default `none`.
 	readonly mode?: SurfaceRejectionMode
