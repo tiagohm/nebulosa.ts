@@ -304,7 +304,7 @@ export function deimos(time: Time, out?: PositionAndVelocityMut) {
 }
 
 // Computes the equatorial position (AU) and velocity (AU/day) of a Martian satellite using MARSSAT.
-// `index` selects the body (0 Phobos, 1 Deimos). Returned vectors alias the internal conversion buffers.
+// `index` selects the body (0 Phobos, 1 Deimos). The result is written into `out` and returned when given; otherwise fresh vectors are allocated.
 export function marssat(time: Time, index: number, out?: PositionAndVelocityMut) {
 	time = tt(time)
 	const t = time.day - (2451545 - 6491.5) + time.fraction
