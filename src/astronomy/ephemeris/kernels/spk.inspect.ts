@@ -11,8 +11,9 @@ import { SPK_FRAME_J2000 } from './spk'
 const SPK_SUMMARY_DOUBLES = 2
 // Number of integer components of an SPK segment descriptor: target, center, frame, type, start and end addresses.
 const SPK_SUMMARY_INTS = 6
-// Binary SPK data types the segment readers decode (2 and 3 Chebyshev, 9 Lagrange, 21 extended modified difference arrays).
-const SUPPORTED_SPK_DATA_TYPES: ReadonlySet<number> = new Set([2, 3, 9, 21])
+// Binary SPK data types the segment readers decode (2 and 3 Chebyshev, 9 Lagrange, 17 precessing equinoctial elements, 21
+// extended modified difference arrays).
+const SUPPORTED_SPK_DATA_TYPES: ReadonlySet<number> = new Set([2, 3, 9, 17, 21])
 // Size of a double-precision word, in bytes.
 const FLOAT64_BYTES = 8
 

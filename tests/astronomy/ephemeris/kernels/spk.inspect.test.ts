@@ -60,3 +60,16 @@ test('DE440s descriptors', async () => {
 	expect(inspection.segments.map((e) => `${e.center}->${e.target}`)).toContain('3->399')
 	expect(inspection.segments.map((e) => `${e.center}->${e.target}`)).toContain('0->10')
 })
+
+test('Daphnis type 17 descriptors are supported', async () => {
+	await using source = fileHandleSource(await fs.open('data/sat393_daphnis.bsp'))
+	const inspection = inspectSpk(await readDaf(source), (await fs.stat('data/sat393_daphnis.bsp')).size)
+
+	expect(inspection.ok).toBeTrue()
+	if (!inspection.ok) return
+	expect(inspection.segments.map((e) => [e.center, e.target, e.dataType, e.supported])).toEqual([
+		[699, 635, 17, true],
+		[699, 635, 17, true],
+		[699, 635, 17, true],
+	])
+})

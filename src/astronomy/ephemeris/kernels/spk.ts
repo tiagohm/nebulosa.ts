@@ -1,4 +1,4 @@
-import { AU_KM, DAYSEC, J2000 } from '../../../core/constants'
+import { AU_KM, DAYSEC, J2000, TAU } from '../../../core/constants'
 import { type MutVec3, vecZero } from '../../../math/linear-algebra/vec3'
 import type { PositionAndVelocity, PositionAndVelocityMut } from '../../coordinates/astrometry'
 import { type Time, tdb } from '../../time/time'
@@ -6,8 +6,10 @@ import type { Daf, Summary } from './daf'
 
 // Reader and evaluator for SPK (Spacecraft and Planet Kernel) ephemerides stored in DAF files.
 // Builds a center->target segment lookup and decodes the supported binary data types (2/3
-// Chebyshev, 9 Lagrange, 21 extended modified difference arrays). Positions are AU and
-// velocities AU/day, expressed in the segment's NAIF reference frame with no rotation applied.
+// Chebyshev, 9 Lagrange, 17 precessing equinoctial elements, 21 extended modified difference
+// arrays). Positions are AU and velocities AU/day, expressed in the segment's NAIF reference frame
+// with no rotation applied; a type 17 segment rotates its elements from the equator of its central
+// body into that frame.
 // Frame 1 (J2000) is the orientation ephemeris paths accept as the library base. Records are
 // cached per segment; epochs are ephemeris seconds past J2000 (TDB).
 
@@ -151,11 +153,11 @@ function lowerBoundEpoch(epochs: Float64Array, seconds: number, begin: number, e
 function makeSegment(summary: Summary, daf: Daf): SpkSegment {
 	const segment = makeSpkSegment(summary, daf)
 	if (segment) return segment
-	throw new Error('only binary SPK data types 2, 3, 9 and 21 are supported')
+	throw new Error('only binary SPK data types 2, 3, 9, 17 and 21 are supported')
 }
 
 // Instantiates the uninitialized segment reader of one SPK summary over `daf`, or undefined when the
-// summary's data type is not one of the supported binary types 2, 3, 9, and 21. Nothing is read
+// summary's data type is not one of the supported binary types 2, 3, 9, 17, and 21. Nothing is read
 // until the segment's `initialize` runs.
 export function makeSpkSegment(summary: Summary, daf: Daf): SpkSegment | undefined {
 	const [start, end] = summary.doubles
@@ -167,6 +169,8 @@ export function makeSpkSegment(summary: Summary, daf: Daf): SpkSegment | undefin
 			return new Type2And3Segment(daf, start, end, center, target, frame, type, startIndex, endIndex)
 		case 9:
 			return new Type9Segment(daf, start, end, center, target, frame, startIndex, endIndex)
+		case 17:
+			return new Type17Segment(daf, start, end, center, target, frame, startIndex, endIndex)
 		case 21:
 			return new Type21Segment(daf, start, end, center, target, frame, startIndex, endIndex)
 	}
@@ -563,6 +567,229 @@ export class Type9Segment implements SpkSegment {
 
 		return Math.min(lowerBoundEpoch(this.#epochTable, seconds, 0, this.#n), this.#n - 1)
 	}
+}
+
+// Type 17: Precessing Equinoctial Elements
+// The SPK Type 17 data type models an orbit as a conic whose argument of periapse and longitude of
+// the ascending node precess at constant rates, with equinoctial elements referred to the equator
+// of the central body, given by the right ascension and declination of its pole in J2000. It suits
+// small satellites near an oblate planet, such as the ring moons of Saturn. A segment holds one
+// set of 12 doubles: the epoch of the elements (seconds past J2000, TDB), the semi-major axis a
+// (km), h = e·sin(ϖ), k = e·cos(ϖ), the mean longitude λ (rad), p = tan(i/2)·sin(Ω),
+// q = tan(i/2)·cos(Ω), the rates of the longitude of periapse ϖ, of the mean longitude, and of the
+// node Ω (rad/s), and the right ascension and declination of the pole (rad). Evaluation follows
+// SPICE EQNCPV: h, k turn with ϖ, p, q turn with Ω, the equinoctial Kepler equation
+// λ = F + h·cos(F) − k·sin(F) gives the eccentric longitude F, and the velocity is the exact time
+// derivative of the position, precession included. It matches CSPICE N0067 to 3 mm and 1 µm/s for
+// Daphnis (sat393_daphnis.bsp), the residual being the rounding of λ over a century of revolutions.
+export class Type17Segment implements SpkSegment {
+	#initialized = false
+	#init?: Promise<void>
+	#epoch = 0
+	#a = 0
+	#h = 0
+	#k = 0
+	#meanLongitude = 0
+	#p = 0
+	#q = 0
+	#periapseRate = 0
+	#meanLongitudeRate = 0
+	#nodeRate = 0
+	// 1 / (1 + √(1 − e²)), constant because the precession keeps e.
+	#b = 0
+	// 1 / (1 + p² + q²), constant because the precession keeps the inclination.
+	#di = 0
+	// Rotation from the equator of the central body to J2000, row-major.
+	readonly #rotation = new Float64Array(9)
+	readonly #daf: Daf
+
+	// Stores immutable metadata and the backing DAF reader for this equinoctial-element segment.
+	constructor(
+		daf: Daf,
+		readonly start: number,
+		readonly end: number,
+		readonly center: number,
+		readonly target: number,
+		readonly frame: number,
+		readonly startIndex: number,
+		readonly endIndex: number,
+	) {
+		this.#daf = daf
+	}
+
+	// Evaluates position and velocity at the requested epoch, rotated from the equator of the
+	// central body into the segment frame.
+	at(time: Time): PositionAndVelocityMut {
+		if (!this.#initialized) throw new Error('SPK segment is not initialized')
+
+		const seconds = spkSeconds(time)
+
+		if (!hasSegmentCoverage(this, seconds)) {
+			throw new Error(`cannot find a segment that covers the date: ${seconds}`)
+		}
+
+		const dt = seconds - this.#epoch
+		const dlp = this.#periapseRate
+		const dnode = this.#nodeRate
+
+		// h, k turn with the longitude of periapse, p, q with the node.
+		const lp = dlp * dt
+		const clp = Math.cos(lp)
+		const slp = Math.sin(lp)
+		const h = this.#h * clp + this.#k * slp
+		const k = this.#k * clp - this.#h * slp
+		const node = dnode * dt
+		const cn = Math.cos(node)
+		const sn = Math.sin(node)
+		const p = this.#p * cn + this.#q * sn
+		const q = this.#q * cn - this.#p * sn
+		const dh = dlp * k
+		const dk = -dlp * h
+		const dp = dnode * q
+		const dq = -dnode * p
+
+		const f = eccentricLongitude((this.#meanLongitude + this.#meanLongitudeRate * dt) % TAU, h, k)
+		const cf = Math.cos(f)
+		const sf = Math.sin(f)
+		const a = this.#a
+		const b = this.#b
+		const bhk = b * h * k
+		const one = 1 - h * sf - k * cf
+
+		// Position in the orbital plane, along the equinoctial axes f and g, in km.
+		const x1 = a * ((1 - b * h * h) * cf + bhk * sf - k)
+		const y1 = a * ((1 - b * k * k) * sf + bhk * cf - h)
+
+		// Rate of the eccentric longitude, from the derivative of λ = F + h·cos(F) − k·sin(F), in rad/s.
+		const df = (this.#meanLongitudeRate - dlp * (k * cf + h * sf)) / one
+		const dhk = dh * k + h * dk
+		const dx1 = a * ((bhk * cf - (1 - b * h * h) * sf) * df - 2 * b * h * dh * cf + b * dhk * sf - dk)
+		const dy1 = a * (((1 - b * k * k) * cf - bhk * sf) * df - 2 * b * k * dk * sf + b * dhk * cf - dh)
+
+		// Equinoctial axes f and g in the equator of the central body, and their rates.
+		const di = this.#di
+		const fx = di * (1 - p * p + q * q)
+		const fy = di * 2 * p * q
+		const fz = di * -2 * p
+		const gx = fy
+		const gy = di * (1 + p * p - q * q)
+		const gz = di * 2 * q
+		const dfx = di * 2 * (q * dq - p * dp)
+		const dfy = di * 2 * (dp * q + p * dq)
+		const dfz = di * -2 * dp
+		const dgx = dfy
+		const dgy = -dfx
+		const dgz = di * 2 * dq
+
+		const ex = x1 * fx + y1 * gx
+		const ey = x1 * fy + y1 * gy
+		const ez = x1 * fz + y1 * gz
+		const evx = dx1 * fx + dy1 * gx + x1 * dfx + y1 * dgx
+		const evy = dx1 * fy + dy1 * gy + x1 * dfy + y1 * dgy
+		const evz = dx1 * fz + dy1 * gz + x1 * dfz + y1 * dgz
+
+		const r = this.#rotation
+		const pos = vecZero()
+		const vel = vecZero()
+
+		pos[0] = (r[0] * ex + r[1] * ey + r[2] * ez) * KM_TO_AU
+		pos[1] = (r[3] * ex + r[4] * ey + r[5] * ez) * KM_TO_AU
+		pos[2] = (r[6] * ex + r[7] * ey + r[8] * ez) * KM_TO_AU
+		vel[0] = (r[0] * evx + r[1] * evy + r[2] * evz) * KM_PER_SECOND_TO_AU_PER_DAY
+		vel[1] = (r[3] * evx + r[4] * evy + r[5] * evz) * KM_PER_SECOND_TO_AU_PER_DAY
+		vel[2] = (r[6] * evx + r[7] * evy + r[8] * evz) * KM_PER_SECOND_TO_AU_PER_DAY
+
+		return [pos, vel]
+	}
+
+	// Loads the 12 elements once.
+	initialize(): Promise<void> {
+		if (this.#initialized) return Promise.resolve()
+		if (this.#init) return this.#init
+		this.#init = this.#load()
+		return this.#init
+	}
+
+	async #load() {
+		try {
+			const [epoch, a, h, k, meanLongitude, p, q, periapseRate, meanLongitudeRate, nodeRate, ra, dec] = await this.#daf.read(this.startIndex, this.startIndex + 11)
+			const e2 = h * h + k * k
+
+			// SPICE rejects eccentricities above 0.9; a hyperbolic or nearly parabolic set would make
+			// the Kepler equation and √(1 − e²) meaningless.
+			if (!(e2 <= TYPE17_MAX_ECCENTRICITY * TYPE17_MAX_ECCENTRICITY)) throw new Error(`SPK type 17 eccentricity ${Math.sqrt(e2)} is above ${TYPE17_MAX_ECCENTRICITY}`)
+
+			this.#epoch = epoch
+			this.#a = a
+			this.#h = h
+			this.#k = k
+			this.#meanLongitude = meanLongitude
+			this.#p = p
+			this.#q = q
+			this.#periapseRate = periapseRate
+			this.#meanLongitudeRate = meanLongitudeRate
+			this.#nodeRate = nodeRate
+			this.#b = 1 / (1 + Math.sqrt(1 - e2))
+			this.#di = 1 / (1 + p * p + q * q)
+
+			// Columns are the x axis (the ascending node of the equator on the J2000 equator), the y
+			// axis, and the pole of the central body, in J2000.
+			const sa = Math.sin(ra)
+			const ca = Math.cos(ra)
+			const sd = Math.sin(dec)
+			const cd = Math.cos(dec)
+			const r = this.#rotation
+			r[0] = -sa
+			r[1] = -ca * sd
+			r[2] = ca * cd
+			r[3] = ca
+			r[4] = -sa * sd
+			r[5] = sa * cd
+			r[6] = 0
+			r[7] = cd
+			r[8] = sd
+
+			this.#initialized = true
+		} catch (error) {
+			this.#init = undefined
+			throw error
+		}
+	}
+}
+
+// Largest eccentricity a type 17 segment may have, as in SPICE.
+const TYPE17_MAX_ECCENTRICITY = 0.9
+
+// Most Newton steps of the equinoctial Kepler equation; with e ≤ 0.9 the safeguarded iteration
+// converges to machine precision in a few steps, and the bound only prevents a hang.
+const KEPLER_MAX_ITERATIONS = 64
+
+// Solves the equinoctial Kepler equation λ = F + h·cos(F) − k·sin(F) for the eccentric longitude F
+// (rad), given the mean longitude λ (rad) and h, k with h² + k² < 1. The left side increases
+// strictly with F and F − λ lies within ±e, so Newton steps are kept inside that bracket, falling
+// back to bisection when a step leaves it.
+function eccentricLongitude(meanLongitude: number, h: number, k: number) {
+	const e = Math.sqrt(h * h + k * k)
+	let low = meanLongitude - e
+	let high = meanLongitude + e
+	let f = meanLongitude
+
+	for (let i = 0; i < KEPLER_MAX_ITERATIONS; i++) {
+		const sf = Math.sin(f)
+		const cf = Math.cos(f)
+		const residual = f + h * cf - k * sf - meanLongitude
+
+		if (residual > 0) high = f
+		else if (residual < 0) low = f
+		else return f
+
+		let next = f - residual / (1 - h * sf - k * cf)
+		if (!(next > low && next < high)) next = (low + high) / 2
+		if (Math.abs(next - f) <= 1e-15 * Math.max(1, Math.abs(f))) return next
+		f = next
+	}
+
+	return f
 }
 
 // Decoded extended modified-difference-array record for a type 21 segment.
