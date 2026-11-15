@@ -5376,7 +5376,7 @@ console.log(pool.strings('FRAME_31000_NAME')) // ['MOON_PA']
 
 An SPK (Spacecraft and Planet Kernel) is a NAIF binary file of ephemerides: for a set of target bodies, the position and velocity relative to a center body over a time span, stored as numerically fitted (Chebyshev, Lagrange, or modified-difference) segments inside a DAF container (see [DAF Binary Containers](#daf-binary-containers)). JPL planetary ephemerides such as DE421 and DE440, satellite ephemerides, and small-body and spacecraft files are SPKs. Bodies are identified by NAIF integer codes, and a chain of segments links them, for example the solar-system barycenter to the Earth-Moon barycenter to the Earth. A system barycenter is not its planet: DE440s has Jupiter's barycenter (5) but not Jupiter's centre (599).
 
-`readSpk` reads one file and returns the segment between a center and a target, evaluated in TDB and returning AU and AU/day in the segment's own frame, without rotation; J2000 is the frame that matches the library axes. To combine files, `inspectSpk` catalogs the segments of each one, and `prepareSpkKernelSet` merges them in load order, giving precedence to the file loaded last as the NAIF toolkit does, and resolves the barycentric state of any body through its chain of centers. Coverage is never extrapolated, and coefficient records are read on demand, so the sources must stay open while they are used. To use segments with the rest of the library, wrap them with `spkEphemerisPath` (see [Ephemeris Path Adapters](#ephemeris-path-adapters)).
+`readSpk` reads one file and returns the segment between a center and a target, evaluated in TDB and returning AU and AU/day in the segment's own frame, without rotation; J2000 is the frame that matches the library axes. To combine files, `inspectSpk` catalogs the segments of each one, and `prepareSpkKernelSet` merges them in load order, giving precedence to the file loaded last as the NAIF toolkit does, and resolves the barycentric state of any body through its chain of centers. A file can be preferred for a body (`preferences`): where one of its segments for that body covers the epoch it is selected ahead of the load order, and elsewhere the load order applies, so a more accurate file of narrower span never opens a gap. The set also explains its selection: every resolved state lists its `chain` of segments, `candidates` lists the segments of a body in selection order, `coverage` returns the intervals where each segment is the one selected (a segment in none is never used), and `segmentStateAt` evaluates one chosen segment relative to its own center, to compare two sources of the same body. Coverage is never extrapolated, and coefficient records are read on demand, so the sources must stay open while they are used. To use segments with the rest of the library, wrap them with `spkEphemerisPath` (see [Ephemeris Path Adapters](#ephemeris-path-adapters)).
 
 ```ts
 import fs from 'fs/promises'
@@ -5420,6 +5420,13 @@ const code = extendedPermanentAsteroidNumber(65803) // 20065803
 const didymos = set.stateAt(code, timeYMDHMS(2022, 12, 8, 20, 7, 15, Timescale.TDB))
 
 if (didymos.ok) console.log(didymos.state, didymos.kernels) // AU and AU/day in J2000 axes; ['didymos', 'de440s']
+
+// Which segment provides the Earth, and over which spans; then the same set preferring DE440s for the Earth.
+console.log(set.coverage(Naif.EARTH)) // [{ start, end, kernel: 'de440s', segment, preferred: false, supported: true }]
+const preferring = await prepareSpkKernelSet(entries, { preferences: new Map([[Naif.EARTH, 'de440s']]) })
+const earth = preferring.stateAt(Naif.EARTH, timeYMDHMS(2025, 1, 15, 9, 20, 50, Timescale.TDB))
+
+if (earth.ok) console.log(earth.chain) // [{ body: 399, center: 3, kernel: 'de440s', segment, preferred: true }, { body: 3, center: 0, kernel: 'de440s', ... }]
 ```
 
 ### Starlight Deflection

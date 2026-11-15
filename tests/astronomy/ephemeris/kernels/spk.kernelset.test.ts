@@ -66,6 +66,10 @@ test('chains segments from the body to the barycenter', async () => {
 	expect(result.state[0][2]).toBe(0)
 	expect(result.state[1]).toEqual([0, 0, 0])
 	expect(result.kernels).toEqual(['de'])
+	expect(result.chain).toEqual([
+		{ body: 399, center: 3, kernel: 'de', segment: 1, preferred: false },
+		{ body: 3, center: 0, kernel: 'de', segment: 0, preferred: false },
+	])
 	expect(set.bodies).toEqual(new Set([3, 399]))
 	expect(set.stateAt(0, at(50))).toEqual({
 		ok: true,
@@ -74,6 +78,7 @@ test('chains segments from the body to the barycenter', async () => {
 			[0, 0, 0],
 		],
 		kernels: [],
+		chain: [],
 	})
 })
 
@@ -145,8 +150,8 @@ test('an unsupported selected segment does not fall back to a lower-precedence o
 	const type5 = entry('type5', [{ center: 0, target: 1, start: 70, end: 80, position: [1, 0, 0], type: 5 }])
 	const set = await prepareSpkKernelSet([supported, ecliptic, type5])
 
-	expect(set.stateAt(1, at(50))).toEqual({ ok: false, reason: 'frame', body: 1 })
-	expect(set.stateAt(1, at(75))).toEqual({ ok: false, reason: 'dataType', body: 1 })
+	expect(set.stateAt(1, at(50))).toEqual({ ok: false, reason: 'frame', body: 1, kernel: 'ecliptic', segment: 0 })
+	expect(set.stateAt(1, at(75))).toEqual({ ok: false, reason: 'dataType', body: 1, kernel: 'type5', segment: 0 })
 	expect(set.stateAt(1, at(20)).ok).toBeTrue()
 })
 
@@ -176,6 +181,145 @@ test('every state is owned by the caller', async () => {
 	if (!a.ok || !b.ok) throw new Error('unresolved')
 	expect(b.state[0][0]).toBeCloseTo(km(1), 15)
 	expect(a.state[0]).not.toBe(b.state[0])
+})
+
+test('a preferred file is selected for its body where it covers, and the load order applies elsewhere', async () => {
+	const accurate = entry('accurate', [
+		{ center: 0, target: 6, start: 0, end: 100, position: [1, 0, 0] },
+		{ center: 6, target: 699, start: 20, end: 60, position: [10, 0, 0] },
+	])
+	const broad = entry('broad', [
+		{ center: 0, target: 6, start: 0, end: 200, position: [2, 0, 0] },
+		{ center: 6, target: 699, start: 0, end: 200, position: [20, 0, 0] },
+	])
+	const preferences = new Map([[699, 'accurate']])
+	const set = await prepareSpkKernelSet([accurate, broad], { preferences })
+
+	const inside = set.stateAt(699, at(50))
+	if (!inside.ok) throw new Error(inside.reason)
+	// The preference applies to Saturn only: its barycenter still comes from the file loaded last.
+	expect(inside.state[0][0]).toBeCloseTo(km(12), 15)
+	expect(inside.chain).toEqual([
+		{ body: 699, center: 6, kernel: 'accurate', segment: 1, preferred: true },
+		{ body: 6, center: 0, kernel: 'broad', segment: 0, preferred: false },
+	])
+
+	const outside = set.stateAt(699, at(150))
+	expect(outside.ok && outside.state[0][0]).toBeCloseTo(km(22), 15)
+	expect(outside.ok && outside.chain[0]).toEqual({ body: 699, center: 6, kernel: 'broad', segment: 1, preferred: false })
+
+	expect(set.preferences).toEqual(new Map([[699, 'accurate']]))
+	const unpreferred = await prepareSpkKernelSet([accurate, broad])
+	expect(unpreferred.stateAt(699, at(50)).ok && unpreferred.stateAt(699, at(50))).toMatchObject({ kernels: ['broad'] })
+})
+
+test('a preference for a file without segments of the body or outside the set changes nothing', async () => {
+	const a = entry('a', [{ center: 0, target: 1, start: 0, end: 100, position: [1, 0, 0] }])
+	const b = entry('b', [{ center: 0, target: 2, start: 0, end: 100, position: [2, 0, 0] }])
+	const set = await prepareSpkKernelSet([a, b], {
+		preferences: new Map([
+			[1, 'b'],
+			[2, 'c'],
+		]),
+	})
+
+	expect(set.preferences.size).toBe(0)
+	expect(set.stateAt(1, at(50)).ok && set.stateAt(1, at(50))).toMatchObject({ kernels: ['a'] })
+	expect(set.candidates(1)).toHaveLength(1)
+	expect(set.candidates(1)[0].preferred).toBeFalse()
+})
+
+test('candidates are listed in selection order', async () => {
+	const low = entry('low', [
+		{ center: 0, target: 1, start: 0, end: 100, position: [1, 0, 0] },
+		{ center: 0, target: 1, start: 50, end: 100, position: [1, 0, 0] },
+	])
+	const high = entry('high', [{ center: 0, target: 1, start: 0, end: 10, position: [1, 0, 0] }])
+
+	const plain = await prepareSpkKernelSet([low, high])
+	expect(plain.candidates(1).map((e) => [e.kernel, e.descriptor.index, e.preferred])).toEqual([
+		['high', 0, false],
+		['low', 1, false],
+		['low', 0, false],
+	])
+
+	const preferred = await prepareSpkKernelSet([low, high], { preferences: new Map([[1, 'low']]) })
+	expect(preferred.candidates(1).map((e) => [e.kernel, e.descriptor.index, e.preferred])).toEqual([
+		['low', 1, true],
+		['low', 0, true],
+		['high', 0, false],
+	])
+
+	expect(plain.candidates(2)).toEqual([])
+})
+
+test('the effective coverage tells where each segment is selected and which ones never are', async () => {
+	const broad = entry('broad', [
+		{ center: 0, target: 1, start: 0, end: 100, position: [1, 0, 0] },
+		{ center: 0, target: 1, start: 150, end: 200, position: [1, 0, 0] },
+	])
+	const narrow = entry('narrow', [
+		{ center: 0, target: 1, start: 40, end: 60, position: [2, 0, 0] },
+		{ center: 0, target: 1, start: 45, end: 55, position: [2, 0, 0], type: 5 },
+	])
+	const shadowed = entry('shadowed', [{ center: 0, target: 1, start: 160, end: 170, position: [3, 0, 0] }])
+	const set = await prepareSpkKernelSet([shadowed, broad, narrow])
+
+	expect(set.coverage(1)).toEqual([
+		{ start: 0, end: 40, kernel: 'broad', segment: 0, preferred: false, supported: true },
+		{ start: 40, end: 45, kernel: 'narrow', segment: 0, preferred: false, supported: true },
+		{ start: 45, end: 55, kernel: 'narrow', segment: 1, preferred: false, supported: false },
+		{ start: 55, end: 60, kernel: 'narrow', segment: 0, preferred: false, supported: true },
+		{ start: 60, end: 100, kernel: 'broad', segment: 0, preferred: false, supported: true },
+		{ start: 150, end: 200, kernel: 'broad', segment: 1, preferred: false, supported: true },
+	])
+
+	// Every interval agrees with the selection of stateAt inside it.
+	for (const interval of set.coverage(1)) {
+		const middle = set.stateAt(1, at((interval.start + interval.end) / 2))
+		if (interval.supported) expect(middle.ok && middle.chain[0]).toMatchObject({ kernel: interval.kernel, segment: interval.segment })
+		else expect(middle).toMatchObject({ ok: false, kernel: interval.kernel, segment: interval.segment })
+	}
+
+	const preferred = await prepareSpkKernelSet([shadowed, broad, narrow], { preferences: new Map([[1, 'shadowed']]) })
+	expect(preferred.coverage(1).slice(-3)).toEqual([
+		{ start: 150, end: 160, kernel: 'broad', segment: 1, preferred: false, supported: true },
+		{ start: 160, end: 170, kernel: 'shadowed', segment: 0, preferred: true, supported: true },
+		{ start: 170, end: 200, kernel: 'broad', segment: 1, preferred: false, supported: true },
+	])
+
+	expect(set.coverage(2)).toEqual([])
+})
+
+test('a segment covering a single instant appears in the effective coverage', async () => {
+	const set = await prepareSpkKernelSet([entry('file', [{ center: 0, target: 1, start: 10, end: 10, position: [1, 0, 0] }])])
+	expect(set.coverage(1)).toEqual([{ start: 10, end: 10, kernel: 'file', segment: 0, preferred: false, supported: true }])
+})
+
+test('one segment is evaluated relative to its center whatever the selection', async () => {
+	const set = await prepareSpkKernelSet([
+		entry('low', [{ center: 6, target: 699, start: 0, end: 100, position: [10, 0, 0] }]),
+		entry('high', [
+			{ center: 6, target: 699, start: 0, end: 100, position: [20, 0, 0] },
+			{ center: 6, target: 699, start: 0, end: 100, position: [30, 0, 0], frame: 17 },
+		]),
+	])
+
+	const low = set.segmentStateAt('low', 0, at(50))
+	expect(low.ok).toBeTrue()
+	if (!low.ok) return
+	expect(low.state[0][0]).toBeCloseTo(km(10), 15)
+	expect(low.target).toBe(699)
+	expect(low.center).toBe(6)
+	expect(set.segmentStateAt('high', 0, at(50)).ok && set.segmentStateAt('high', 0, at(50))).toMatchObject({ ok: true })
+	expect(set.segmentStateAt('high', 1, at(50))).toEqual({ ok: false, reason: 'frame' })
+	expect(set.segmentStateAt('low', 0, at(150))).toEqual({ ok: false, reason: 'coverage' })
+	expect(set.segmentStateAt('low', 1, at(50))).toEqual({ ok: false, reason: 'missing' })
+	expect(set.segmentStateAt('other', 0, at(50))).toEqual({ ok: false, reason: 'missing' })
+
+	// The state is owned by the caller.
+	const again = set.segmentStateAt('low', 0, at(50))
+	expect(again.ok && again.state[0]).not.toBe(low.state[0])
 })
 
 test('DE440s and the Didymos kernel resolve the Earth and Didymos from separate files', async () => {
