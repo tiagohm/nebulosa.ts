@@ -229,8 +229,9 @@ function cachedByTime<T>(compute: (time: Time) => T): (time: Time) => T {
 
 // Finds the chronological segments of [start, end] where score is non-negative. The boundaries are
 // the scan roots plus the roots bisected next to every extremum, which catches tangent and double
-// crossings between coarse samples; a segment qualifies by its midpoint and is kept when it lasts at
-// least minimumDurationHours.
+// crossings between coarse samples; a segment qualifies by its midpoint. Qualifying segments that share
+// a boundary are one segment, since two searches can place the same crossing a few milliseconds apart
+// and leave a sliver between them; a merged segment is kept when it lasts at least minimumDurationHours.
 function qualifyingSegments(score: (time: Time) => number, start: Time, end: Time, step: number, options: Pick<MeteorGeometricObservingWindowOptions, 'tolerance' | 'minimumDurationHours'>): readonly (readonly [Time, Time])[] {
 	const boundaries: Time[] = [start, end]
 	for (const root of searchRoots(score, start, end, { step, tolerance: options.tolerance })) boundaries.push(root)
@@ -244,17 +245,19 @@ function qualifyingSegments(score: (time: Time) => number, start: Time, end: Tim
 	boundaries.sort((a, b) => timeSubtract(a, b))
 	const unique: Time[] = []
 	for (const boundary of boundaries) if (unique.length === 0 || timeSubtract(boundary, unique.at(-1)!) > 1e-8) unique.push(boundary)
-	const segments: (readonly [Time, Time])[] = []
+	const segments: [Time, Time][] = []
 
 	for (let i = 0; i + 1 < unique.length; i++) {
 		const left = unique[i]
 		const right = unique[i + 1]
 		if (!(score(timeShift(left, timeSubtract(right, left) * 0.5)) >= 0)) continue
-		if (timeSubtract(right, left) * 24 < (options.minimumDurationHours ?? 0)) continue
-		segments.push([left, right])
+		const previous = segments.at(-1)
+		if (previous !== undefined && previous[1] === left) previous[1] = right
+		else segments.push([left, right])
 	}
 
-	return segments
+	const minimumDurationHours = options.minimumDurationHours ?? 0
+	return segments.filter(([left, right]) => timeSubtract(right, left) * 24 >= minimumDurationHours)
 }
 
 // Restores the legacy full condition object only for the explicit correction callback seam.

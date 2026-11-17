@@ -4,8 +4,9 @@ import { meteorSolarLongitude, timeAtMeteorSolarLongitude } from '../../../src/a
 import { meteorShowerComputationContext, meteorShowerState } from '../../../src/astronomy/meteors/state'
 import type { MeteorActivityProfile, MeteorShowerSolution } from '../../../src/astronomy/meteors/types'
 import { Ellipsoid, geodeticLocation } from '../../../src/astronomy/observer/location'
-import { timeShift, timeSubtract, timeToDate, timeYMDHMS, Timescale } from '../../../src/astronomy/time/time'
+import { timeShift, timeSubtract, timeToDate, timeToUnixMillis, timeUnix, timeYMDHMS, Timescale } from '../../../src/astronomy/time/time'
 import { deg } from '../../../src/math/units/angle'
+import { meter } from '../../../src/math/units/distance'
 import { BASE_SOLUTION, EXPONENTIAL_PROFILE, OBSERVER, PLANNER_END, PLANNER_MULTI_PROFILE, PLANNER_START, SITE_EPOCH, SITE_EPOCH_END, SOLAR_DRIFT_SOLUTION, TEST_INTERVAL, ZERO_WIDTH_INTERVAL } from './util'
 
 const DAY_OPTIONS = { maximumSolarAltitude: deg(90), minimumRadiantAltitude: 0, step: 1 / 48 } as const
@@ -295,4 +296,27 @@ test('geometric windows of a narrow support stay inside it over a long search', 
 		expect(timeSubtract(window.start, supportStart)).toBeGreaterThan(-1e-6)
 		expect(timeSubtract(supportEnd, window.end)).toBeGreaterThan(-1e-6)
 	}
+})
+
+test('geometric windows join the pieces two root searches leave around one crossing', () => {
+	// Leonids, IAU MDC solution 014 (Jenniskens 2023), on the evening of 2026-11-17 from 22.5° S 45.5° W at 1000 m,
+	// inside the IMO visual period, astronomical darkness, and the radiant at least 20° high. The rise of the radiant
+	// above 20° and the start of the dawn were each found twice a few milliseconds apart, which split the one window
+	// into a 16 ms sliver, the window, and a 15 ms sliver.
+	const leonids = {
+		activity: { kind: 'annual', source: 'annual' },
+		activityInterval: { start: 3.717551306747922, end: 4.782202150464463 },
+		referenceSolarLongitude: 4.124213022462601,
+		rightAscension: 2.694788365079245,
+		declination: 0.3735004599267865,
+		radiantDrift: { basis: 'day', rightAscensionRate: 0.010995574287564275, declinationRate: -0.0066322511575784525 },
+	} satisfies MeteorShowerSolution
+	const site = { latitude: deg(-22.5), longitude: deg(-45.5), elevation: meter(1000) }
+	const start = timeUnix(1794926821.24, true)
+	const end = timeUnix(1795013233.575, true)
+	const windows = meteorGeometricObservingWindows(leonids, site, start, end, { support: { start: 3.895796659490691, end: 4.3357301355066475 }, maximumSolarAltitude: deg(-18), minimumRadiantAltitude: deg(20) })
+
+	expect(windows).toHaveLength(1)
+	expect(timeToUnixMillis(windows[0].start)).toBeCloseTo(Date.UTC(2026, 10, 18, 5, 46, 40), -3)
+	expect(timeToUnixMillis(windows[0].end)).toBeCloseTo(Date.UTC(2026, 10, 18, 6, 47, 27), -3)
 })
