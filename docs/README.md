@@ -3555,8 +3555,11 @@ Nutation is the short-period wobble of the Earth's rotation axis on top of the s
 
 The angles come from the IAU 2000A model adjusted for IAU 2006. The GCRS to CIRS matrix (frame bias, precession, and nutation, with right ascension measured from the Celestial Intermediate Origin) is the right companion for the CIRS-based observed-place conversions; the equinox-based precession-nutation matrix would offset right ascension by the equation of the origins, which grows by about 50″ per year since J2000. These matrices are cached on the `Time` and shared, so they must be treated as read-only. See [Precession Matrices](#precession-matrices) for the equinox-based matrices.
 
+The full series has about 1400 terms and dominates the cost of every orientation of an instant: the precession-nutation matrix, the apparent sidereal time, and the CIRS and ITRS rotations all start from it. Its angles vary smoothly, since the shortest terms of significant amplitude have periods of days, so an application computing many instants can install providers that evaluate it only on a fixed TT grid (a quarter day by default) and interpolate a cubic between the nodes, within about 0.01 mas of the full series; the precession is still exact. The result depends only on the instant, never on the order of the calls. A first instant in a new region costs four series evaluations, so the exact defaults are cheaper for isolated instants years apart.
+
 ```ts
-import { cirsRotationMatrix, equationOfOrigins, nutationAngles, Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { interpolatedNutationProviders } from 'nebulosa/src/astronomy/time/nutation.interpolated'
+import { cirsRotationMatrix, equationOfOrigins, nutationAngles, TIME_PROVIDERS, Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
 import { toArcsec } from 'nebulosa/src/math/units/angle'
 
 const time = timeYMDHMS(2026, 6, 29, 0, 0, 0, Timescale.TT)
@@ -3571,6 +3574,11 @@ console.log(cirsRotationMatrix(time).slice(0, 3)) // [0.9999966, -4.8e-9, -0.002
 
 // The same orientation from the equinox-based precession-nutation matrix turned by GAST − ERA (shared, read-only).
 console.log(equationOfOrigins(time).slice(0, 3)) // [0.9999966, -4.8e-9, -0.0025894] — first row
+
+// Interpolated nutation for every later instant without its own providers (or as one instant's providers).
+const { nut, pnm } = interpolatedNutationProviders({ step: 0.25 })
+TIME_PROVIDERS.nut = nut
+TIME_PROVIDERS.pnm = pnm
 ```
 
 ### Obliquity and Ecliptic Orientation
