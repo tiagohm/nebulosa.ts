@@ -2380,10 +2380,11 @@ export function eraC2tcio(rc2i: Mat3, era: Angle, rpom: Mat3, out?: MutMat3) {
 // For a terrestrial observer, prepare star-independent astrometry
 // parameters for transformations between ICRS and geocentric CIRS
 // coordinates. The caller supplies the date, and ERFA models are used
-// to predict the Earth ephemeris and CIP/CIO.
-export function eraApci13(tdb1: number, tdb2: number, ebpv: PositionAndVelocity, ehp: Vec3 = ebpv[0], astrom?: EraAstrom) {
+// to predict the Earth ephemeris and CIP/CIO. rnpb, when given, is the
+// IAU 2006/2000A bias-precession-nutation matrix of the date, read only.
+export function eraApci13(tdb1: number, tdb2: number, ebpv: PositionAndVelocity, ehp: Vec3 = ebpv[0], astrom?: EraAstrom, rnpb?: Mat3) {
 	// Form the equinox based BPN matrix, IAU 2006/2000A.
-	const r = eraPnm06a(tdb1, tdb2)
+	const r = rnpb ?? eraPnm06a(tdb1, tdb2)
 
 	// Extract CIP X,Y.
 	const x = r[6] // 2x0
@@ -2640,7 +2641,9 @@ export function eraPvtob(elong: Angle, phi: Angle, hm: Distance, xp: Angle, yp: 
 // parameters for transformations between ICRS and observed
 // coordinates. The caller supplies UTC, site coordinates, ambient air
 // conditions and observing wavelength, and ERFA models are used to
-// obtain the Earth ephemeris, CIP/CIO and refraction constants.
+// obtain the Earth ephemeris, CIP/CIO and refraction constants. rnpb,
+// when given, is the IAU 2006/2000A bias-precession-nutation matrix of
+// the date, read only.
 export function eraApco13(
 	tt1: number,
 	tt2: number,
@@ -2661,9 +2664,10 @@ export function eraApco13(
 	radius: Distance = WGS84_RADIUS,
 	flattening: number = WGS84_FLATTENING,
 	astrom?: EraAstrom,
+	rnpb?: Mat3,
 ) {
 	// Form the equinox based BPN matrix, IAU 2006/2000A.
-	const r = eraPnm06a(tt1, tt2)
+	const r = rnpb ?? eraPnm06a(tt1, tt2)
 
 	// Extract CIP X,Y.
 	const x = r[6] // 2x0

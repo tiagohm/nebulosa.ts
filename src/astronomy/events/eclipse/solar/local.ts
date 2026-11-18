@@ -6,8 +6,8 @@ import { clamp } from '../../../../math/numerical/math'
 import { bisection, brentMinimize, type RootFindingOptions } from '../../../../math/numerical/optimization'
 import { type Angle, normalizeAngle, normalizePI } from '../../../../math/units/angle'
 import { nearestSolarEclipse, type SolarEclipse } from '../../../bodies/sun'
-import { eraGst06a } from '../../../coordinates/erfa/erfa'
-import { type Time, timeAtJulianDay, toJulianDay, tt } from '../../../time/time'
+import { eraGst06 } from '../../../coordinates/erfa/erfa'
+import { precessionNutationMatrix, type Time, timeAtJulianDay, toJulianDay, tt } from '../../../time/time'
 import { F, hourAngleFromLongitude, type SunMoonPosition } from '../eclipse'
 import {
 	besselianSampleAtJulianDay,
@@ -518,7 +518,7 @@ function computeSolarAltitude(time: Time, longitude: Angle, latitude: Angle, pos
 		const deltaT = position.deltaT ?? 0
 		const ttTime = tt(time)
 		const ut1Fraction = ttTime.fraction - deltaT / DAYSEC
-		const gast = eraGst06a(ttTime.day, ut1Fraction, ttTime.day, ttTime.fraction)
+		const gast = eraGst06(ttTime.day, ut1Fraction, ttTime.day, ttTime.fraction, precessionNutationMatrix(ttTime))
 		const H = normalizePI(gast + longitude - position.sun.rightAscension)
 		const sinAltitude = Math.sin(latitude) * Math.sin(position.sun.declination) + Math.cos(latitude) * Math.cos(position.sun.declination) * Math.cos(H)
 		return Math.asin(clamp(sinAltitude, -1, 1))
@@ -571,7 +571,7 @@ function computeSolarParallacticAngle(time: Time, longitude: Angle, latitude: An
 		const deltaT = position.deltaT ?? 0
 		const ttTime = tt(time)
 		const ut1Fraction = ttTime.fraction - deltaT / DAYSEC
-		const gast = eraGst06a(ttTime.day, ut1Fraction, ttTime.day, ttTime.fraction)
+		const gast = eraGst06(ttTime.day, ut1Fraction, ttTime.day, ttTime.fraction, precessionNutationMatrix(ttTime))
 		const H = normalizePI(gast + longitude - position.sun.rightAscension)
 		return normalizePI(Math.atan2(Math.sin(H), Math.tan(latitude) * Math.cos(position.sun.declination) - Math.sin(position.sun.declination) * Math.cos(H)))
 	}
@@ -1146,7 +1146,7 @@ function solarHourAngleAt(pbe: PolynomialBesselianElements, longitude: Angle, jd
 		const deltaT = position.deltaT ?? 0
 		const ttTime = tt(time)
 		const ut1Fraction = ttTime.fraction - deltaT / DAYSEC
-		const gast = eraGst06a(ttTime.day, ut1Fraction, ttTime.day, ttTime.fraction)
+		const gast = eraGst06(ttTime.day, ut1Fraction, ttTime.day, ttTime.fraction, precessionNutationMatrix(ttTime))
 		return normalizePI(gast + longitude - position.sun.rightAscension)
 	}
 

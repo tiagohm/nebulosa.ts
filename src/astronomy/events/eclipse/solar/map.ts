@@ -8,9 +8,9 @@ import { brentMinimize } from '../../../../math/numerical/optimization'
 import { polynomialRegression } from '../../../../math/numerical/regression'
 import { type Angle, normalizeAngle, normalizePI, unwrapAngles } from '../../../../math/units/angle'
 import type { SolarEclipse } from '../../../bodies/sun'
-import { eraGst06a, eraS2p } from '../../../coordinates/erfa/erfa'
+import { eraGst06, eraS2p } from '../../../coordinates/erfa/erfa'
 import type { CylindricalProjection, ProjectionOptions } from '../../../projections/projection'
-import { timeAtJulianDay, timeShift, timeSubtract, toJulianDay, tt, type Time } from '../../../time/time'
+import { timeAtJulianDay, timeShift, timeSubtract, toJulianDay, precessionNutationMatrix, tt, type Time } from '../../../time/time'
 import {
 	bisectRoot,
 	derivativeEarthLimbOmega,
@@ -684,11 +684,12 @@ export function instantBesselianFromSunMoon(time: Time, position: SunMoonPositio
 
 	// The shadow-axis right ascension is apparent (true equator and equinox of date), so the matching
 	// sidereal angle is the Greenwich apparent sidereal time, not bare GMST. UT1 is recovered from TT via
-	// the Besselian Delta T (Delta T = TT - UT1); both feed eraGst06a, keeping mu = GAST - alpha_apparent
-	// consistent with the precession/nutation rotation applied to the positions.
+	// the Besselian Delta T (Delta T = TT - UT1); both feed eraGst06 with the instant's precession-nutation
+	// matrix, keeping mu = GAST - alpha_apparent consistent with the precession/nutation rotation applied to
+	// the positions.
 	const ttTime = tt(time)
 	const ut1Fraction = ttTime.fraction - deltaT / DAYSEC
-	const gast = eraGst06a(ttTime.day, ut1Fraction, ttTime.day, ttTime.fraction)
+	const gast = eraGst06(ttTime.day, ut1Fraction, ttTime.day, ttTime.fraction, precessionNutationMatrix(ttTime))
 	const mu = normalizeAngle(gast - projection.rightAscension)
 
 	return {

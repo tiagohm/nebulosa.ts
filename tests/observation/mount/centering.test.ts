@@ -431,7 +431,8 @@ describe('centering loop', () => {
 		const destinations: unknown[] = []
 
 		for (const shift of [0, 3_600_000]) {
-			const sky = new FakeMount([TARGET.rightAscension, TARGET.declination], deg(5 / 60), 0)
+			// The mount publishes its first position at the shifted wall clock, as a real one reports it when read.
+			const sky = new FakeMount([TARGET.rightAscension, TARGET.declination], deg(5 / 60), 0, Date.UTC(2026, 0, 1) + shift)
 			const frames: CenteringFrame[] = []
 			const { run, clock } = harness(sky, skySolver(sky, frames))
 			clock.jumpWall(shift)

@@ -7,7 +7,7 @@ import type { Pressure } from '../../math/units/pressure'
 import type { Temperature } from '../../math/units/temperature'
 import type { Velocity } from '../../math/units/velocity'
 import { Ellipsoid, type GeographicCoordinate, type GeographicPosition } from '../observer/location'
-import { gcrsToItrsRotationMatrix, pmAngles, type Time, timeShift, tt, ut1 } from '../time/time'
+import { gcrsToItrsRotationMatrix, pmAngles, precessionNutationMatrix, type Time, timeShift, tt, ut1 } from '../time/time'
 import type { CartesianCoordinate, EquatorialCoordinate, SphericalCoordinate } from './coordinate'
 import { type EraAstrom, eraApci13, eraApco13, eraApio13, eraAtciqz, eraAticq, eraAtioq, eraAtoiq, eraC2s, eraEo06a, eraP2s, eraRefco, eraS2c } from './erfa/erfa'
 import { frameAt, type Frame } from './frame'
@@ -366,7 +366,7 @@ export function phaseAngle(body: CartesianCoordinate, sun: CartesianCoordinate, 
 export function icrsToCirs(icrs: Vec3 | readonly [Angle, Angle], time: Time, ebpv: PositionAndVelocity, ehp: Vec3 = ebpv[0], astrom?: EraAstrom, deflected: boolean = true) {
 	const a = tt(time)
 
-	astrom ??= eraApci13(a.day, a.fraction, ebpv, ehp)
+	astrom ??= eraApci13(a.day, a.fraction, ebpv, ehp, undefined, precessionNutationMatrix(time))
 
 	const [rc, dc] = icrs.length === 2 ? icrs : eraC2s(...icrs)
 	return eraAtciqz(rc, dc, astrom, deflected)
@@ -376,7 +376,7 @@ export function icrsToCirs(icrs: Vec3 | readonly [Angle, Angle], time: Time, ebp
 export function cirsToIcrs(cirs: Vec3 | readonly [Angle, Angle], time: Time, ebpv: PositionAndVelocity, ehp: Vec3 = ebpv[0], astrom?: EraAstrom) {
 	const a = tt(time)
 
-	astrom ??= eraApci13(a.day, a.fraction, ebpv, ehp)
+	astrom ??= eraApci13(a.day, a.fraction, ebpv, ehp, undefined, precessionNutationMatrix(time))
 
 	const [rc, dc] = cirs.length === 2 ? cirs : eraC2s(...cirs)
 	return eraAticq(rc, dc, astrom)
@@ -397,7 +397,7 @@ export function cirsToObserved(cirs: Vec3 | readonly [Angle, Angle], time: Time,
 		// First set up the astrometry context for ICRS<->observed
 		astrom = eraApio13(a.day, a.fraction, b.day, b.fraction, longitude, latitude, elevation, xp, yp, sp, pressure, temperature, relativeHumidity, wl)
 		// eraApio13 never writes the CIRS-to-equinox equation of the origins.
-		astrom.eo = eraEo06a(a.day, a.fraction)
+		astrom.eo = eraEo06a(a.day, a.fraction, precessionNutationMatrix(time))
 	}
 
 	const [ri, di] = cirs.length === 2 ? cirs : eraC2s(...cirs)
@@ -442,7 +442,7 @@ export function icrsToObserved(icrs: Vec3 | readonly [Angle, Angle], time: Time,
 		const { radius, flattening } = ELLIPSOID_PARAMETERS[('ellipsoid' in location ? location.ellipsoid : undefined) ?? time.location?.ellipsoid ?? Ellipsoid.IERS2010]
 
 		// First set up the astrometry context for observed<->CIRS
-		astrom = eraApco13(a.day, a.fraction, b.day, b.fraction, longitude, latitude, elevation, xp, yp, sp, pressure, temperature, relativeHumidity, wl, ebpv, ehp, radius, flattening)
+		astrom = eraApco13(a.day, a.fraction, b.day, b.fraction, longitude, latitude, elevation, xp, yp, sp, pressure, temperature, relativeHumidity, wl, ebpv, ehp, radius, flattening, undefined, precessionNutationMatrix(time))
 	}
 
 	// Convert to topocentric CIRS

@@ -6,8 +6,8 @@ import { type Angle, normalizeAngle, normalizePI } from '../../../../math/units/
 import { nearestLunarEclipse, type LunarEclipse } from '../../../bodies/moon'
 import { parallacticAngle } from '../../../coordinates/astrometry'
 import { equatorialToHorizontal, positionAngleBetween } from '../../../coordinates/coordinate'
-import { eraGst06a } from '../../../coordinates/erfa/erfa'
-import { timeAtJulianDay, toJulianDay, tt, type Time } from '../../../time/time'
+import { eraGst06 } from '../../../coordinates/erfa/erfa'
+import { timeAtJulianDay, toJulianDay, precessionNutationMatrix, tt, type Time } from '../../../time/time'
 import type { SunMoonProvider } from '../eclipse'
 import { lunarEclipseEvents, type LunarEclipseContact, type LunarEclipseContactKind, MOON_RADIUS_EARTH_RADII } from './map'
 
@@ -133,7 +133,7 @@ export interface LocalLunarEclipseCircumstances {
 function contactGast(time: Time, deltaT: number) {
 	const ttTime = tt(time)
 	const ut1Fraction = ttTime.fraction - deltaT / DAYSEC
-	return eraGst06a(ttTime.day, ut1Fraction, ttTime.day, ttTime.fraction)
+	return eraGst06(ttTime.day, ut1Fraction, ttTime.day, ttTime.fraction, precessionNutationMatrix(ttTime))
 }
 
 // Whether the contact is the internal (totality) tangency U2/U3 of a total eclipse. There the lunar limb is

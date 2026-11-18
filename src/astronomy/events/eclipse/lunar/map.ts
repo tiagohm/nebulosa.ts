@@ -6,9 +6,9 @@ import { brentMinimize } from '../../../../math/numerical/optimization'
 import { polynomialRegression } from '../../../../math/numerical/regression'
 import type { Angle } from '../../../../math/units/angle'
 import { DEFAULT_MINIMAL_LUNAR_ECLIPSE_TIME, type LunarEclipse, type LunarEclipseType } from '../../../bodies/moon'
-import { eraGst06a } from '../../../coordinates/erfa/erfa'
+import { eraGst06 } from '../../../coordinates/erfa/erfa'
 import type { CylindricalProjection, ProjectionOptions, RaAxisDirection } from '../../../projections/projection'
-import { tt, type Time, timeShift, toJulianDay } from '../../../time/time'
+import { precessionNutationMatrix, tt, type Time, timeShift, toJulianDay } from '../../../time/time'
 import { bisectRoot, geoPolylinesToSvgPathData, normalizeLongitude, pointsToSvgPathData, splitPolygonAtAntimeridian, type EclipseGeoBranch, type EclipseGeoCurve, type EclipseGeoPoint, type SunMoonProvider } from '../eclipse'
 import type { SolarEclipseMapSvgProjectionOptions } from '../solar/map'
 
@@ -390,7 +390,7 @@ export function lunarEclipseEvents(eclipse: LunarEclipse): LunarEclipseContact[]
 function contactGast(time: Time, deltaT: number) {
 	const ttTime = tt(time)
 	const ut1Fraction = ttTime.fraction - deltaT / DAYSEC
-	return eraGst06a(ttTime.day, ut1Fraction, ttTime.day, ttTime.fraction)
+	return eraGst06(ttTime.day, ut1Fraction, ttTime.day, ttTime.fraction, precessionNutationMatrix(ttTime))
 }
 
 // Distance-independent base visibility-horizon altitude (radians): the configured horizon lowered by the

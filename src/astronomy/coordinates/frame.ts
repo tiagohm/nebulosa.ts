@@ -179,7 +179,7 @@ export const MEAN_ECLIPTIC_OF_DATE: Frame = {
 
 // The Celestial Intermediate Reference System (CIRS): the geometric, CIO-based
 // equator-of-date frame, given by the celestial-to-intermediate rotation
-// (eraC2i06a, cached per Time via cirsRotationMatrix). This is the pure rotation
+// (as eraC2i06a, cached per Time via cirsRotationMatrix). This is the pure rotation
 // from the base to CIRS and does NOT include aberration, light deflection,
 // parallax, or refraction; for the apparent place use the transforms in
 // astrometry.ts. dRdtTimesRtAt is the numerical W of that CIO/CIP rotation (per day).

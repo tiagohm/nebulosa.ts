@@ -4,20 +4,21 @@ import type { Vec3 } from '../../math/linear-algebra/vec3'
 import { twoProduct, twoSum, type NumberArray } from '../../math/numerical/math'
 import { type Angle, normalizePI } from '../../math/units/angle'
 import {
-	eraC2i06a,
+	eraC2ixys,
 	eraC2teqx,
 	eraCalToJd,
 	eraDat,
 	eraDtDb,
 	eraEra00,
 	eraGmst06,
-	eraGst06a,
+	eraGst06,
 	eraJdToCal,
 	eraNut06a,
 	eraObl06,
 	eraPmat06,
 	eraPnm06a,
 	eraPom00,
+	eraS06,
 	eraSp00,
 	eraTaiTt,
 	eraTaiUt1,
@@ -796,7 +797,8 @@ export function precessionNutationMatrix(time: Time): Mat3 {
 }
 
 // Computes the 3x3 CIO-based celestial/base ICRS-GCRS oriented -> CIRS rotation matrix,
-// via ERFA eraC2i06a, including frame bias/precession/nutation.
+// equivalent to ERFA eraC2i06a, including frame bias/precession/nutation. The CIP X,Y come from
+// precessionNutationMatrix, so its provider and per-instant cache are shared instead of evaluated again.
 // Unlike precessionNutationMatrix, which is equinox based and places right ascension on the
 // true equinox, this matrix places it on the CIO. It is the correct companion to the CIO/ERA
 // based observed conversions (cirsToObserved/observedToCirs, which use eraAtioq/eraAtoiq):
@@ -805,7 +807,8 @@ export function precessionNutationMatrix(time: Time): Mat3 {
 export function cirsRotationMatrix(time: Time): Mat3 {
 	if (time.cache?.cirsRotation !== undefined) return time.cache.cirsRotation
 	const t = tt(time)
-	const cirsRotation = eraC2i06a(t.day, t.fraction)
+	const rbpn = precessionNutationMatrix(time)
+	const cirsRotation = eraC2ixys(rbpn[6], rbpn[7], eraS06(t.day, t.fraction, rbpn[6], rbpn[7]))
 	cacheKey(cache(time), 'cirsRotation', cirsRotation)
 	return cirsRotation
 }
@@ -986,7 +989,8 @@ export const TIME_PROVIDERS: Required<TimeProviders> = {
 	// taiMinusUtc,
 	ut1MinusTai,
 	era: (u) => eraEra00(u.day, u.fraction),
-	gast: (u, t) => eraGst06a(u.day, u.fraction, t.day, t.fraction),
+	// Reuses the instant's precession-nutation matrix, the costly part of eraGst06a, through its provider and cache.
+	gast: (u, t) => eraGst06(u.day, u.fraction, t.day, t.fraction, precessionNutationMatrix(t)),
 	gmst: (u, t) => eraGmst06(u.day, u.fraction, t.day, t.fraction),
 	obl: (t) => eraObl06(t.day, t.fraction),
 	nut: (t) => eraNut06a(t.day, t.fraction),
