@@ -1,11 +1,69 @@
 import { expect, test } from 'bun:test'
-import { HIPS2FITS_ALTERNATIVE_URL, type Hips2FitsOptions, hips2Fits, hipsSurveys } from '../../../src/adapters/sky/hips2fits'
+import { HIPS2FITS_ALTERNATIVE_URL, HIPS2FITS_BASE_URL, type Hips2FitsOptions, hips2Fits, hips2FitsUrl, hipsSurveys, hipsSurveysUrl, parseHipsSurveys } from '../../../src/adapters/sky/hips2fits'
 import { readFits } from '../../../src/io/formats/fits/fits'
 import { bufferSource } from '../../../src/io/io'
 import { deg } from '../../../src/math/units/angle'
 import { isNetworkTestSkipped } from '../../util'
 
 const SKIP = isNetworkTestSkipped()
+
+test('cutout url', () => {
+	const url = new URL(hips2FitsUrl('CDS/P/DSS2/color', deg(83.82), deg(-5.39), { width: 800, height: 600, fov: deg(2), rotation: deg(30), format: 'jpg', baseUrl: HIPS2FITS_ALTERNATIVE_URL }))
+
+	expect(url.origin).toBe('http://alaskybis.cds.unistra.fr')
+	expect(url.pathname).toBe('/hips-image-services/hips2fits')
+	expect(url.searchParams.get('hips')).toBe('CDS/P/DSS2/color')
+	expect(+url.searchParams.get('ra')!).toBeCloseTo(83.82, 12)
+	expect(+url.searchParams.get('dec')!).toBeCloseTo(-5.39, 12)
+	expect(url.searchParams.get('width')).toBe('800')
+	expect(url.searchParams.get('height')).toBe('600')
+	expect(+url.searchParams.get('fov')!).toBeCloseTo(2, 12)
+	expect(+url.searchParams.get('rotation_angle')!).toBeCloseTo(30, 12)
+	expect(url.searchParams.get('projection')).toBe('TAN')
+	expect(url.searchParams.get('coordsys')).toBe('icrs')
+	expect(url.searchParams.get('format')).toBe('jpg')
+})
+
+test('cutout url defaults', () => {
+	const url = new URL(hips2FitsUrl('CDS/P/DSS2/red', 0, 0))
+
+	expect(url.origin).toBe(new URL(HIPS2FITS_BASE_URL).origin)
+	expect(url.searchParams.get('width')).toBe('1200')
+	expect(url.searchParams.get('height')).toBe('900')
+	expect(+url.searchParams.get('fov')!).toBeCloseTo(1, 12)
+	expect(url.searchParams.get('rotation_angle')).toBe('0')
+	expect(url.searchParams.get('format')).toBe('fits')
+})
+
+test('surveys url', () => {
+	const url = new URL(hipsSurveysUrl(0.5))
+
+	expect(url.pathname).toBe('/MocServer/query')
+	expect(url.searchParams.get('get')).toBe('record')
+	expect(url.searchParams.get('fmt')).toBe('json')
+	expect(url.searchParams.get('expr')).toContain('moc_sky_fraction >= 0.5')
+})
+
+test('parse surveys', () => {
+	const [survey, bare] = parseHipsSurveys([
+		{
+			ID: 'CDS/P/DSS2/color',
+			client_category: 'Image/Optical/DSS',
+			hips_frame: 'equatorial',
+			obs_regime: 'Optical',
+			hips_pixel_bitpix: '0',
+			hips_pixel_scale: '2.236e-4',
+			moc_sky_fraction: '1',
+			obs_title: 'DSS colored',
+			obs_copyright: 'Digitized Sky Survey - STScI/NASA',
+			obs_copyright_url: 'https://archive.stsci.edu/dss/',
+		},
+		{ ID: 'CDS/P/2MASS/H', client_category: 'Image/Infrared/2MASS', hips_frame: 'equatorial', obs_regime: 'Infrared', hips_pixel_bitpix: '-32', hips_pixel_scale: '2.236e-4', moc_sky_fraction: '1' },
+	])
+
+	expect(survey).toEqual({ id: 'CDS/P/DSS2/color', category: 'Image/Optical/DSS', frame: 'equatorial', regime: 'optical', bitpix: 0, pixelScale: 2.236e-4, skyFraction: 1, title: 'DSS colored', copyright: 'Digitized Sky Survey - STScI/NASA', copyrightUrl: 'https://archive.stsci.edu/dss/' })
+	expect(bare).toEqual({ id: 'CDS/P/2MASS/H', category: 'Image/Infrared/2MASS', frame: 'equatorial', regime: 'infrared', bitpix: -32, pixelScale: 2.236e-4, skyFraction: 1 })
+})
 
 test.skipIf(SKIP)('fits', async () => {
 	const options: Hips2FitsOptions = { width: 400, height: 400, baseUrl: HIPS2FITS_ALTERNATIVE_URL }

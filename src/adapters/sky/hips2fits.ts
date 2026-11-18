@@ -66,38 +66,60 @@ export interface HipsSurvey {
 	readonly pixelScale: number
 	// Fraction of the sky covered, 0..1.
 	readonly skyFraction: number
+	// Title of the survey for people, when the record gives one.
+	readonly title?: string
+	// Copyright or acknowledgment the survey's publisher asks for, when the record gives one.
+	readonly copyright?: string
+	// Page of that copyright or acknowledgment, when the record gives one.
+	readonly copyrightUrl?: string
+}
+
+// URL of a hips2fits cutout of the survey id centered on the ICRS ra and dec (radians), with the
+// options of hips2Fits and their defaults (1200 × 900 px, 1° field, no rotation, TAN, ICRS, FITS);
+// a timeout does not enter the URL.
+export function hips2FitsUrl(id: string, ra: Angle, dec: Angle, { width = 1200, height = 900, rotation = 0, fov = DEG2RAD, projection = 'TAN', coordSystem = 'icrs', format = 'fits', baseUrl = '' }: Hips2FitsOptions = {}) {
+	return `${baseUrl || HIPS2FITS_BASE_URL}hips-image-services/hips2fits?hips=${encodeURIComponent(id)}&ra=${toDeg(ra)}&dec=${toDeg(dec)}&width=${width}&height=${height}&projection=${projection}&fov=${toDeg(fov)}&coordsys=${coordSystem}&rotation_angle=${toDeg(rotation)}&format=${format}`
 }
 
 // Extracts a FITS image from a HiPS given the output image pixel size,
 // the center of projection, the type of projection and the field of view.
-export async function hips2Fits(id: string, ra: Angle, dec: Angle, { width = 1200, height = 900, rotation = 0, fov = DEG2RAD, projection = 'TAN', coordSystem = 'icrs', format = 'fits', baseUrl = '', timeout = 60000 }: Hips2FitsOptions = {}) {
-	const uri = `${baseUrl || HIPS2FITS_BASE_URL}hips-image-services/hips2fits?hips=${encodeURIComponent(id)}&ra=${toDeg(ra)}&dec=${toDeg(dec)}&width=${width}&height=${height}&projection=${projection}&fov=${toDeg(fov)}&coordsys=${coordSystem}&rotation_angle=${toDeg(rotation)}&format=${format}`
-	const signal = AbortSignal.timeout(timeout)
-	const response = await fetch(uri, { signal })
+export async function hips2Fits(id: string, ra: Angle, dec: Angle, options: Hips2FitsOptions = {}) {
+	const signal = AbortSignal.timeout(options.timeout ?? 60000)
+	const response = await fetch(hips2FitsUrl(id, ra, dec, options), { signal })
 	return response.ok ? await response.blob() : undefined
+}
+
+// URL of the MocServer query listing the CDS image surveys served by alasky that cover at least
+// minSkyFraction (0..1) of the sky, as JSON records.
+export function hipsSurveysUrl(minSkyFraction: number = 0.99, baseUrl?: string) {
+	const expr = encodeURIComponent(`ID=CDS* && hips_service_url*=*alasky* && dataproduct_type=image && moc_sky_fraction >= ${minSkyFraction} && obs_regime=Optical,Infrared,UV,Radio,X-ray,Gamma-ray && client_category=Image/*`)
+	return `${baseUrl || HIPS2FITS_BASE_URL}MocServer/query?get=record&fmt=json&expr=${expr}`
 }
 
 // Fetches HiPS surveys with a minimum sky fraction.
 export async function hipsSurveys(minSkyFraction: number = 0.99, baseUrl?: string) {
-	const expr = encodeURIComponent(`ID=CDS* && hips_service_url*=*alasky* && dataproduct_type=image && moc_sky_fraction >= ${minSkyFraction} && obs_regime=Optical,Infrared,UV,Radio,X-ray,Gamma-ray && client_category=Image/*`)
-	const uri = `${baseUrl || HIPS2FITS_BASE_URL}MocServer/query?get=record&fmt=json&expr=${expr}`
-	const response = await fetch(uri)
+	const response = await fetch(hipsSurveysUrl(minSkyFraction, baseUrl))
 	if (!response.ok) return []
-	return mapHipsSurveys(await response.json())
+	return parseHipsSurveys(await response.json())
 }
 
-// Maps raw MocServer survey records into typed HipsSurvey objects.
-function mapHipsSurveys(survey: Record<string, unknown>[]) {
-	return survey.map(
-		(survey) =>
-			<HipsSurvey>{
-				id: survey.ID as string,
-				category: survey.client_category as string,
-				frame: survey.hips_frame as string,
-				regime: (survey.obs_regime as string).toLowerCase() as never,
-				bitpix: +(survey.hips_pixel_bitpix as string) || 0,
-				pixelScale: +(survey.hips_pixel_scale as string),
-				skyFraction: +(survey.moc_sky_fraction as string),
-			},
-	)
+// Maps the raw MocServer records of hipsSurveysUrl into typed HipsSurvey objects; a title or
+// copyright the record does not give is left out.
+export function parseHipsSurveys(records: readonly Record<string, unknown>[]): HipsSurvey[] {
+	return records.map((record) => {
+		const survey: { -readonly [K in keyof HipsSurvey]: HipsSurvey[K] } = {
+			id: record.ID as string,
+			category: record.client_category as string,
+			frame: record.hips_frame as HipsSurveyFrame,
+			regime: (record.obs_regime as string).toLowerCase() as HipsSurveyRegime,
+			bitpix: +(record.hips_pixel_bitpix as string) || 0,
+			pixelScale: +(record.hips_pixel_scale as string),
+			skyFraction: +(record.moc_sky_fraction as string),
+		}
+
+		if (typeof record.obs_title === 'string' && record.obs_title) survey.title = record.obs_title
+		if (typeof record.obs_copyright === 'string' && record.obs_copyright) survey.copyright = record.obs_copyright
+		if (typeof record.obs_copyright_url === 'string' && record.obs_copyright_url) survey.copyrightUrl = record.obs_copyright_url
+		return survey
+	})
 }

@@ -13518,10 +13518,14 @@ HiPS (Hierarchical Progressive Surveys) is an IVOA standard that stores an all-s
 `hipsSurveys` lists the CDS image surveys that cover at least a fraction of the sky (0 to 1, 0.99 by default, which keeps the all-sky surveys), with the identifier that [HiPS2FITS Cutouts](#hips2fits-cutouts) takes, the category, the native frame, the wavelength regime, and the native pixel scale in degrees per pixel. It is how a client offers a choice of background surveys or picks one whose resolution suits a field of view.
 
 ```ts
-import { hipsSurveys } from 'nebulosa/src/adapters/sky/hips2fits'
+import { hipsSurveys, hipsSurveysUrl, parseHipsSurveys } from 'nebulosa/src/adapters/sky/hips2fits'
 
-// The surveys that cover at least 99% of the sky.
+// The surveys that cover at least 99% of the sky, with the title and the credit their publisher asks for when given.
 const surveys = await hipsSurveys()
+
+// The same query as a URL, for a client with its own fetch, and its records parsed into surveys.
+const url = hipsSurveysUrl(0.99)
+const parsed = parseHipsSurveys(await (await fetch(url)).json())
 
 // Pick the optical ones and their native pixel scale, converted to arcseconds per pixel.
 for (const survey of surveys.filter((survey) => survey.regime === 'optical')) console.log(survey.id, survey.frame, survey.pixelScale * 3600)
@@ -13534,7 +13538,7 @@ The hips2fits service of the CDS resamples a HiPS survey onto a new image with a
 `hips2Fits` asks for a cutout of a survey (see [HiPS Survey Discovery](#hips-survey-discovery)) centered on an ICRS position in radians, with the field of view and rotation in radians, and returns the image as a `Blob`. The FITS cutout carries the WCS of the projection, so it can be read with [FITS Containers and HDUs](#fits-containers-and-hdus) and used as an image with astrometry. The service, not the client, decides whether a combination of options is acceptable.
 
 ```ts
-import { hips2Fits } from 'nebulosa/src/adapters/sky/hips2fits'
+import { hips2Fits, hips2FitsUrl } from 'nebulosa/src/adapters/sky/hips2fits'
 import { deg, hour } from 'nebulosa/src/math/units/angle'
 
 // The Orion Nebula from DSS2 with the defaults: 1200 x 900 pixels, 1° field, TAN projection, FITS.
@@ -13543,6 +13547,9 @@ if (blob) await Bun.write('orion.fits', blob)
 
 // A 5° JPEG, rotated by 30°, in the stereographic projection.
 const wide = await hips2Fits('CDS/P/2MASS/color', deg(83.8), deg(-5.4), { width: 1000, height: 600, fov: deg(5), rotation: deg(30), projection: 'STG', format: 'jpg' })
+
+// The URL of a cutout, with the same options, for a client with its own fetch, cache, or timeout.
+const cutout = hips2FitsUrl('CDS/P/DSS2/color', hour(5.588), deg(-5.39), { width: 800, height: 600, fov: deg(2), format: 'jpg' })
 ```
 
 ### IAU Meteor Data Center catalog
