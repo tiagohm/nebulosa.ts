@@ -1,4 +1,5 @@
 import { PI } from '../../../core/constants'
+import { medianBySelectionOf as median } from '../../../math/numerical/statistics'
 import type { Image } from '../../model/types'
 import { canonicalizeStreakEndpoints, normalizeStreakAngle } from './geometry'
 import { DEFAULT_STREAK_DETECTION_OPTIONS, type Streak, type StreakDetectionOptions } from './types'
@@ -283,45 +284,6 @@ export function detectStreaks(image: Image, options: Readonly<StreakDetectionOpt
 	}
 
 	return streaks.sort((a, b) => (b.snr ?? 0) - (a.snr ?? 0))
-}
-
-// Median of the prefix [0, count) of finite values, rearranging it in place; NaN when empty. The same value, bit for
-// bit, as medianBySelectionOf of the toolkit, whose generic selection also handles NaN and every array type: Wirth's
-// selection of the middle rank, and for an even count the largest value below it, averaged without overflow.
-function median(values: Float64Array, count: number) {
-	if (count === 0) return Number.NaN
-	if (count === 1) return values[0]
-	const k = count >>> 1
-	let left = 0
-	let right = count - 1
-
-	while (left < right) {
-		const pivot = values[k]
-		let i = left
-		let j = right
-
-		do {
-			while (values[i] < pivot) i++
-			while (pivot < values[j]) j--
-
-			if (i <= j) {
-				const swap = values[i]
-				values[i] = values[j]
-				values[j] = swap
-				i++
-				j--
-			}
-		} while (i <= j)
-
-		if (j < k) left = i
-		if (k < i) right = j
-	}
-
-	const upper = values[k]
-	if ((count & 1) === 1) return upper
-	let lower = values[0]
-	for (let i = 1; i < k; i++) if (values[i] > lower) lower = values[i]
-	return Math.sign(lower) === Math.sign(upper) ? lower + (upper - lower) * 0.5 : lower * 0.5 + upper * 0.5
 }
 
 // Reduces the image to the luminance plane, binning very large frames and every CFA mosaic by an integer factor (even

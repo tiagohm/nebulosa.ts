@@ -44,10 +44,6 @@ const GEOMETRIC_MEDIAN_GRADIENT_TOLERANCE = 1e-9
 // Bounded backtracking for smooth Newton acceleration; rejected steps fall back to Weiszfeld.
 const GEOMETRIC_MEDIAN_LINE_SEARCH_STEPS = 24
 
-// Largest sample count in the common 3x3 local-median window; insertion sort avoids a TypedArray
-// subarray/sort call for the per-pixel.
-const SMALL_MEDIAN_SORT_LIMIT = 9
-
 // Computes log Gamma(x) for a finite positive, dimensionless x with a Lanczos approximation.
 // Non-positive or non-finite inputs return NaN instead of a complex-valued continuation.
 export function logGamma(value: number): number {
@@ -254,15 +250,12 @@ function betaContinuedFraction(x: number, a: number, b: number): number {
 }
 
 // Computes the median with an overflow-safe midpoint of the mutable prefix [0, count) by selection instead of a full sort.
-// The prefix is rearranged in place, the suffix is preserved, and an empty prefix returns NaN.
+// The prefix is rearranged in place, the suffix is preserved, and an empty prefix returns NaN. The prefix must hold no
+// NaN, as for quickSelect: with NaN the result is unspecified.
 export function medianBySelectionOf(values: NumberArray, count = values.length): number {
 	if (!Number.isInteger(count) || !(count >= 0) || count > values.length) throw new RangeError('count must identify a valid prefix')
 	if (count === 0) return Number.NaN
 	if (count === 1) return values[0]
-
-	if (count <= SMALL_MEDIAN_SORT_LIMIT) {
-		return medianOf(sortSmallPrefix(values, count), count)
-	}
 
 	const middle = count >>> 1
 	const upper = quickSelect(values, count, middle)
@@ -276,27 +269,6 @@ export function medianBySelectionOf(values: NumberArray, count = values.length):
 	}
 
 	return Math.sign(lower) === Math.sign(upper) ? lower + (upper - lower) * 0.5 : lower * 0.5 + upper * 0.5
-}
-
-// Sorts a tiny prefix of `values` in ascending numeric order, matching TypedArray sort's practical NaN
-// placement by pushing NaNs to the high end. Used for 3x3 neighborhoods and very small robust samples.
-function sortSmallPrefix(values: NumberArray, count: number) {
-	for (let i = 1; i < count; i++) {
-		const value = values[i]
-		const valueIsNaN = Number.isNaN(value)
-		let j = i - 1
-
-		while (j >= 0) {
-			const previous = values[j]
-			if (!Number.isNaN(previous) ? valueIsNaN || previous <= value : valueIsNaN) break
-			values[j + 1] = previous
-			j--
-		}
-
-		values[j + 1] = value
-	}
-
-	return values
 }
 
 // Approximates the unweighted 2D geometric median minimizing the sum of Euclidean distances to
@@ -616,6 +588,7 @@ export function medianOf(a: Readonly<NumberArray>, count: number = a.length) {
 // `count` restricts the computation to the first `count` elements; a is preserved. The first count
 // entries of scratch are overwritten and rearranged, or a temporary Float64Array is allocated.
 // Supplied scratch must have at least count entries and must not alias a. Empty input returns NaN.
+// The deviations are selected by medianBySelectionOf, so the values must hold no NaN.
 export function medianAbsoluteDeviationOf(a: Readonly<NumberArray>, median: number, normalized: boolean, count: number = a.length, scratch?: Float64Array) {
 	const abs = scratch ?? new Float64Array(count)
 	for (let i = 0; i < count; i++) abs[i] = Math.abs(a[i] - median)
@@ -659,7 +632,7 @@ export function percentileOf(values: Readonly<NumberArray>, percentile: number, 
 // Computes an interpolated percentile of the mutable prefix [0, count) by selection, without a full
 // sort. Rearranges that prefix in place and leaves the suffix untouched. `percentile` is a fraction
 // in [0, 1], clamped to the endpoint ranks outside that range; count must select a valid prefix.
-// Returns NaN when count is zero.
+// Returns NaN when count is zero. The prefix must hold no NaN, as for quickSelect.
 export function percentileBySelectionOf(values: Float64Array, percentile: number, count: number = values.length): number {
 	const n = count
 	if (n === 0) return Number.NaN

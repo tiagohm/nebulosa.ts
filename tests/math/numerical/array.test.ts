@@ -28,42 +28,37 @@ test('is number array', () => {
 })
 
 test('quick select', () => {
-	const values = new Float64Array([7, 2, 5, 2, 9, 1, Number.NaN, 100])
+	const values = new Float64Array([7, 2, 5, 2, 9, 1, Number.POSITIVE_INFINITY, 100])
 	expect(quickSelect(values, 7, 3)).toBe(5)
 	expect(values[7]).toBe(100)
 	for (let index = 0; index < 3; index++) expect(values[index]).toBeLessThanOrEqual(5)
-	for (let index = 4; index < 7; index++) expect(Number.isNaN(values[index]) || values[index] >= 5).toBeTrue()
-	expect(quickSelect(values, 7, 6)).toBeNaN()
+	for (let index = 4; index < 7; index++) expect(values[index]).toBeGreaterThanOrEqual(5)
+	expect(quickSelect(values, 7, 6)).toBe(Number.POSITIVE_INFINITY)
 	expect(() => quickSelect(values, 0, 0)).toThrow(RangeError)
 	expect(() => quickSelect(values, 7, 7)).toThrow(RangeError)
 })
 
-test('quick select midpoint does not wrap past 2^32', async () => {
-	const source = await Bun.file(new URL('../../../src/math/numerical/array.ts', import.meta.url)).text()
-	expect(source).toContain('values[left + ((right - left) >>> 1)]')
+test('quick select partitions every rank of random, tied, and constant prefixes', () => {
+	let seed = 12345
+	const random = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648
 
-	// Same overflow-safe index as quickSelect. (left + right) >>> 1 wraps through uint32.
-	const midpoint = (left: number, right: number) => left + ((right - left) >>> 1)
-	const windows = [
-		[2 ** 31, 2 ** 31],
-		[2 ** 31, 2 ** 31 + 10],
-		[2 ** 32 - 3, 2 ** 32 - 2],
-	] as const
+	for (const count of [1, 2, 3, 8, 9, 10, 31, 1000, 1001]) {
+		for (const kind of ['random', 'tied', 'constant'] as const) {
+			const source = Float64Array.from({ length: count }, () => (kind === 'random' ? random() - 0.5 : kind === 'tied' ? Math.round(random() * 4) : 0.25))
+			const sorted = source.toSorted()
 
-	for (const [left, right] of windows) {
-		const mid = midpoint(left, right)
-		expect(mid).toBeGreaterThanOrEqual(left)
-		expect(mid).toBeLessThanOrEqual(right)
-		expect((left + right) >>> 1).not.toBe(mid)
+			for (const k of [0, count >>> 1, count - 1]) {
+				const values = source.slice()
+				expect(quickSelect(values, count, k)).toBe(sorted[k])
+				for (let index = 0; index < k; index++) expect(values[index]).toBeLessThanOrEqual(values[k])
+				for (let index = k + 1; index < count; index++) expect(values[index]).toBeGreaterThanOrEqual(values[k])
+			}
+		}
 	}
+})
 
-	expect(midpoint(2 ** 31, 2 ** 31)).toBe(2 ** 31)
-	expect(midpoint(2 ** 31, 2 ** 31 + 10)).toBe(2 ** 31 + 5)
-	expect(midpoint(2 ** 32 - 3, 2 ** 32 - 2)).toBe(2 ** 32 - 3)
-
-	// The overflowing window [2^31, 2^31+10] is all 5s; a wrapped pivot at index 5
-	// (value 0) would make every element greater and hang. The safe midpoint stays
-	// inside the window, so an 11-element copy of that window selects in one pass.
-	const window = new Float64Array(11).fill(5)
-	expect(quickSelect(window, 11, 2)).toBe(5)
+test('quick select terminates on a prefix with NaN', () => {
+	const values = new Float64Array([3, Number.NaN, 1, Number.NaN, 2, 7])
+	for (let k = 0; k < 5; k++) quickSelect(values, 5, k)
+	expect(values[5]).toBe(7)
 })

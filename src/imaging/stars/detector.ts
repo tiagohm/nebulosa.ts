@@ -704,12 +704,12 @@ function maskStar(mask: Uint8Array, width: number, height: number, x: number, y:
 }
 
 // Measures the star around the pixel (x1, y1) of the packed ADU samples as ASTAP's HFD routine does, in the
-// search box of the workspace. The local sky is the median of the one-pixel annulus beyond the box and its
-// deviation the scaled MAD, at least 1 ADU. The center of gravity of the samples 3 deviations above the sky in the
-// box is found, shrinking the box while those cover less than 2/9 of it, so a neighbor is left out; the star then
-// ends where its signal samples per integer distance drop to a tenth of their most. 'large' for a star as large as the
-// box, and undefined, both as ASTAP's HFD of 999, near the border, without enough signal, for a hot pixel, or a group
-// of stars.
+// search box of the workspace. The local sky is the median of the defined (non-NaN) samples of the one-pixel annulus
+// beyond the box and its deviation the scaled MAD, at least 1 ADU; undefined when none is defined. The center of
+// gravity of the samples 3 deviations above the sky in the box is found, shrinking the box while those cover less
+// than 2/9 of it, so a neighbor is left out; the star then ends where its signal samples per integer distance drop to
+// a tenth of their most. 'large' for a star as large as the box, and undefined, both as ASTAP's HFD of 999, near the
+// border, without enough signal, for a hot pixel, or a group of stars.
 // The box is summed once, per square ring, so a smaller box is a prefix of the rings; that adds the samples in
 // another order than ASTAP, which changes the center of gravity only by rounding. The samples around the center
 // of gravity are interpolated as value_subpixel does (0 near the border), with the column and row weights of the
@@ -721,9 +721,15 @@ function astapHfd(adu: Float32Array, width: number, height: number, x1: number, 
 
 	const center = y1 * width + x1
 	const { annulusOffsets, annulus } = workspace
-	const count = annulusOffsets.length
-	for (let k = 0; k < count; k++) annulus[k] = adu[center + annulusOffsets[k]]
+	// Undefined (NaN) samples, which a floating-point image may hold, are left out of the sky.
+	let count = 0
 
+	for (let k = 0; k < annulusOffsets.length; k++) {
+		const value = adu[center + annulusOffsets[k]]
+		if (!Number.isNaN(value)) annulus[count++] = value
+	}
+
+	if (count === 0) return undefined
 	const sky = astapMedian(annulus, count)
 	for (let k = 0; k < count; k++) annulus[k] = Math.abs(annulus[k] - sky)
 	const noise = Math.max(astapMedian(annulus, count) * ASTAP_MAD_SCALE, ASTAP_MIN_NOISE)
@@ -973,7 +979,7 @@ function ensureCapacity(buffer: Float64Array, capacity: number) {
 // Computes the median and scaled-MAD deviation of the samples whose centers lie between `inner` and
 // `outer` pixels from (x, y), inside the [xMin, xMax] x [yMin, yMax] window. Only the row spans of the
 // annulus are visited, so a wide ring costs its area rather than its bounding box. Reorders the
-// workspace samples; undefined when the annulus has no sample.
+// workspace samples; undefined (NaN) samples are left out, and undefined is returned when none remains.
 function annulusStatistics(raw: Image['raw'], stride: number, x: number, y: number, inner: number, outer: number, xMin: number, yMin: number, xMax: number, yMax: number, workspace: PhotometryWorkspace): AnnulusStatistics | undefined {
 	const x0 = Math.max(xMin, Math.ceil(x - outer))
 	const y0 = Math.max(yMin, Math.ceil(y - outer))
@@ -1006,7 +1012,8 @@ function annulusStatistics(raw: Image['raw'], stride: number, x: number, y: numb
 			const dx = px - x
 			const d2 = dx * dx + dy2
 			if (d2 < innerSq || d2 > outerSq) continue
-			samples[count++] = raw[row + px]
+			const value = raw[row + px]
+			if (!Number.isNaN(value)) samples[count++] = value
 		}
 	}
 
@@ -1020,7 +1027,7 @@ function annulusStatistics(raw: Image['raw'], stride: number, x: number, y: numb
 // Computes the median and scaled-MAD deviation of STAR_DISTANT_SKY_SAMPLES samples evenly spaced on a
 // circle of `radius` pixels around (x, y), skipping those outside the image less the border margin. A sparse
 // ring keeps this reference cheap for the thousands of candidates of a frame. Reorders the workspace
-// samples; undefined when no sample falls inside.
+// samples; undefined (NaN) samples are left out, and undefined is returned when none remains.
 function distantSkyStatistics(raw: Image['raw'], stride: number, x: number, y: number, radius: number, width: number, height: number, workspace: PhotometryWorkspace): AnnulusStatistics | undefined {
 	const samples = (workspace.samples = ensureCapacity(workspace.samples, STAR_DISTANT_SKY_SAMPLES))
 	const xMax = width - STAR_BORDER_MARGIN - 1
@@ -1031,7 +1038,8 @@ function distantSkyStatistics(raw: Image['raw'], stride: number, x: number, y: n
 		const px = Math.round(x + radius * DISTANT_SKY_COS[i])
 		const py = Math.round(y + radius * DISTANT_SKY_SIN[i])
 		if (px < STAR_BORDER_MARGIN || py < STAR_BORDER_MARGIN || px > xMax || py > yMax) continue
-		samples[count++] = raw[py * stride + px]
+		const value = raw[py * stride + px]
+		if (!Number.isNaN(value)) samples[count++] = value
 	}
 
 	if (count <= 0) return undefined

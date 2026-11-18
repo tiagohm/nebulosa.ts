@@ -129,15 +129,35 @@ interface BuiltDefectMask {
 	readonly sparseSet?: ReadonlySet<number>
 }
 
+// Moves the defined (non-NaN) values of the prefix [0, count) to its start, keeping their order, and returns how
+// many there are. Image and residual planes may hold NaN samples, which the toolkit's selection does not order.
+function compactDefined(values: Float64Array, count: number) {
+	let defined = 0
+
+	for (let i = 0; i < count; i++) {
+		const value = values[i]
+		if (!Number.isNaN(value)) values[defined++] = value
+	}
+
+	return defined
+}
+
+// Median of the defined (non-NaN) values of the prefix [0, count), compacted in place; NaN when none is defined.
+function definedMedian(values: Float64Array, count: number) {
+	return medianBySelectionOf(values, compactDefined(values, count))
+}
+
 // Robust center and scale of a sample buffer's first `count` values. Returns the median and the normalized
 // MAD (comparable to a standard deviation); falls back to the population standard deviation when the MAD
 // collapses to 0 (a near-constant plane), and to 0 only when the plane is genuinely constant. `values` and
-// `scratch` are reusable buffers of at least `count` elements, partitioned in place.
+// `scratch` are reusable buffers of at least `count` elements, partitioned in place. Undefined (NaN) samples are
+// moved out first; `count` is how many defined ones lead `values` afterwards (none gives a NaN median, scale 0).
 function robustPlaneScale(values: Float64Array, count: number, scratch: Float64Array) {
+	count = compactDefined(values, count)
 	const median = medianBySelectionOf(values, count)
 	const mad = medianAbsoluteDeviationOf(values, median, true, count, scratch)
 	const scale = mad > 0 ? mad : standardDeviationOf(values, count)
-	return { median, scale: Number.isFinite(scale) ? scale : 0 } as const
+	return { median, scale: Number.isFinite(scale) ? scale : 0, count } as const
 }
 
 // Robust scale from the lower side of a sample distribution, measured around `median`. Master-dark hot
@@ -291,8 +311,8 @@ function computeInterleavedDarkThresholds(dark: Readonly<NumberArray>, channel: 
 		const stats = robustPlaneScale(gather, count, scratch)
 		let scale = stats.scale
 
-		if (count > 1) {
-			const tailScale = lowerTailScale(gather, count, stats.median, scratch)
+		if (stats.count > 1) {
+			const tailScale = lowerTailScale(gather, stats.count, stats.median, scratch)
 
 			if (tailScale !== undefined) {
 				if (tailScale > 0 && tailScale < scale) {
@@ -346,8 +366,8 @@ function buildProtectInfluenceMask(protectIndices: readonly number[], width: num
 	return influence
 }
 
-// Median of eight non-NaN values using a fixed sorting network. The caller falls back to the small-sort
-// path when NaNs are present so the existing NaN-high ordering remains unchanged.
+// Median of eight non-NaN values using a fixed sorting network. The caller falls back to the median of the
+// defined values when NaNs are present.
 function median8NoNaN(v0: number, v1: number, v2: number, v3: number, v4: number, v5: number, v6: number, v7: number) {
 	let t = 0
 
@@ -497,7 +517,7 @@ function neighborhoodMedianRadius1(plane: Float64Array, x: number, y: number, wi
 	}
 
 	if (count === 0) return emptyValue ?? plane[center]
-	return medianBySelectionOf(values, count)
+	return definedMedian(values, count)
 }
 
 // Fast radius-1 median for the common residual-field path where the center is always excluded and no mask
@@ -530,7 +550,7 @@ function neighborhoodMedianRadius1SkipCenter(plane: Float64Array, x: number, y: 
 		values[5] = v5
 		values[6] = v6
 		values[7] = v7
-		return medianBySelectionOf(values, 8)
+		return definedMedian(values, 8)
 	}
 
 	const values = scratch.values
@@ -552,7 +572,7 @@ function neighborhoodMedianRadius1SkipCenter(plane: Float64Array, x: number, y: 
 		}
 	}
 
-	return count === 0 ? plane[center] : medianBySelectionOf(values, count)
+	return count === 0 ? plane[center] : definedMedian(values, count)
 }
 
 // Fast masked radius-1 median. Returns undefined when every 3x3 sample is masked, letting the generic
@@ -600,7 +620,7 @@ function neighborhoodMedianRadius1Masked(plane: Float64Array, x: number, y: numb
 		}
 	}
 
-	return count === 0 ? undefined : medianBySelectionOf(values, count)
+	return count === 0 ? undefined : definedMedian(values, count)
 }
 
 // Median of the neighborhood of (x, y), read from the deinterleaved `plane`. Samples the (2r+1)^2 lattice
@@ -688,7 +708,7 @@ function neighborhoodMedian(plane: Float64Array, x: number, y: number, width: nu
 		}
 	}
 
-	return medianBySelectionOf(values, count)
+	return definedMedian(values, count)
 }
 
 // Fast masked radius-1 median for direct interleaved repairs. Returns undefined when every 3x3 sample is
@@ -738,7 +758,7 @@ function interleavedNeighborhoodMedianRadius1(raw: Readonly<NumberArray>, channe
 		}
 	}
 
-	return count === 0 ? undefined : medianBySelectionOf(values, count)
+	return count === 0 ? undefined : definedMedian(values, count)
 }
 
 // Median of the neighborhood of (x, y), read directly from an interleaved raw buffer for sparse
@@ -833,7 +853,7 @@ function interleavedNeighborhoodMedian(
 		}
 	}
 
-	return medianBySelectionOf(values, count)
+	return definedMedian(values, count)
 }
 
 // Repairs one interleaved sample from the current raw buffer using precomputed pixel coordinates and raw

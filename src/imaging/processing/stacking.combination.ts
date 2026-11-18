@@ -173,7 +173,8 @@ export function finalizeOnlineSamples(sum: Readonly<Float64Array>, weightSum: Re
 
 // Combines the samples of `pixels` consecutive pixels from views of the contributing frames into
 // `out` (pixels × channels), with the coverage counts of the same pixels. Frames are visited in the
-// given order, which fixes the reduction order and therefore the floating-point result. Pixels below
+// given order, which fixes the reduction order and therefore the floating-point result. An undefined
+// (NaN) sample counts as invalid, so the selections of the combination never see one. Pixels below
 // the threshold, and channels with no valid sample, keep their current `out` value. `scratch` must
 // hold at least `frames.length` samples.
 export function combineStrip(frames: readonly CombinationStripFrame[], pixels: number, channels: number, coverage: Readonly<ArrayLike<number>>, threshold: number, method: StackingCombinationMethod, parameters: CombinationParameters, out: ImageRawType, scratch: CombinationScratch) {
@@ -186,7 +187,9 @@ export function combineStrip(frames: readonly CombinationStripFrame[], pixels: n
 			let used = 0
 			for (let i = 0; i < frames.length; i++) {
 				if (frames[i].valid[pixel] === 0) continue
-				values[used] = frames[i].raw[base + channel]
+				const value = frames[i].raw[base + channel]
+				if (Number.isNaN(value)) continue
+				values[used] = value
 				weights[used] = frames[i].weight
 				used++
 			}
