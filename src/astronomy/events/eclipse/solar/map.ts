@@ -462,6 +462,17 @@ function angularDistance(a: EclipseGeoPoint, b: EclipseGeoPoint) {
 	return sphericalSeparation(a.x, a.y, b.x, b.y)
 }
 
+// Relative margin of the latitude prefilter of the proximity tests: far above the rounding of
+// sphericalSeparation (about 1e-16), so a pair it rules out could never have tested near.
+const LATITUDE_PREFILTER_MARGIN = 1 + 1e-9
+
+// Whether two geo points are separated by at most tolerance (radians). A great-circle separation is never
+// below the latitude difference, so a pair whose latitudes differ by more is rejected without trigonometry,
+// which keeps the quadratic proximity scans over branches cheap; the result equals angularDistance <= tolerance.
+function isWithinAngularDistance(a: EclipseGeoPoint, b: EclipseGeoPoint, tolerance: Angle) {
+	return Math.abs(a.y - b.y) <= tolerance * LATITUDE_PREFILTER_MARGIN && angularDistance(a, b) <= tolerance
+}
+
 // Shortest longitude difference (radians, 0..PI) between two geo points, across the antimeridian.
 function longitudeGap(a: EclipseGeoPoint, b: EclipseGeoPoint) {
 	const gap = Math.abs(a.x - b.x)
@@ -1263,8 +1274,45 @@ function evaluateCurveIterationState(state: CurveIterationState, be: BesselianEl
 // match the refracted EclipseWise/Espenak references. Pass refractionMode 'none' for a pure geometric
 // solve. A negative solar altitude is rejected only after convergence, so intermediate night-side iterates
 // can still converge to a day-side solution. On convergence the final (t, phi) is re-evaluated so the
-// altitude and residual gate the actual returned point, not the previous iterate.
+// altitude and residual gate the actual returned point, not the previous iterate. While
+// computeSolarEclipseMapGeometry runs, the solutions for its elements are memoized (curveSolveCache).
 export function findEclipseCurvePoint(pbe: PolynomialBesselianElements, longitude: Angle, initialLatitude: Angle, i: -1 | 0 | 1, G: number, refractionMode: RefractionMode = DEFAULT_REFRACTION_MODE) {
+	const cache = curveSolveCache
+	if (cache?.pbe !== pbe) return solveEclipseCurvePoint(pbe, longitude, initialLatitude, i, G, refractionMode)
+
+	const byG = cache.families[(i + 1) * 2 + (refractionMode === 'empirical' ? 1 : 0)]
+	let byLongitude = byG.get(G)
+	if (byLongitude === undefined) byG.set(G, (byLongitude = new Map()))
+	let byLatitude = byLongitude.get(longitude)
+	if (byLatitude === undefined) byLongitude.set(longitude, (byLatitude = new Map()))
+	const cached = byLatitude.get(initialLatitude)
+	if (cached !== undefined) return cached === false ? undefined : cached
+
+	const point = solveEclipseCurvePoint(pbe, longitude, initialLatitude, i, G, refractionMode)
+	byLatitude.set(initialLatitude, point ?? false)
+	return point
+}
+
+// Solutions of findEclipseCurvePoint while one map is computed, for its elements only: the scans, the fixed-seed
+// fallback, and the boundary bisections solve the same (family, longitude, seed) many times (about 40% of the
+// calls), and the solver is a pure function of them. Per (i + 1) * 2 + (1 when the refraction is empirical), then
+// G, longitude, and initial latitude in radians; false records a solve that did not converge. Shared points are
+// never mutated.
+interface CurveSolveCache {
+	// Elements the cached solutions belong to.
+	readonly pbe: PolynomialBesselianElements
+	// Converged point, or false, by limit and refraction (six entries), G, longitude, and initial latitude.
+	readonly families: readonly Map<number, Map<number, Map<number, SolvedCurvePoint | false>>>[]
+}
+
+// A converged curve point: longitude and latitude in radians and the Julian Day (TT) of the closest approach.
+type SolvedCurvePoint = NonNullable<ReturnType<typeof solveEclipseCurvePoint>>
+
+// Cache of the map being computed by computeSolarEclipseMapGeometry; undefined outside it.
+let curveSolveCache: CurveSolveCache | undefined
+
+// The curve solver itself, uncached; see findEclipseCurvePoint.
+function solveEclipseCurvePoint(pbe: PolynomialBesselianElements, longitude: Angle, initialLatitude: Angle, i: -1 | 0 | 1, G: number, refractionMode: RefractionMode) {
 	let t = 0
 	let phi = initialLatitude
 	const julianDay0 = toJulianDay(pbe.time0)
@@ -1670,7 +1718,7 @@ function branchRetraces(branch: EclipseGeoBranch, tolerance: Angle, minArcSepara
 	for (let a = 0; a < branch.length; a++) {
 		for (let b = a + 1; b < branch.length; b++) {
 			if (arc[b] - arc[a] < minArcSeparation) continue
-			if (angularDistance(branch[a], branch[b]) < tolerance) return true
+			if (Math.abs(branch[a].y - branch[b].y) <= tolerance * LATITUDE_PREFILTER_MARGIN && angularDistance(branch[a], branch[b]) < tolerance) return true
 		}
 	}
 
@@ -1836,7 +1884,7 @@ const BRANCH_CONTAINMENT_STEPS = 1.5
 
 // Whether a point lies on a branch, i.e. within tolerance of any of its samples.
 function pointOnBranch(point: EclipseGeoPoint, branch: EclipseGeoBranch, tolerance: Angle) {
-	for (const sample of branch) if (angularDistance(point, sample) <= tolerance) return true
+	for (const sample of branch) if (isWithinAngularDistance(point, sample, tolerance)) return true
 	return false
 }
 
@@ -2887,8 +2935,21 @@ export function splitCentralLineByKind(centerLine: SolarEclipseGeoBranch, pbe?: 
 // findEclipseCurvePoint via findCurvePoints. The umbra/antumbra limits exist for every non-partial
 // eclipse (including non-central total/annular ones whose axis misses the Earth), while the central
 // line and its C1/C2 endpoints exist only when the shadow axis actually pierces the ellipsoid. The
-// penumbra limits exist for every eclipse.
+// penumbra limits exist for every eclipse. The curve solutions are shared within the call (see curveSolveCache)
+// and dropped when it returns.
 export function computeSolarEclipseMapGeometry(eclipse: SolarEclipse, pbe: PolynomialBesselianElements, options?: SolarEclipseMapGeometryOptions): SolarEclipseMapGeometry {
+	const previous = curveSolveCache
+	curveSolveCache = { pbe, families: Array.from({ length: 6 }, () => new Map()) }
+
+	try {
+		return traceSolarEclipseMapGeometry(eclipse, pbe, options)
+	} finally {
+		curveSolveCache = previous
+	}
+}
+
+// Traces the geometry of computeSolarEclipseMapGeometry.
+function traceSolarEclipseMapGeometry(eclipse: SolarEclipse, pbe: PolynomialBesselianElements, options?: SolarEclipseMapGeometryOptions): SolarEclipseMapGeometry {
 	const contacts = findPenumbraContactPoints(pbe)
 	const points: Writable<SolarEclipseContactPoints> = { ...contacts, MAX: findMaximumPoint(pbe) }
 	const longitudeStep = validStep(options?.longitudeStep, DEFAULT_LONGITUDE_STEP)
