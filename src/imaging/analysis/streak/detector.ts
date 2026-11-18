@@ -1,5 +1,4 @@
 import { PI } from '../../../core/constants'
-import { medianBySelectionOf } from '../../../math/numerical/statistics'
 import type { Image } from '../../model/types'
 import { canonicalizeStreakEndpoints, normalizeStreakAngle } from './geometry'
 import { DEFAULT_STREAK_DETECTION_OPTIONS, type Streak, type StreakDetectionOptions } from './types'
@@ -286,6 +285,45 @@ export function detectStreaks(image: Image, options: Readonly<StreakDetectionOpt
 	return streaks.sort((a, b) => (b.snr ?? 0) - (a.snr ?? 0))
 }
 
+// Median of the prefix [0, count) of finite values, rearranging it in place; NaN when empty. The same value, bit for
+// bit, as medianBySelectionOf of the toolkit, whose generic selection also handles NaN and every array type: Wirth's
+// selection of the middle rank, and for an even count the largest value below it, averaged without overflow.
+function median(values: Float64Array, count: number) {
+	if (count === 0) return Number.NaN
+	if (count === 1) return values[0]
+	const k = count >>> 1
+	let left = 0
+	let right = count - 1
+
+	while (left < right) {
+		const pivot = values[k]
+		let i = left
+		let j = right
+
+		do {
+			while (values[i] < pivot) i++
+			while (pivot < values[j]) j--
+
+			if (i <= j) {
+				const swap = values[i]
+				values[i] = values[j]
+				values[j] = swap
+				i++
+				j--
+			}
+		} while (i <= j)
+
+		if (j < k) left = i
+		if (k < i) right = j
+	}
+
+	const upper = values[k]
+	if ((count & 1) === 1) return upper
+	let lower = values[0]
+	for (let i = 1; i < k; i++) if (values[i] > lower) lower = values[i]
+	return Math.sign(lower) === Math.sign(upper) ? lower + (upper - lower) * 0.5 : lower * 0.5 + upper * 0.5
+}
+
 // Reduces the image to the luminance plane, binning very large frames and every CFA mosaic by an integer factor (even
 // for a mosaic, so each bin holds whole 2x2 superpixels).
 function analysisPlane(image: Image): AnalysisPlane {
@@ -328,7 +366,13 @@ function prepareField(plane: AnalysisPlane, minLength: number) {
 	subtractGrid(data, background.level, width, height, residual)
 	let significance = smooth(residual, width, height)
 	let smoothedNoise = cellStatistics(significance, width, height).noise
-	for (let i = 0; i < n; i++) if (significance[i] > SOURCE_SIGMA * sampleGrid(smoothedNoise, i % width, Math.floor(i / width))) mask[i] = 1
+	let noiseRows = new GridRows(smoothedNoise, width)
+
+	for (let y = 0, i = 0; y < height; y++) {
+		const noise = noiseRows.row(y)
+		for (let x = 0; x < width; x++, i++) if (significance[i] > SOURCE_SIGMA * noise[x]) mask[i] = 1
+	}
+
 	dilate(mask, width, height, SOURCE_DILATION)
 
 	// Second pass without the sources, so large bright objects stand above the background instead of shaping it.
@@ -338,8 +382,11 @@ function prepareField(plane: AnalysisPlane, minLength: number) {
 	significance = smooth(residual, width, height)
 	smoothedNoise = cellStatistics(significance, width, height, mask).noise
 
+	noiseRows = new GridRows(smoothedNoise, width)
+
 	for (let y = 0, i = 0; y < height; y++) {
-		for (let x = 0; x < width; x++, i++) significance[i] /= sampleGrid(smoothedNoise, x, y)
+		const noise = noiseRows.row(y)
+		for (let x = 0; x < width; x++, i++) significance[i] /= noise[x]
 	}
 
 	mask.fill(0)
@@ -375,10 +422,10 @@ function cellStatistics(data: Float32Array, width: number, height: number, mask?
 			}
 
 			if (count < MIN_CELL_SAMPLES) continue
-			const median = medianBySelectionOf(samples, count)
-			for (let i = 0; i < count; i++) samples[i] = Math.abs(samples[i] - median)
-			level[row * columns + column] = median
-			noise[row * columns + column] = Math.max(MIN_NOISE, medianBySelectionOf(samples, count) * MAD_SCALE)
+			const center = median(samples, count)
+			for (let i = 0; i < count; i++) samples[i] = Math.abs(samples[i] - center)
+			level[row * columns + column] = center
+			noise[row * columns + column] = Math.max(MIN_NOISE, median(samples, count) * MAD_SCALE)
 		}
 	}
 
@@ -390,7 +437,7 @@ function smoothGrid(values: Float32Array, columns: number, rows: number, fallbac
 	const valid = new Float64Array(values.length)
 	let count = 0
 	for (let i = 0; i < values.length; i++) if (!Number.isNaN(values[i])) valid[count++] = values[i]
-	const global = count > 0 ? medianBySelectionOf(valid, count) : fallback
+	const global = count > 0 ? median(valid, count) : fallback
 	const out = new Float32Array(values.length)
 	const neighbours = new Float64Array(9)
 
@@ -405,7 +452,7 @@ function smoothGrid(values: Float32Array, columns: number, rows: number, fallbac
 				}
 			}
 
-			out[row * columns + column] = m > 0 ? medianBySelectionOf(neighbours, m) : global
+			out[row * columns + column] = m > 0 ? median(neighbours, m) : global
 		}
 	}
 
@@ -428,17 +475,73 @@ function sampleGrid(grid: CellGrid, x: number, y: number) {
 	return top * (1 - fy) + bottom * fy
 }
 
-// Writes `data` minus the interpolated grid into `out`.
-function subtractGrid(data: Float32Array, grid: CellGrid, width: number, height: number, out: Float32Array) {
-	for (let y = 0, i = 0; y < height; y++) {
-		for (let x = 0; x < width; x++, i++) out[i] = data[i] - sampleGrid(grid, x, y)
+// Row-by-row evaluator of a cell grid over the plane: the same values as sampleGrid at every integer sample, with the
+// horizontal interpolation coefficients computed once per column instead of once per sample.
+class GridRows {
+	// Left and right cell column and the weight of the right one, for every plane column.
+	readonly #x0: Int32Array
+	readonly #x1: Int32Array
+	readonly #fx: Float64Array
+	// Values of the current row, one per plane column.
+	readonly values: Float64Array
+
+	// Prepares the evaluation of grid over a plane of width analysis pixels.
+	constructor(
+		readonly grid: CellGrid,
+		width: number,
+	) {
+		this.#x0 = new Int32Array(width)
+		this.#x1 = new Int32Array(width)
+		this.#fx = new Float64Array(width)
+		this.values = new Float64Array(width)
+
+		for (let x = 0; x < width; x++) {
+			const gx = Math.min(Math.max((x + 0.5) / CELL_SIZE - 0.5, 0), grid.columns - 1)
+			const x0 = Math.floor(gx)
+			this.#x0[x] = x0
+			this.#x1[x] = Math.min(x0 + 1, grid.columns - 1)
+			this.#fx[x] = gx - x0
+		}
+	}
+
+	// Fills `values` with the grid along plane row y and returns it.
+	row(y: number) {
+		const { columns, rows, values: cells } = this.grid
+		const gy = Math.min(Math.max((y + 0.5) / CELL_SIZE - 0.5, 0), rows - 1)
+		const y0 = Math.floor(gy)
+		const top = y0 * columns
+		const bottom = Math.min(y0 + 1, rows - 1) * columns
+		const fy = gy - y0
+		const out = this.values
+
+		for (let x = 0; x < out.length; x++) {
+			const x0 = this.#x0[x]
+			const x1 = this.#x1[x]
+			const fx = this.#fx[x]
+			out[x] = (cells[top + x0] * (1 - fx) + cells[top + x1] * fx) * (1 - fy) + (cells[bottom + x0] * (1 - fx) + cells[bottom + x1] * fx) * fy
+		}
+
+		return out
 	}
 }
+
+// Writes `data` minus the interpolated grid into `out`.
+function subtractGrid(data: Float32Array, grid: CellGrid, width: number, height: number, out: Float32Array) {
+	const rows = new GridRows(grid, width)
+
+	for (let y = 0, i = 0; y < height; y++) {
+		const level = rows.row(y)
+		for (let x = 0; x < width; x++, i++) out[i] = data[i] - level[x]
+	}
+}
+
+// Columns gathered together by removeBanding.
+const BANDING_COLUMNS = 16
 
 // Subtracts from each row, then each column, the median of its samples outside `mask`, removing readout banding. A
 // line with too few such samples is left unchanged. A trail removed this way would have to fill half a row or column.
 function removeBanding(residual: Float32Array, mask: Uint8Array, width: number, height: number) {
-	const samples = new Float64Array(Math.max(width, height))
+	const samples = new Float64Array(width)
 
 	for (let y = 0; y < height; y++) {
 		let count = 0
@@ -448,20 +551,32 @@ function removeBanding(residual: Float32Array, mask: Uint8Array, width: number, 
 		}
 
 		if (count < width / 4) continue
-		const median = medianBySelectionOf(samples, count)
-		for (let x = 0, i = y * width; x < width; x++, i++) residual[i] -= median
+		const offset = median(samples, count)
+		for (let x = 0, i = y * width; x < width; x++, i++) residual[i] -= offset
 	}
 
-	for (let x = 0; x < width; x++) {
-		let count = 0
+	// Columns are gathered BANDING_COLUMNS at a time, reading the rows sequentially instead of one sample per row.
+	const columns = new Float64Array(BANDING_COLUMNS * height)
+	const counts = new Int32Array(BANDING_COLUMNS)
 
-		for (let y = 0, i = x; y < height; y++, i += width) {
-			if (mask[i] === 0 && !Number.isNaN(residual[i])) samples[count++] = residual[i]
+	for (let first = 0; first < width; first += BANDING_COLUMNS) {
+		const block = Math.min(BANDING_COLUMNS, width - first)
+		counts.fill(0)
+
+		for (let y = 0; y < height; y++) {
+			const row = y * width + first
+
+			for (let j = 0; j < block; j++) {
+				const i = row + j
+				if (mask[i] === 0 && !Number.isNaN(residual[i])) columns[j * height + counts[j]++] = residual[i]
+			}
 		}
 
-		if (count < height / 4) continue
-		const median = medianBySelectionOf(samples, count)
-		for (let y = 0, i = x; y < height; y++, i += width) residual[i] -= median
+		for (let j = 0; j < block; j++) {
+			if (counts[j] < height / 4) continue
+			const offset = median(columns.subarray(j * height, (j + 1) * height), counts[j])
+			for (let y = 0, i = first + j; y < height; y++, i += width) residual[i] -= offset
+		}
 	}
 }
 
@@ -472,10 +587,10 @@ function smooth(data: Float32Array, width: number, height: number) {
 
 	for (let y = 0; y < height; y++) {
 		const row = y * width
-
-		for (let x = 0; x < width; x++) {
-			horizontal[row + x] = (data[row + Math.max(0, x - 1)] + 2 * data[row + x] + data[row + Math.min(width - 1, x + 1)]) * 0.25
-		}
+		const last = row + width - 1
+		horizontal[row] = (data[row] + 2 * data[row] + data[Math.min(last, row + 1)]) * 0.25
+		for (let i = row + 1; i < last; i++) horizontal[i] = (data[i - 1] + 2 * data[i] + data[i + 1]) * 0.25
+		if (width > 1) horizontal[last] = (data[last - 1] + 2 * data[last] + data[last]) * 0.25
 	}
 
 	for (let y = 0; y < height; y++) {
@@ -586,11 +701,12 @@ function maskCompactSources(significance: Float32Array, width: number, height: n
 	for (let y = 0, i = 0; y < height; y++) {
 		for (let x = 0; x < width; x++, i++) {
 			let value = reach[i]
-			if (x > 0) value = Math.max(value, reach[i - 1] - 1)
+			let other = 0
+			if (x > 0 && (other = reach[i - 1] - 1) > value) value = other
 			if (y > 0) {
-				value = Math.max(value, reach[i - width] - 1)
-				if (x > 0) value = Math.max(value, reach[i - width - 1] - Math.SQRT2)
-				if (x < width - 1) value = Math.max(value, reach[i - width + 1] - Math.SQRT2)
+				if ((other = reach[i - width] - 1) > value) value = other
+				if (x > 0 && (other = reach[i - width - 1] - Math.SQRT2) > value) value = other
+				if (x < width - 1 && (other = reach[i - width + 1] - Math.SQRT2) > value) value = other
 			}
 			reach[i] = value
 		}
@@ -599,11 +715,12 @@ function maskCompactSources(significance: Float32Array, width: number, height: n
 	for (let y = height - 1, i = width * height - 1; y >= 0; y--) {
 		for (let x = width - 1; x >= 0; x--, i--) {
 			let value = reach[i]
-			if (x < width - 1) value = Math.max(value, reach[i + 1] - 1)
+			let other = 0
+			if (x < width - 1 && (other = reach[i + 1] - 1) > value) value = other
 			if (y < height - 1) {
-				value = Math.max(value, reach[i + width] - 1)
-				if (x < width - 1) value = Math.max(value, reach[i + width + 1] - Math.SQRT2)
-				if (x > 0) value = Math.max(value, reach[i + width - 1] - Math.SQRT2)
+				if ((other = reach[i + width] - 1) > value) value = other
+				if (x < width - 1 && (other = reach[i + width + 1] - Math.SQRT2) > value) value = other
+				if (x > 0 && (other = reach[i + width - 1] - Math.SQRT2) > value) value = other
 			}
 			reach[i] = value
 			if (value >= 0) mask[i] = 1
@@ -701,13 +818,15 @@ function houghCandidates(significance: Float32Array, mask: Uint8Array, width: nu
 	// the trigonometric factors moves a vote by far less than a bin over the largest plane.
 	const unit = 2 ** HOUGH_FRACTION_BITS
 	const fixedOffset = Math.round(offset * unit)
+	const cosines = new Int32Array(thetaBins)
+	const sines = new Int32Array(thetaBins)
 
 	for (let t = 0; t < thetaBins; t++) {
-		const c = Math.round((Math.cos(t * thetaStep) / (2 * RHO_BIN)) * unit)
-		const s = Math.round((Math.sin(t * thetaStep) / (2 * RHO_BIN)) * unit)
-		const row = t * rhoBins
-		for (let k = 0; k < voters; k++) accumulator[row + ((vx[k] * c + vy[k] * s + fixedOffset) >> HOUGH_FRACTION_BITS)]++
+		cosines[t] = Math.round((Math.cos(t * thetaStep) / (2 * RHO_BIN)) * unit)
+		sines[t] = Math.round((Math.sin(t * thetaStep) / (2 * RHO_BIN)) * unit)
 	}
+
+	voteHough(vx, vy, cosines, sines, fixedOffset, rhoBins, accumulator)
 
 	const density = voters / Math.max(1, usable)
 	const score = new Float32Array(thetaBins * rhoBins)
@@ -719,8 +838,7 @@ function houghCandidates(significance: Float32Array, mask: Uint8Array, width: nu
 		for (let r = 0; r < rhoBins; r++) {
 			const count = accumulator[t * rhoBins + r]
 			if (count === 0) continue
-			const chord = clipLine(c, s, (r + 0.5 - offset) * RHO_BIN, width, height, 0)
-			const expected = density * (chord === undefined ? 0 : chord[1] - chord[0]) * RHO_BIN
+			const expected = density * chordLength(c, s, (r + 0.5 - offset) * RHO_BIN, width, height) * RHO_BIN
 			score[t * rhoBins + r] = (count - expected) / Math.sqrt(expected + 1)
 		}
 	}
@@ -737,6 +855,66 @@ function houghCandidates(significance: Float32Array, mask: Uint8Array, width: nu
 	candidates.sort((a, b) => b.score - a.score)
 	if (candidates.length > MAX_CANDIDATES) candidates.length = MAX_CANDIDATES
 	return { candidates, thetaStep }
+}
+
+// Fills the accumulator (thetaBins rows of rhoBins counts) with the votes of the doubled voter coordinates: each voter
+// adds one to the bin (x c + y s + offset) >> HOUGH_FRACTION_BITS of every row, with the fixed-point cosine c and sine s
+// of its angle. Four rows are counted per pass over the voters in small buffers that stay in cache; every product and
+// sum fits in 32 bits for planes up to MAX_PLANE_PIXELS.
+function voteHough(vx: Int32Array, vy: Int32Array, cosines: Int32Array, sines: Int32Array, offset: number, rhoBins: number, accumulator: Int32Array) {
+	const voters = vx.length
+	const thetaBins = cosines.length
+	const row0 = new Int32Array(rhoBins)
+	const row1 = new Int32Array(rhoBins)
+	const row2 = new Int32Array(rhoBins)
+	const row3 = new Int32Array(rhoBins)
+	let t = 0
+
+	for (; t + 3 < thetaBins; t += 4) {
+		const c0 = cosines[t]
+		const s0 = sines[t]
+		const c1 = cosines[t + 1]
+		const s1 = sines[t + 1]
+		const c2 = cosines[t + 2]
+		const s2 = sines[t + 2]
+		const c3 = cosines[t + 3]
+		const s3 = sines[t + 3]
+		row0.fill(0)
+		row1.fill(0)
+		row2.fill(0)
+		row3.fill(0)
+
+		for (let k = 0; k < voters; k++) {
+			const x = vx[k]
+			const y = vy[k]
+			let i = (Math.imul(x, c0) + Math.imul(y, s0) + offset) >> HOUGH_FRACTION_BITS
+			row0[i] = (row0[i] + 1) | 0
+			i = (Math.imul(x, c1) + Math.imul(y, s1) + offset) >> HOUGH_FRACTION_BITS
+			row1[i] = (row1[i] + 1) | 0
+			i = (Math.imul(x, c2) + Math.imul(y, s2) + offset) >> HOUGH_FRACTION_BITS
+			row2[i] = (row2[i] + 1) | 0
+			i = (Math.imul(x, c3) + Math.imul(y, s3) + offset) >> HOUGH_FRACTION_BITS
+			row3[i] = (row3[i] + 1) | 0
+		}
+
+		accumulator.set(row0, t * rhoBins)
+		accumulator.set(row1, (t + 1) * rhoBins)
+		accumulator.set(row2, (t + 2) * rhoBins)
+		accumulator.set(row3, (t + 3) * rhoBins)
+	}
+
+	for (; t < thetaBins; t++) {
+		const c = cosines[t]
+		const s = sines[t]
+		row0.fill(0)
+
+		for (let k = 0; k < voters; k++) {
+			const i = (Math.imul(vx[k], c) + Math.imul(vy[k], s) + offset) >> HOUGH_FRACTION_BITS
+			row0[i] = (row0[i] + 1) | 0
+		}
+
+		accumulator.set(row0, t * rhoBins)
+	}
 }
 
 // Whether a cell dominates its neighbourhood; ties go to the lower index. Theta wraps with the sign of rho flipped.
@@ -775,6 +953,34 @@ function clipLine(c: number, s: number, rho: number, width: number, height: numb
 	const t0 = Math.max(xRange[0], yRange[0])
 	const t1 = Math.min(xRange[1], yRange[1])
 	return t1 > t0 ? [t0, t1] : undefined
+}
+
+// Length of the line (as clipLine, without margin) inside the plane, or 0 when it misses it; allocates nothing.
+function chordLength(c: number, s: number, rho: number, width: number, height: number) {
+	const px = (width - 1) / 2 + rho * c
+	const py = (height - 1) / 2 + rho * s
+	let t0 = -Infinity
+	let t1 = Infinity
+
+	if (Math.abs(s) < 1e-12) {
+		if (px < 0 || px > width - 1) return 0
+	} else {
+		const a = (0 - px) / -s
+		const b = (width - 1 - px) / -s
+		t0 = a < b ? a : b
+		t1 = a < b ? b : a
+	}
+
+	if (Math.abs(c) < 1e-12) {
+		if (py < 0 || py > height - 1) return 0
+	} else {
+		const a = (0 - py) / c
+		const b = (height - 1 - py) / c
+		t0 = Math.max(t0, a < b ? a : b)
+		t1 = Math.min(t1, a < b ? b : a)
+	}
+
+	return t1 > t0 ? t1 - t0 : 0
 }
 
 // Interval of t where p + u t lies in [low, high]; unbounded when u is zero and p is inside, undefined when outside.
@@ -838,7 +1044,16 @@ function lineSupport(significance: Float32Array, mask: Uint8Array, width: number
 // Hill-climbs a Hough peak over angle and distance, halving the steps, so its line runs within a pixel of the trail.
 function refineCandidate(significance: Float32Array, mask: Uint8Array, width: number, height: number, candidate: Candidate, thetaStep: number) {
 	let { theta, rho } = candidate
-	let best = lineSupport(significance, mask, width, height, theta, rho)
+	// The climb revisits lines it already measured; each exact (theta, rho) pair is measured once.
+	const measured = new Map<number, Map<number, number>>()
+	const support = (t: number, r: number) => {
+		let row = measured.get(t)
+		if (row === undefined) measured.set(t, (row = new Map()))
+		let value = row.get(r)
+		if (value === undefined) row.set(r, (value = lineSupport(significance, mask, width, height, t, r)))
+		return value
+	}
+	let best = support(theta, rho)
 	let dt = thetaStep
 	let dr = RHO_BIN / 2
 
@@ -849,7 +1064,7 @@ function refineCandidate(significance: Float32Array, mask: Uint8Array, width: nu
 			for (let a = -1; a <= 1; a++) {
 				for (let b = -1; b <= 1; b++) {
 					if (a === 0 && b === 0) continue
-					const value = lineSupport(significance, mask, width, height, theta + a * dt, rho + b * dr)
+					const value = support(theta + a * dt, rho + b * dr)
 
 					if (value > best) {
 						best = value
@@ -937,7 +1152,7 @@ function sampleLine(field: StreakField, line: Line, offset: number, from: number
 function medianOfRange(values: Float64Array, from: number, to: number, buffer: Float64Array) {
 	let count = 0
 	for (let k = from; k < to; k++) if (!Number.isNaN(values[k])) buffer[count++] = values[k]
-	return { median: count > 0 ? medianBySelectionOf(buffer, count) : Number.NaN, count }
+	return { median: count > 0 ? median(buffer, count) : Number.NaN, count }
 }
 
 // Ridge contrast of the samples [from, to): median core minus the brighter of the two side medians, and the count of
@@ -952,12 +1167,12 @@ function ridgeContrast(samples: LineSamples, from: number, to: number, buffer: F
 
 // Normalized MAD of the finite core samples: the noise of one core sample, in units of the local noise.
 function coreScale(samples: LineSamples, count: number, buffer: Float64Array) {
-	const { median, count: valid } = medianOfRange(samples.core, 0, count, buffer)
+	const { median: center, count: valid } = medianOfRange(samples.core, 0, count, buffer)
 	if (valid === 0) return { scale: Number.NaN, valid }
 	let m = 0
-	for (let k = 0; k < count; k++) if (!Number.isNaN(samples.core[k])) buffer[m++] = Math.abs(samples.core[k] - median)
+	for (let k = 0; k < count; k++) if (!Number.isNaN(samples.core[k])) buffer[m++] = Math.abs(samples.core[k] - center)
 	// A noiseless frame would give zero; a quarter of the ideal scale of a three-sample core keeps it finite.
-	return { scale: Math.max(0.15, medianBySelectionOf(buffer, m) * MAD_SCALE), valid }
+	return { scale: Math.max(0.15, median(buffer, m) * MAD_SCALE), valid }
 }
 
 // Significance of the ridge contrast of every block, or NaN for a block with less than half its samples valid.
@@ -991,7 +1206,7 @@ function blockCentroid(field: StreakField, line: Line, from: number, to: number,
 			if (!Number.isNaN(value)) buffer[count++] = value
 		}
 
-		profile[d + CENTROID_HALF_WIDTH] = count > 0 ? medianBySelectionOf(buffer, count) : Number.NaN
+		profile[d + CENTROID_HALF_WIDTH] = count > 0 ? median(buffer, count) : Number.NaN
 	}
 
 	const last = 2 * CENTROID_HALF_WIDTH
@@ -1139,7 +1354,7 @@ function transverseProfile(field: StreakField, line: Line, from: number, to: num
 			if (!Number.isNaN(value)) buffer[count++] = value
 		}
 
-		profile[d + half] = count > 0 ? medianBySelectionOf(buffer, count) : 0
+		profile[d + half] = count > 0 ? median(buffer, count) : 0
 	}
 
 	const outer = new Float64Array(12)
@@ -1147,7 +1362,7 @@ function transverseProfile(field: StreakField, line: Line, from: number, to: num
 		outer[2 * i] = profile[i]
 		outer[2 * i + 1] = profile[2 * half - i]
 	}
-	const base = medianBySelectionOf(outer, outer.length)
+	const base = median(outer, outer.length)
 	let center = half
 	for (let i = half - 3; i <= half + 3; i++) if (profile[i] > profile[center]) center = i
 	const peak = profile[center] - base
@@ -1215,10 +1430,10 @@ function textureSignificance(field: StreakField, line: Line, from: number, to: n
 	}
 
 	if (n < PARALLEL_LINES) return 0
-	const median = medianBySelectionOf(contrasts, n)
-	for (let i = 0; i < n; i++) contrasts[i] = Math.abs(contrasts[i] - median)
-	const spread = medianBySelectionOf(contrasts, n) * MAD_SCALE
-	return (contrast - median) / Math.max(spread, (MEDIAN_ERROR * scale) / Math.sqrt(count))
+	const center = median(contrasts, n)
+	for (let i = 0; i < n; i++) contrasts[i] = Math.abs(contrasts[i] - center)
+	const spread = median(contrasts, n) * MAD_SCALE
+	return (contrast - center) / Math.max(spread, (MEDIAN_ERROR * scale) / Math.sqrt(count))
 }
 
 // Whether a segment from (xa, ya) to (xb, yb), in analysis pixels, lies along a frame edge, within EDGE_BAND of it and
