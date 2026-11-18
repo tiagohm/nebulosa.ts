@@ -17,7 +17,6 @@ function streak(startX: number, startY: number, endX: number, endY: number, over
 		linearity: 0.99,
 		rmsResidual: 0.1,
 		coverage: 1,
-		supportPixels: Math.max(1, Math.round(length)),
 		clippedAtBorder: false,
 		flux: 1,
 		meanSignal: 0.2,

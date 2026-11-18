@@ -1,12 +1,11 @@
-import { PI } from '../../../core/constants'
-import type { Point, Rect } from '../../../math/numerical/geometry'
+import type { Point } from '../../../math/numerical/geometry'
 import type { Angle } from '../../../math/units/angle'
-import type { ImageAnalysisPlane } from '../plane'
 
 // Public contracts for deterministic straight-streak detection in received-image pixel coordinates.
+// Pixel coordinates have their origin at the center of the upper-left sample, +X right and +Y down.
 // Angles are axial radians in [0, PI); photometry remains in the input image's normalized units.
 
-// Geometry, photometry, and quality measured for one approximately straight luminous structure.
+// Geometry, photometry, and quality measured for one straight luminous trail.
 export interface Streak {
 	// Canonical first endpoint in received-image pixels; +X wins, with +Y breaking vertical ties.
 	readonly start: Readonly<Point>
@@ -16,102 +15,45 @@ export interface Streak {
 	readonly center: Readonly<Point>
 	// Euclidean endpoint separation, in received-image pixels.
 	readonly length: number
-	// Equivalent transverse FWHM derived from flux moments, in received-image pixels.
+	// Transverse FWHM of the median trail profile, in received-image pixels; at least one analysis pixel.
 	readonly width: number
 	// Axial orientation from +X toward +Y, in radians in [0, PI); image Y grows downward.
 	readonly angle: Angle
-	// Covariance anisotropy in [0, 1], where one is ideally linear.
+	// Anisotropy in [0, 1] of a uniform segment of this length and width, one minus the ratio of the transverse to the
+	// longitudinal variance; one is ideally linear.
 	readonly linearity: number
-	// Robust RMS distance from accepted centroids to the fitted axis, in received-image pixels.
+	// Weighted RMS distance of the trail centroids along its length from the fitted line, in received-image pixels.
 	readonly rmsResidual: number
-	// Fraction of the endpoint interval containing accepted longitudinal support, in [0, 1].
+	// Fraction, in [0, 1], of the measured blocks along the trail whose signal is significant; stars and other masked
+	// sources lying on the trail are not counted against it.
 	readonly coverage: number
-	// Number of unique positive-residual image-plane pixels in the final corridor.
-	readonly supportPixels: number
-	// Whether observed support reaches the analysis ROI boundary, so length may be truncated.
+	// Whether the trail reaches the image border, so its length may be truncated.
 	readonly clippedAtBorder: boolean
-	// Signed sum of unique background-subtracted pixels in the final corridor, in image units.
+	// Background-subtracted flux of the trail profile integrated over its length, in image units times pixels.
 	readonly flux: number
-	// Mean signed background-subtracted signal over valid corridor pixels, in image units.
+	// Peak of the median transverse profile above the local background, in image units.
 	readonly meanSignal: number
-	// Maximum valid background-subtracted sample in the final corridor, in image units.
+	// Largest background-subtracted centerline sample along the trail, in image units.
 	readonly peakSignal: number
-	// Background-noise detection SNR; absent when local noise is not measurable.
+	// Detection significance: the median ridge contrast in units of its noise over the whole trail. Always set by the
+	// detector; absent for a streak assembled by a caller without a noise measurement.
 	readonly snr?: number
-	// Fraction of evaluated valid corridor samples at or above the caller's saturation level.
+	// Fraction of centerline samples at or above the caller's saturation level; absent when no level was given.
 	readonly saturationFraction?: number
 	// Deterministic bounded quality score in [0, 1], not a physical-class probability.
 	readonly confidence: number
 }
 
-// Configuration for native-plane streak detection; pixel distances are in received-image pixels.
+// Configuration of the streak detector. The detection thresholds are fixed and self-calibrated on each image's noise
+// and texture; only the shortest reported trail is configurable.
 export interface StreakDetectionOptions {
-	// Native analysis plane; auto selects mono, RGB green, or CFA green1.
-	readonly plane?: 'auto' | ImageAnalysisPlane
-	// Half-open received-image ROI; the full frame is used when omitted.
-	readonly area?: Readonly<Rect>
-	// Minimum accepted observed segment length, in received-image pixels.
+	// Shortest reported streak, in received-image pixels; at least a few analysis pixels.
 	readonly minLength?: number
-	// Maximum accepted equivalent transverse FWHM, in received-image pixels; must span at least one native analysis-plane sample.
-	readonly maxWidth?: number
-	// Minimum detection SNR when background noise is measurable.
-	readonly minSNR?: number
-	// Minimum covariance anisotropy in [0, 1].
-	readonly minLinearity?: number
-	// Minimum fraction, in [0, 1], of the measured segment whose samples support the streak; a continuous trail covers
-	// almost all of it, a chain of aligned sources or a dotted trail much less. 0 accepts any coverage.
-	readonly minCoverage?: number
-	// Maximum returned detections after merging and duplicate suppression.
-	readonly maxStreaks?: number
-	// Background-grid cell size in native-plane pixels.
-	readonly backgroundCellSize?: number
-	// Positive-signal candidate threshold in local background sigmas.
-	readonly thresholdSigma?: number
-	// Sobel-magnitude candidate threshold in local background sigmas.
-	readonly gradientSigma?: number
-	// Coarse axial Hough step, in radians.
-	readonly angleStep?: Angle
-	// Maximum axial difference between a local tangent and a Hough hypothesis, in radians.
-	readonly orientationTolerance?: Angle
-	// Hough rho-bin spacing in native-plane pixels.
-	readonly distanceStep?: number
-	// Maximum Hough hypotheses retained for geometric refinement.
-	readonly maxCandidates?: number
-	// Maximum axial difference for merging collinear fragments, in radians.
-	readonly mergeAngleTolerance?: Angle
-	// Maximum longitudinal unsupported gap for fragment merging, in received-image pixels.
-	readonly mergeGap?: number
-	// Maximum perpendicular center-line separation for merging, in received-image pixels.
-	readonly mergeDistance?: number
-	// Smallest structure-tensor coherence, in [0, 1], of a significant sample that may belong to a streak; samples of compact
-	// sources such as stars, whose local gradients have no common orientation, fall below it and neither vote nor support
-	// a streak. 0 keeps every sample.
-	readonly minCoherence?: number
-	// Known saturation threshold in the normalized sample scale of the image, compared with its samples.
+	// Known saturation level in the normalized sample scale of the image; only fills `saturationFraction`.
 	readonly saturationLevel?: number
-	// Whether detections truncated by the ROI boundary may be returned.
-	readonly allowBorderClipping?: boolean
 }
 
-// Resolved operational defaults; values are algorithm settings rather than physical constants.
-export const DEFAULT_STREAK_DETECTION_OPTIONS: Required<Omit<StreakDetectionOptions, 'area' | 'saturationLevel'>> = {
-	plane: 'auto',
-	minLength: 12,
-	maxWidth: 16,
-	minSNR: 5,
-	minLinearity: 0.8,
-	minCoverage: 0.5,
-	maxStreaks: 32,
-	backgroundCellSize: 64,
-	thresholdSigma: 2.5,
-	gradientSigma: 1.5,
-	angleStep: PI / 90,
-	orientationTolerance: PI / 36,
-	distanceStep: 1,
-	maxCandidates: 128,
-	mergeAngleTolerance: PI / 90,
-	mergeGap: 12,
-	mergeDistance: 3,
-	minCoherence: 0.2,
-	allowBorderClipping: true,
+// Defaults of the configurable detector options.
+export const DEFAULT_STREAK_DETECTION_OPTIONS: Required<Omit<StreakDetectionOptions, 'saturationLevel'>> = {
+	minLength: 40,
 }

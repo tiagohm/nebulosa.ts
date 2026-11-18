@@ -128,7 +128,7 @@ export interface DarvAnalysisInput {
 	readonly transform?: DarvImageTransform
 	// Precomputed generic detections; skips detection and uses their existing robust fits unchanged.
 	readonly streaks?: readonly Streak[]
-	// Generic streak detector options, including saturation threshold and native image plane.
+	// Generic streak detector options: the minimum length and the saturation threshold.
 	readonly detection?: Readonly<StreakDetectionOptions>
 	// Optional single-component conversion; hour angle is west-positive at the exposure midpoint,
 	// latitude is geographic, both radians. The unselected polar error must be negligible.
@@ -198,7 +198,7 @@ export function analyzeDarvImage(input: Readonly<DarvAnalysisInput>): DarvImageA
 
 	if (!input.transform) diagnostics.add('missingAngularTransform')
 
-	const detected = input.streaks ?? detectStreaks(input.image, { minLength: MIN_LEG_LENGTH, maxStreaks: MAX_SEGMENTS, mergeAngleTolerance: 0.005, mergeDistance: 1, ...input.detection })
+	const detected = input.streaks ?? detectStreaks(input.image, { minLength: MIN_LEG_LENGTH, ...input.detection })
 	if (detected.length === 0) diagnostics.add('noStreaks')
 	if (detected.length > MAX_SEGMENTS) diagnostics.add('candidateLimit')
 
@@ -502,12 +502,11 @@ function sameDarvLeg(first: DarvTrailLeg, second: DarvTrailLeg): boolean {
 
 // Refines a detected leg on its outer 65%, where the two PSFs separate. At most 64 transverse
 // profiles of 129 samples are read per leg. Local peaks seed subpixel centroids; shared Huber QR
-// rejects crossings and hot pixels. Only the selected native mono/RGB/CFA plane is sampled, without
+// rejects crossings and hot pixels. Only the native plane (mono, RGB green, or CFA green1) is sampled, without
 // a full-image conversion. Endpoints retain the detector's longitudinal support convention.
 function refineDarvLeg(input: Readonly<DarvAnalysisInput>, far: Readonly<Point>, near: Readonly<Point>, streak: Streak): Streak | undefined {
 	const { width, height, channels, bayer } = input.image.metadata
-	const plane = input.detection?.plane
-	const grid = imagePlaneGeometry(input.image.metadata, { left: 0, top: 0, right: width, bottom: height }, !plane || plane === 'auto' ? (bayer ? 'green1' : channels === 3 ? 'green' : 'mono') : plane)
+	const grid = imagePlaneGeometry(input.image.metadata, { left: 0, top: 0, right: width, bottom: height }, bayer ? 'green1' : channels === 3 ? 'green' : 'mono')
 	if (grid === undefined) return undefined
 	const length = Math.hypot(near.x - far.x, near.y - far.y)
 	const ux = (near.x - far.x) / length

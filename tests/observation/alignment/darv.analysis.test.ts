@@ -42,7 +42,6 @@ function segment(start: Readonly<Point>, end: Readonly<Point>, overrides: Partia
 		rmsResidual: 0.05,
 		linearity: 1,
 		coverage: 1,
-		supportPixels: 400,
 		clippedAtBorder: false,
 		flux: 100,
 		meanSignal: 0.4,
@@ -479,7 +478,7 @@ describe('DARV image extraction', () => {
 		const turn = { x: 210, y: 71 }
 		renderSyntheticStreak(frame, { start, end: turn, width: 2, intensity: 0.4 })
 		renderSyntheticStreak(frame, { start: turn, end: { x: 40, y: 46 }, width: 2, intensity: 0.4 })
-		const result = analyzeDarvImage({ ...capture(), image: frame, starts: [start], streaks: undefined, detection: { maxWidth: 6 } })
+		const result = analyzeDarvImage({ ...capture(), image: frame, starts: [start], streaks: undefined })
 		expect(result.status).toBe('ok')
 		expect(result.inliers).toBe(1)
 		expect(result.diagnostics).not.toContain('ambiguousTrails')
@@ -490,7 +489,7 @@ describe('DARV image extraction', () => {
 		const frame = image()
 		for (let i = 0; i < frame.raw.length; i++) frame.raw[i] += 0.01 * Math.sin(i * 17.321)
 		renderSyntheticStreak(frame, { start: { x: 40, y: 70 }, end: { x: 210, y: 95 }, width: 2, intensity: 1e-5 })
-		const result = analyzeDarvImage({ ...capture(), image: frame, streaks: undefined, detection: { maxCandidates: 32 } })
+		const result = analyzeDarvImage({ ...capture(), image: frame, streaks: undefined })
 		expect(result.drift).toBeUndefined()
 		expect(result.trails).toHaveLength(0)
 		expect(result.confidence).toBe(0)
@@ -516,7 +515,7 @@ describe('DARV image extraction', () => {
 			renderSyntheticStreak(frame, { start: turn, end: { x: 40, y: y + 50 }, width: 2, intensity: 0.4 })
 		}
 		renderSyntheticStreak(frame, { start: { x: 175, y: 20 }, end: { x: 175, y: 350 }, width: 2, intensity: 0.3 })
-		const result = analyzeDarvImage({ ...capture(), image: frame, starts, streaks: undefined, detection: { minLength: 100, maxWidth: 6 } })
+		const result = analyzeDarvImage({ ...capture(), image: frame, starts, streaks: undefined, detection: { minLength: 100 } })
 		expect(result.status).toBe('ok')
 		expect(result.inliers).toBe(2)
 		expect(Math.abs(result.drift! / (0.25 * SCALE) - 1)).toBeLessThan(0.05)
@@ -597,5 +596,5 @@ function physicalCapture(azimuth: number, altitude: number, latitude: number, ho
 		state = (1664525 * state + 1013904223) >>> 0
 		frame.raw[i] += (state / 2 ** 32 - 0.5) * 0.003
 	}
-	return { image: frame, exposure, legDuration: leg, starts: [start], firstDirection: 'west', transform: new DarvMatrixTransform([cos * scale, sin * scale, -sin * parity * scale, cos * parity * scale]), detection: { maxWidth: 6, minLength: 50 } }
+	return { image: frame, exposure, legDuration: leg, starts: [start], firstDirection: 'west', transform: new DarvMatrixTransform([cos * scale, sin * scale, -sin * parity * scale, cos * parity * scale]), detection: { minLength: 50 } }
 }

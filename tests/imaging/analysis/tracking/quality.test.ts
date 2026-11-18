@@ -24,7 +24,7 @@ function field(trail: number, theta: number): DetectedStar[] {
 function streak(startX: number, endX: number, y: number): Streak {
 	const start = { x: startX, y }
 	const end = { x: endX, y }
-	return { start, end, center: { x: (startX + endX) / 2, y }, length: endX - startX, width: 2, angle: 0, linearity: 1, rmsResidual: 0, coverage: 1, supportPixels: endX - startX, clippedAtBorder: false, flux: 100, meanSignal: 1, peakSignal: 1, confidence: 1 }
+	return { start, end, center: { x: (startX + endX) / 2, y }, length: endX - startX, width: 2, angle: 0, linearity: 1, rmsResidual: 0, coverage: 1, clippedAtBorder: false, flux: 100, meanSignal: 1, peakSignal: 1, confidence: 1 }
 }
 
 test('round, one-, two- and five-pixel tracking trails retain physical lengths and rising score', () => {

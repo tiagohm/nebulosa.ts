@@ -8386,25 +8386,20 @@ console.log(field.orientation, field.coherence, field.assessment) // shared axis
 
 Long exposures collect straight luminous trails: satellites (more each year with the large constellations), aircraft, meteors, and slow moving objects. They must be found to mask them before stacking, to report them, or to identify them. Many other structures are also locally straight, such as diffraction spikes, edges, and chains of stars, so this capability finds the trails without deciding what they are; [Streak Classification](#streak-classification) interprets them.
 
-`detectStreaks` works on one plane of the image. It subtracts a local background, keeps significant pixels and edges, sets aside compact sources such as stars, votes the remaining edges in a Hough accumulator, and refines and merges the candidate lines into measured streaks. Stars are recognized because their gradients have no common orientation, which the body of a trail has (the coherence of the structure tensor), so a star lying on a trail is not part of its flux, and two fragments split by a star are still merged. A dotted trail whose dashes are as short and round as stars is set aside with them, so it needs `minCoherence: 0` and a `minCoverage` below its duty cycle.
+`detectStreaks` needs no tuning: its only setting is the shortest trail to report. It reduces the image to one luminance plane, subtracts a background estimated without the bright sources and the row and column offsets of the readout, sets aside round and thick sources (stars, galaxy cores, the Moon), and votes the remaining significant pixels in a Hough accumulator. Each candidate line is then verified along its length with medians, which ignore the stars lying on or beside a trail: a trail is a ridge, brighter than both of its sides, so an edge such as a lunar limb or a cloud border is not one; its contrast must stand out from the noise and from the same contrast measured on parallel lines around it, which captures the texture of nebulae, clouds, and banding; and it must be uniform along its length, unlike a chain of stars. Every threshold is in units of the image's own noise or texture, so a faint trail barely visible in a stretched image is found while structured backgrounds are not reported.
 
-Coordinates are pixels of the image (origin at the center of the upper-left sample, x right, y down), and angles are axial, in radians in `[0, π)` from +X toward +Y, so a trail has no direction of motion. A streak reports its endpoints, length, width (FWHM), linearity, the fraction of its length that has support, its photometry above the background, and a confidence that is a quality score of the detection, not a probability that the object is real. It is a straight-line model: curved trails, trails fainter than the noise, very wide smears, and the edges of nebulae and halos are outside what it separates, and in a very crowded field chance alignments of stars can still be reported. A preallocated workspace avoids allocation on a series of frames, and `createStreakMask` rasterizes the streaks into a mask that the stacker can exclude (see [Streak-Aware Stacking](#streak-aware-stacking)).
+Coordinates are pixels of the image (origin at the center of the upper-left sample, x right, y down), and angles are axial, in radians in `[0, π)` from +X toward +Y, so a trail has no direction of motion. A streak reports its endpoints, length, width (FWHM), linearity, the fraction of its length that has support, its photometry above the background, and a confidence that is a quality score of the detection, not a probability that the object is real. It is a straight-line model: curved trails, dotted trails whose gaps fill more than half of their length, dashes shorter than 8 times their width, and structures locked to a pixel row or column or running along the frame edge (indistinguishable from sensor defects and readout artifacts) are not reported. `createStreakMask` rasterizes the streaks into a mask that the stacker can exclude (see [Streak-Aware Stacking](#streak-aware-stacking)).
 
 ```ts
 import { detectStreaks } from 'nebulosa/src/imaging/analysis/streak/detector'
 import { createStreakMask } from 'nebulosa/src/imaging/analysis/streak/mask'
-import { createStreakDetectionWorkspace } from 'nebulosa/src/imaging/analysis/streak/workspace'
 
 // image: Image — a light frame in normalized samples. Finds the straight trails, strongest first.
 const streaks = detectStreaks(image, { minLength: 40 })
 const streak = streaks[0]
 
 console.log(streak.start, streak.end, streak.length, streak.width) // endpoints, length and FWHM in pixels
-console.log(streak.angle, streak.coverage, streak.snr, streak.confidence) // axial angle in radians, supported fraction, SNR, 0..1 detection quality
-
-// A workspace sized for the frames of a series, reused by every call.
-const workspace = createStreakDetectionWorkspace(image.metadata.width, image.metadata.height)
-const next = detectStreaks(nextImage, {}, workspace)
+console.log(streak.angle, streak.coverage, streak.snr, streak.confidence) // axial angle in radians, covered fraction, significance, 0..1 detection quality
 
 // A mask of the trails (1 masked), widened by 2 pixels on each side.
 const mask = createStreakMask(image.metadata.width, image.metadata.height, streaks, { dilation: 2 })

@@ -3,7 +3,6 @@ import { applyTransformToPoint } from '../../../src/astrometry/matching/star.mat
 import type { StreakClassification } from '../../../src/imaging/analysis/streak/classification.types'
 import { createStreakMask, type StreakMask } from '../../../src/imaging/analysis/streak/mask'
 import type { Streak } from '../../../src/imaging/analysis/streak/types'
-import { createStreakDetectionWorkspace } from '../../../src/imaging/analysis/streak/workspace'
 import { readImageFromBuffer } from '../../../src/imaging/model/image'
 import { type CfaPattern, type Image, shiftCfaPattern } from '../../../src/imaging/model/types'
 import { calibrate } from '../../../src/imaging/processing/calibration'
@@ -47,7 +46,7 @@ function rejectionMask(width: number, height: number, rejected: (x: number, y: n
 }
 
 function measuredStreak(y: number, start = -4, end = 24): Streak {
-	return { start: { x: start, y }, end: { x: end, y }, center: { x: (start + end) / 2, y }, length: end - start, width: 1, angle: 0, linearity: 1, rmsResidual: 0, coverage: 1, supportPixels: end - start, clippedAtBorder: true, flux: 100, meanSignal: 1, peakSignal: 1, confidence: 1 }
+	return { start: { x: start, y }, end: { x: end, y }, center: { x: (start + end) / 2, y }, length: end - start, width: 1, angle: 0, linearity: 1, rmsResidual: 0, coverage: 1, clippedAtBorder: true, flux: 100, meanSignal: 1, peakSignal: 1, confidence: 1 }
 }
 
 describe('streak masking in stacking', () => {
@@ -243,11 +242,10 @@ describe('streak masking in stacking', () => {
 		}
 	})
 
-	test('automatic detection reuses caller workspace and live diagnostics retain only compact statistics', () => {
+	test('automatic detection masks the trail and live diagnostics retain only compact statistics', () => {
 		const image = makeImage(128, 128, 1, 0.1)
-		renderSyntheticStreak(image, { start: { x: 20, y: 64 }, end: { x: 108, y: 64 }, width: 3, intensity: 0.8 })
-		const workspace = createStreakDetectionWorkspace(128, 128)
-		const options = { ...DEFAULT_STACK_OPTIONS, streaks: { enabled: true, detection: { minLength: 30, maxWidth: 8, backgroundCellSize: 32 }, mask: { dilation: 4 }, workspace } } as const
+		renderSyntheticStreak(image, { start: { x: 20, y: 50 }, end: { x: 108, y: 78 }, width: 3, intensity: 0.8 })
+		const options = { ...DEFAULT_STACK_OPTIONS, streaks: { enabled: true, detection: { minLength: 30 }, mask: { dilation: 4 } } } as const
 		const frame = makeFrame(image, makeStars())
 		const batch = stackFrames([frame], options)
 		expect(batch.diagnostics[0].streaks!.detectedCount).toBeGreaterThan(0)
@@ -500,7 +498,7 @@ describe('streak masking in stacking', () => {
 			if (reconstructionMode === 'cfaDrizzle') image = { ...image, metadata: { ...image.metadata, bayer: 'RGGB' } }
 			const plain = [makeFrame(image, makeStars()), makeFrame(image, makeStars(-0.25, 0.25))]
 			const masked = plain.map((frame) => ({ ...frame, streakMask: rejectionMask(18, 18, () => true) }))
-			const options = { ...DEFAULT_STACK_OPTIONS, reconstructionMode, streaks: { enabled: false, detection: { maxCandidates: Infinity } } } as const
+			const options = { ...DEFAULT_STACK_OPTIONS, reconstructionMode, streaks: { enabled: false, detection: { minLength: Infinity } } } as const
 			expect(stackFrames(masked, options)).toEqual(stackFrames(plain, { ...DEFAULT_STACK_OPTIONS, reconstructionMode }))
 			const livePlain = new LiveStacker(options)
 			const liveMasked = new LiveStacker(options)

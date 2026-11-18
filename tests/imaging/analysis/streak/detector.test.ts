@@ -1,182 +1,184 @@
-import { expect, test } from 'bun:test'
-import { PI, PIOVERFOUR, PIOVERTWO } from '../../../../src/core/constants'
+import { describe, expect, test } from 'bun:test'
+import { PI } from '../../../../src/core/constants'
+import { estimateBackground } from '../../../../src/imaging/analysis/background'
 import { detectStreaks } from '../../../../src/imaging/analysis/streak/detector'
 import { streakAxialAngleDistance } from '../../../../src/imaging/analysis/streak/geometry'
-import type { Image } from '../../../../src/imaging/model/types'
+import type { Streak } from '../../../../src/imaging/analysis/streak/types'
+import { readImageFromPath } from '../../../../src/imaging/model/image'
+import type { CfaPattern, Image } from '../../../../src/imaging/model/types'
 import { renderSyntheticStreak } from '../../../../src/imaging/synthetic/streak'
+import type { Point } from '../../../../src/math/numerical/geometry'
+import { mulberry32, normal } from '../../../../src/math/numerical/random'
+import { download } from '../../../download'
 
-function image(width: number, height: number): Image {
-	const raw = new Float32Array(width * height).fill(0.1)
-	return { raw, header: {}, metadata: { width, height, channels: 1, stride: width, pixelCount: width * height, strideInBytes: width * 4, pixelSizeInBytes: 4, bitpix: -32, bayer: undefined } }
+await Promise.all([download('LIGHT.fit'), download('NGC3372-16.1.fit'), download('NGC3372-16.3.fit'), download('GRBG-16.1.fit')])
+
+const NOISE = 0.002
+
+function blank(width: number, height: number, channels: 1 | 3 = 1, bayer?: CfaPattern): Image {
+	const raw = new Float32Array(width * height * channels).fill(0.1)
+	return { raw, header: {}, metadata: { width, height, channels, stride: width * channels, pixelCount: width * height, strideInBytes: width * channels * 4, pixelSizeInBytes: 4, bitpix: -32, bayer } }
 }
 
-function renderLine(image: Image, startX: number, startY: number, endX: number, endY: number, fwhm: number, intensity: number): void {
-	const dx = endX - startX
-	const dy = endY - startY
-	const squaredLength = dx * dx + dy * dy
-	const sigma = fwhm / (2 * Math.sqrt(2 * Math.log(2)))
-	for (let y = 0; y < image.metadata.height; y++) {
-		for (let x = 0; x < image.metadata.width; x++) {
-			const projection = Math.max(0, Math.min(1, ((x - startX) * dx + (y - startY) * dy) / squaredLength))
-			const closestX = startX + projection * dx
-			const closestY = startY + projection * dy
-			const distanceSquared = (x - closestX) ** 2 + (y - closestY) ** 2
-			image.raw[y * image.metadata.width + x] += intensity * Math.exp(-distanceSquared / (2 * sigma * sigma))
+// Sky with Gaussian noise and Gaussian stars (FWHM 3 px), deterministic for a seed.
+function sky(width: number, height: number, seed: number, stars = 400, channels: 1 | 3 = 1, bayer?: CfaPattern): Image {
+	const image = blank(width, height, channels, bayer)
+	const random = mulberry32(seed)
+	const noise = normal(random, 0, NOISE)
+	for (let i = 0; i < image.raw.length; i++) image.raw[i] += noise()
+
+	for (let i = 0; i < stars; i++) {
+		const x = random() * width
+		const y = random() * height
+		const peak = NOISE * (3 + 400 * random() ** 4)
+		const sigma = 3 / 2.3548
+
+		for (let yy = Math.max(0, Math.floor(y - 12)); yy <= Math.min(height - 1, Math.ceil(y + 12)); yy++) {
+			for (let xx = Math.max(0, Math.floor(x - 12)); xx <= Math.min(width - 1, Math.ceil(x + 12)); xx++) {
+				const value = peak * Math.exp(-((xx - x) ** 2 + (yy - y) ** 2) / (2 * sigma * sigma))
+				for (let c = 0; c < channels; c++) image.raw[(yy * width + xx) * channels + c] += value
+			}
 		}
 	}
+
+	return image
 }
 
-for (const [name, startX, startY, endX, endY, angle] of [
-	['horizontal', 20, 40, 100, 40, 0],
-	['vertical', 60, 20, 60, 100, PIOVERTWO],
-	['diagonal', 25, 25, 95, 95, PIOVERFOUR],
-] as const) {
-	test(`detects ${name} streak geometry`, () => {
-		const frame = image(128, 128)
-		renderLine(frame, startX, startY, endX, endY, 3, 0.8)
-		const detected = detectStreaks(frame, { minLength: 30, maxWidth: 8, minLinearity: 0.8, backgroundCellSize: 32, maxStreaks: 8 })
-		expect(detected.length).toBeGreaterThan(0)
-		const streak = detected[0]
-		expect(streakAxialAngleDistance(streak.angle, angle)).toBeLessThan(PI / 90)
-		expect(streak.center.x).toBeCloseTo((startX + endX) / 2, 0)
-		expect(streak.center.y).toBeCloseTo((startY + endY) / 2, 0)
-		expect(streak.length).toBeGreaterThan(70)
-		expect(streak.width).toBeGreaterThan(1)
-		expect(streak.width).toBeLessThan(5)
-		expect(streak.snr).toBeUndefined()
+function trail(image: Image, start: Point, end: Point, intensity: number, width = 3) {
+	renderSyntheticStreak(image, { start, end, width, intensity })
+}
+
+// Distance of a point from the segment of a detected streak, in pixels.
+function distanceToStreak(streak: Streak, point: Point) {
+	const dx = streak.end.x - streak.start.x
+	const dy = streak.end.y - streak.start.y
+	const t = Math.max(0, Math.min(1, ((point.x - streak.start.x) * dx + (point.y - streak.start.y) * dy) / (dx * dx + dy * dy)))
+	return Math.hypot(point.x - streak.start.x - t * dx, point.y - streak.start.y - t * dy)
+}
+
+// Whether the streak joins the two points within a tolerance, in either direction.
+function expectSegment(streak: Streak, start: Point, end: Point, tolerance: number) {
+	const direct = Math.max(Math.hypot(streak.start.x - start.x, streak.start.y - start.y), Math.hypot(streak.end.x - end.x, streak.end.y - end.y))
+	const reverse = Math.max(Math.hypot(streak.start.x - end.x, streak.start.y - end.y), Math.hypot(streak.end.x - start.x, streak.end.y - start.y))
+	expect(Math.min(direct, reverse)).toBeLessThan(tolerance)
+	expect(streakAxialAngleDistance(streak.angle, Math.atan2(end.y - start.y, end.x - start.x))).toBeLessThan(PI / 180)
+}
+
+describe('synthetic frames', () => {
+	test('measures a noiseless trail', () => {
+		const image = blank(256, 192)
+		const start = { x: 30, y: 40 }
+		const end = { x: 220, y: 150 }
+		trail(image, start, end, 0.4)
+		const streaks = detectStreaks(image)
+		expect(streaks).toHaveLength(1)
+		expectSegment(streaks[0], start, end, 3)
+		expect(streaks[0].width).toBeGreaterThan(2)
+		expect(streaks[0].width).toBeLessThan(4)
+		expect(streaks[0].clippedAtBorder).toBeFalse()
+		expect(streaks[0].confidence).toBeGreaterThan(0.9)
+		expect(streaks[0].saturationFraction).toBeUndefined()
 	})
-}
 
-test('reports ROI border clipping and honors clipping rejection', () => {
-	const frame = image(128, 128)
-	renderLine(frame, 5, 64, 120, 64, 2.5, 0.8)
-	const area = { left: 30, top: 20, right: 90, bottom: 110 }
-	const detected = detectStreaks(frame, { area, minLength: 30, maxWidth: 8, backgroundCellSize: 32 })
-	expect(detected.length).toBeGreaterThan(0)
-	expect(detected[0].clippedAtBorder).toBeTrue()
-	expect(detected[0].start.x).toBeGreaterThanOrEqual(area.left)
-	expect(detected[0].end.x).toBeLessThan(area.right)
-	expect(detectStreaks(frame, { area, minLength: 30, maxWidth: 8, backgroundCellSize: 32, allowBorderClipping: false })).toEqual([])
-})
-
-test('merges short collinear gaps but preserves separated fragments', () => {
-	const joined = image(160, 96)
-	renderLine(joined, 15, 48, 65, 48, 3, 0.8)
-	renderLine(joined, 72, 48, 140, 48, 3, 0.8)
-	const merged = detectStreaks(joined, { minLength: 20, maxWidth: 8, mergeGap: 12, backgroundCellSize: 32 })
-	expect(merged.length).toBe(1)
-	expect(merged[0].length).toBeGreaterThan(115)
-
-	const separated = image(160, 96)
-	renderLine(separated, 15, 48, 55, 48, 3, 0.8)
-	renderLine(separated, 90, 48, 140, 48, 3, 0.8)
-	const fragments = detectStreaks(separated, { minLength: 20, maxWidth: 8, mergeGap: 12, backgroundCellSize: 32 })
-	expect(fragments.length).toBe(2)
-})
-
-test('preserves separated parallel and crossing streaks while removing duplicates', () => {
-	const parallel = image(160, 128)
-	renderLine(parallel, 15, 40, 140, 40, 3, 0.8)
-	renderLine(parallel, 15, 75, 140, 75, 3, 0.7)
-	const parallelDetections = detectStreaks(parallel, { minLength: 40, maxWidth: 8, backgroundCellSize: 32 })
-	expect(parallelDetections.length).toBe(2)
-	expect(Math.abs(parallelDetections[0].center.y - parallelDetections[1].center.y)).toBeGreaterThan(30)
-
-	const crossing = image(160, 128)
-	renderLine(crossing, 15, 64, 140, 64, 3, 0.8)
-	renderLine(crossing, 80, 10, 80, 118, 3, 0.7)
-	const crossingDetections = detectStreaks(crossing, { minLength: 40, maxWidth: 8, backgroundCellSize: 32 })
-	expect(crossingDetections.length).toBe(2)
-	expect(streakAxialAngleDistance(crossingDetections[0].angle, crossingDetections[1].angle)).toBeGreaterThan(PI / 3)
-})
-
-for (const crossingDegrees of [5, 8, 12]) {
-	test(`preserves two resolved streaks crossing at ${crossingDegrees} degrees`, () => {
-		const frame = image(256, 192)
-		const angle = (crossingDegrees * PI) / 180
-		renderLine(frame, 18, 96, 238, 96, 1.5, 0.8)
-		renderLine(frame, 18, 96 - Math.tan(angle) * 110, 238, 96 + Math.tan(angle) * 110, 1.5, 0.7)
-		const detections = detectStreaks(frame, { minLength: 140, maxWidth: 5, angleStep: PI / 180, orientationTolerance: PI / 90, mergeAngleTolerance: PI / 180, backgroundCellSize: 32, maxStreaks: 8 })
-		expect(detections.length).toBe(2)
-		expect(streakAxialAngleDistance(detections[0].angle, detections[1].angle)).toBeGreaterThan(((crossingDegrees - 2) * PI) / 180)
+	test('finds a faint trail crossing a star field without reporting anything else', () => {
+		const image = sky(640, 480, 1)
+		const start = { x: 60, y: 420 }
+		const end = { x: 580, y: 70 }
+		// Peak of 1.2 noise sigmas: invisible pixel by pixel, obvious along 600 pixels.
+		trail(image, start, end, 1.2 * NOISE)
+		const streaks = detectStreaks(image)
+		expect(streaks).toHaveLength(1)
+		expectSegment(streaks[0], start, end, 15)
+		expect(streaks[0].rmsResidual).toBeLessThan(1)
 	})
-}
 
-// Dashes as short as the 4 px quarter-duty ones are as round as a star, so the compact-source test is disabled for them.
-// A dashed streak covers at most half of its length, so the coverage test is disabled for both.
-for (const [name, on, off, minCoherence] of [
-	['half-duty', 8, 8, undefined],
-	['quarter-duty', 4, 12, 0],
-] as const) {
-	test(`detects one long ${name} dashed streak and reports its coverage`, () => {
-		const frame = image(240, 96)
-		const intervals: { start: number; end: number }[] = []
-		const segmentLength = on + off
-		for (let start = 0; start < 200; start += segmentLength) intervals.push({ start: start / 200, end: Math.min(1, (start + on) / 200) })
-		renderSyntheticStreak(frame, { start: { x: 20, y: 48 }, end: { x: 220, y: 48 }, width: 3, intensity: 0.8, profile: { type: 'segments', intervals } })
-		const detections = detectStreaks(frame, { minLength: 140, maxWidth: 8, mergeGap: off + 2, backgroundCellSize: 32, minCoherence, minCoverage: 0 })
-		expect(detections.length).toBe(1)
-		expect(detections[0].length).toBeGreaterThan(190)
-		const expectedCoverage = on / segmentLength
-		expect(detections[0].coverage).toBeGreaterThan(expectedCoverage - 0.12)
-		expect(detections[0].coverage).toBeLessThan(expectedCoverage + 0.2)
+	test('reports crossing trails once each and keeps the input unchanged', () => {
+		const image = sky(512, 512, 2)
+		trail(image, { x: 20, y: 60 }, { x: 490, y: 440 }, 6 * NOISE)
+		trail(image, { x: 40, y: 470 }, { x: 470, y: 30 }, 3 * NOISE)
+		const copy = image.raw.slice()
+		const streaks = detectStreaks(image)
+		expect(streaks).toHaveLength(2)
+		expect(streaks[0].snr ?? 0).toBeGreaterThan(streaks[1].snr ?? 0)
+		expectSegment(streaks[0], { x: 20, y: 60 }, { x: 490, y: 440 }, 6)
+		expectSegment(streaks[1], { x: 40, y: 470 }, { x: 470, y: 30 }, 6)
+		expect(image.raw).toEqual(copy)
 	})
-}
 
-test('rejects a streak covering less of its length than minCoverage', () => {
-	const frame = image(240, 96)
-	const intervals: { start: number; end: number }[] = []
-	for (let start = 0; start < 200; start += 16) intervals.push({ start: start / 200, end: Math.min(1, (start + 4) / 200) })
-	renderSyntheticStreak(frame, { start: { x: 20, y: 48 }, end: { x: 220, y: 48 }, width: 3, intensity: 0.8, profile: { type: 'segments', intervals } })
-	const options = { minLength: 140, maxWidth: 8, mergeGap: 14, backgroundCellSize: 32, minCoherence: 0 }
-	expect(detectStreaks(frame, options)).toEqual([])
-	expect(detectStreaks(frame, { ...options, minCoverage: 0.2 }).length).toBe(1)
-	expect(() => detectStreaks(frame, { ...options, minCoverage: 1.01 })).toThrow(RangeError)
+	test('extends a trail that leaves the frame to the border', () => {
+		const image = sky(400, 300, 3)
+		trail(image, { x: -20, y: 40 }, { x: 300, y: 330 }, 5 * NOISE)
+		const [streak] = detectStreaks(image)
+		expect(streak.clippedAtBorder).toBeTrue()
+		expect(Math.min(streak.start.x, streak.start.y, 299 - streak.end.y)).toBeLessThan(2)
+	})
+
+	test('does not report noise, stars, or a chain of aligned stars', () => {
+		for (let seed = 10; seed < 14; seed++) expect(detectStreaks(sky(512, 384, seed, 800))).toEqual([])
+		const chain = sky(512, 384, 20, 100)
+		for (let i = 0; i < 20; i++) trail(chain, { x: 40 + 22 * i, y: 50 + 14 * i }, { x: 40.5 + 22 * i, y: 50.3 + 14 * i }, 40 * NOISE)
+		expect(detectStreaks(chain)).toEqual([])
+	})
+
+	test('does not report edges, gradients, or sensor rows and columns', () => {
+		const image = sky(512, 384, 30)
+		// A bright half-plane edge, a strong gradient, a hot partial row, and a bright column at the border.
+		for (let y = 0; y < 384; y++) {
+			for (let x = 0; x < 512; x++) {
+				const i = y * 512 + x
+				if (x + 0.4 * y > 400) image.raw[i] += 20 * NOISE
+				image.raw[i] += (x / 512) * 10 * NOISE
+				if (y === 200 && x > 300) image.raw[i] += 4 * NOISE
+				if (x === 1) image.raw[i] += 10 * NOISE
+			}
+		}
+		expect(detectStreaks(image)).toEqual([])
+	})
+
+	test('honors the minimum length', () => {
+		const image = sky(320, 240, 40)
+		trail(image, { x: 100, y: 100 }, { x: 125, y: 120 }, 15 * NOISE)
+		expect(detectStreaks(image)).toEqual([])
+		expect(detectStreaks(image, { minLength: 16 })).toHaveLength(1)
+	})
+
+	test('measures RGB and CFA frames in received-image pixels', () => {
+		const rgb = sky(400, 300, 50, 300, 3)
+		trail(rgb, { x: 40, y: 260 }, { x: 360, y: 50 }, 3 * NOISE)
+		const [color] = detectStreaks(rgb)
+		expectSegment(color, { x: 40, y: 260 }, { x: 360, y: 50 }, 6)
+
+		const cfa = sky(800, 600, 51, 500, 1, 'RGGB')
+		trail(cfa, { x: 80, y: 520 }, { x: 720, y: 100 }, 3 * NOISE, 5)
+		const [mosaic] = detectStreaks(cfa)
+		expectSegment(mosaic, { x: 80, y: 520 }, { x: 720, y: 100 }, 8)
+	})
+
+	test('measures the saturated fraction against a given level', () => {
+		const image = blank(256, 192)
+		renderSyntheticStreak(image, { start: { x: 30, y: 40 }, end: { x: 220, y: 150 }, width: 3, intensity: 2, saturationLevel: 1 })
+		const [streak] = detectStreaks(image, { saturationLevel: 1 })
+		expect(streak.saturationFraction).toBeGreaterThan(0.9)
+	})
 })
 
-test('does not bridge randomly displaced short fragments into a long streak', () => {
-	const frame = image(240, 128)
-	for (const [startX, y] of [
-		[20, 28],
-		[52, 83],
-		[84, 45],
-		[116, 101],
-		[148, 36],
-		[180, 73],
-	] as const)
-		renderLine(frame, startX, y, startX + 12, y + 2, 3, 0.8)
-	expect(detectStreaks(frame, { minLength: 140, maxWidth: 8, mergeGap: 20, backgroundCellSize: 32 })).toEqual([])
-})
+describe('real frames', () => {
+	test('reports nothing on a star field, a nebula, an RGB frame, or a CFA mosaic', async () => {
+		for (const name of ['LIGHT.fit', 'NGC3372-16.1.fit', 'NGC3372-16.3.fit', 'GRBG-16.1.fit']) {
+			const image = (await readImageFromPath(`data/${name}`))!
+			expect(detectStreaks(image)).toEqual([])
+		}
+	})
 
-test('reports exactly two non-parallel streaks without fragments of later runs or rotated merge artifacts', () => {
-	const frame = image(512, 384)
-	let state = 7
-	for (let index = 0; index < frame.raw.length; index++) {
-		state = (state * 1103515245 + 12345) % 2147483648
-		frame.raw[index] += (state / 2147483648 - 0.5) * 0.004
-	}
-	renderLine(frame, 60, 80, 420, 200, 2.83, 0.15)
-	renderLine(frame, 100, 330, 300, 250, 2.83, 0.15)
-	const detected = detectStreaks(frame)
-	expect(detected.length).toBe(2)
-	for (const [startX, startY, endX, endY] of [
-		[60, 80, 420, 200],
-		[100, 330, 300, 250],
-	] as const) {
-		const [left, right] =
-			startX < endX
-				? [
-						{ x: startX, y: startY },
-						{ x: endX, y: endY },
-					]
-				: [
-						{ x: endX, y: endY },
-						{ x: startX, y: startY },
-					]
-		const streak = detected.find((candidate) => Math.abs(candidate.center.x - (startX + endX) / 2) < 3 && Math.abs(candidate.center.y - (startY + endY) / 2) < 3)
-		expect(streak).toBeDefined()
-		expect(Math.hypot(streak!.start.x - left.x, streak!.start.y - left.y)).toBeLessThan(3)
-		expect(Math.hypot(streak!.end.x - right.x, streak!.end.y - right.y)).toBeLessThan(3)
-		expect(streak!.width).toBeLessThan(4)
-	}
+	test('finds a faint trail added to a real star field', async () => {
+		const image = (await readImageFromPath('data/LIGHT.fit'))!
+		const { noise } = estimateBackground(image)
+		const start = { x: 300, y: 1200 }
+		const end = { x: 1700, y: 250 }
+		trail(image, start, end, 1.5 * noise)
+		const streaks = detectStreaks(image)
+		expect(streaks).toHaveLength(1)
+		expectSegment(streaks[0], start, end, 20)
+		expect(distanceToStreak(streaks[0], { x: 1000, y: 725 })).toBeLessThan(1.5)
+	})
 })

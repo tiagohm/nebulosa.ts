@@ -35,7 +35,6 @@ function measured(overrides: Partial<Streak> & Pick<Streak, 'start' | 'end'>): S
 		linearity: 0.99,
 		rmsResidual: 0.2,
 		coverage: 0.97,
-		supportPixels: Math.max(1, Math.round(length)),
 		clippedAtBorder: false,
 		flux: 20,
 		meanSignal: 0.3,

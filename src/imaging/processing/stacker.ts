@@ -9,7 +9,6 @@ import { classifyStreaks } from '../analysis/streak/classifier'
 import { detectStreaks } from '../analysis/streak/detector'
 import { createStreakMask, type StreakMask, type StreakMaskOptions } from '../analysis/streak/mask'
 import type { Streak, StreakDetectionOptions } from '../analysis/streak/types'
-import type { StreakDetectionWorkspace } from '../analysis/streak/workspace'
 import { type Image, type ImageRawPrecision, type ImageRawType, makeImageRawTypedArray, shiftCfaPattern } from '../model/types'
 import type { DetectedStar } from '../stars/detector'
 import type { SigmaClipCenterMethod, SigmaClipDispersionMethod } from './computation'
@@ -135,8 +134,6 @@ export interface StackingStreakOptions {
 	readonly classification?: StreakClassifierOptions
 	// Reject a whole frame only when its masked fraction exceeds this optional [0,1] threshold.
 	readonly maxMaskedFraction?: number
-	// Caller-owned detector workspace reused synchronously; must fit the detector's analysis plane.
-	readonly workspace?: StreakDetectionWorkspace
 }
 
 // Compact source-grid statistics retained after processing; contains no image or mask buffers.
@@ -447,7 +444,7 @@ function prepareStackingFrame(frame: StackingFrame, options: StackingStreakOptio
 	if (!options?.enabled || !isImageShapeValid(frame.image)) return frame
 	const { width, height } = frame.image.metadata
 	let mask = frame.streakMask
-	const streaks = frame.streaks ?? (mask === undefined ? detectStreaks(frame.image, options.detection, options.workspace) : [])
+	const streaks = frame.streaks ?? (mask === undefined ? detectStreaks(frame.image, options.detection) : [])
 	let classifications = frame.streakClassifications
 	let selected = streaks
 	if (mask === undefined && (options.classes !== undefined || options.minClassificationConfidence !== undefined)) {
