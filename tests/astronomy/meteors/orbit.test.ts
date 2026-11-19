@@ -6,7 +6,7 @@ import { asteroid } from '../../../src/astronomy/orbits/asteroid'
 import { TAU } from '../../../src/core/constants'
 import { deg, toDeg } from '../../../src/math/units/angle'
 import { kilometerPerSecond } from '../../../src/math/units/velocity'
-import { HORIZONS_EARTH_STATE, REFERENCE_TDB, TOLERANCE } from './util'
+import { HORIZONS_EARTH_STATE, METEOR_ANALYTICAL_EPHEMERIS, REFERENCE_TDB, TOLERANCE } from './util'
 
 const RADIANT = { rightAscension: deg(100), declination: deg(-20) } as const
 const FIRST_ORBIT = { perihelionDistance: 0.8, eccentricity: 0.5, inclination: deg(30), longitudeOfAscendingNode: deg(20), argumentOfPerihelion: deg(40) } satisfies MeteorComparableOrbit
@@ -14,9 +14,10 @@ const SECOND_ORBIT = { perihelionDistance: 0.91, eccentricity: 0.62, inclination
 const STREAM = { perihelionDistance: 0.95, eccentricity: 0.6, inclination: deg(30), longitudeOfAscendingNode: deg(100), argumentOfPerihelion: deg(40) } satisfies MeteorCompleteStreamOrbit
 
 test('heliocentric reconstruction agrees with frozen Horizons Earth DE441 geometry', () => {
-	const state = meteorHeliocentricState(RADIANT, kilometerPerSecond(30), REFERENCE_TDB)
+	const state = meteorHeliocentricState(RADIANT, kilometerPerSecond(30), REFERENCE_TDB, METEOR_ANALYTICAL_EPHEMERIS)
 	const expectedPosition = HORIZONS_EARTH_STATE.position
-	const expectedVelocity = [-0.014233085564376764, -0.016214437057944845, 0.011815936999904221]
+	// Frozen from the analytical source, whose Earth is 2.7e-9 AU/day from the Horizons velocity of HORIZONS_EARTH_STATE.
+	const expectedVelocity = [-0.014233086455360446, -0.016214433120991526, 0.011815935293026892]
 
 	for (let i = 0; i < 3; i++) {
 		expect(Math.abs(state.position[i] - expectedPosition[i])).toBeLessThan(TOLERANCE.externalState)
@@ -24,10 +25,10 @@ test('heliocentric reconstruction agrees with frozen Horizons Earth DE441 geomet
 		expect(state.velocity[i]).toBeCloseTo(expectedVelocity[i], 12)
 	}
 
-	const orbit = meteorOrbitFromRadiant(RADIANT, kilometerPerSecond(30), REFERENCE_TDB)
-	expect(orbit.semiMajorAxis).toBeCloseTo(-91.4682940394299, 10)
-	expect(orbit.eccentricity).toBeCloseTo(1.0079100733482544, 10)
-	expect(toDeg(orbit.inclination)).toBeCloseTo(34.07957372313302, 10)
+	const orbit = meteorOrbitFromRadiant(RADIANT, kilometerPerSecond(30), REFERENCE_TDB, METEOR_ANALYTICAL_EPHEMERIS)
+	expect(orbit.semiMajorAxis).toBeCloseTo(-91.47232727184057, 10)
+	expect(orbit.eccentricity).toBeCloseTo(1.0079097233006369, 10)
+	expect(toDeg(orbit.inclination)).toBeCloseTo(34.07957370420688, 10)
 	expect(meteorComparableOrbitFromKepler(orbit)).toEqual({
 		perihelionDistance: orbit.periapsisDistance,
 		eccentricity: orbit.eccentricity,
@@ -40,8 +41,8 @@ test('heliocentric reconstruction agrees with frozen Horizons Earth DE441 geomet
 test('Geminid radiant reconstruction agrees with a published 2006 mean orbit', () => {
 	// Shrbeny (2009), Table 3.9: mean 2006 Geminids q=0.144 AU, e=0.892,
 	// i=22.6°, ω=324.2° and Ω=262.7°; radiant inputs are rounded catalog means.
-	const time = timeAtMeteorSolarLongitude(2006, deg(262.7), { step: 7 })
-	const orbit = meteorOrbitFromRadiant({ rightAscension: deg(113), declination: deg(32.6) }, kilometerPerSecond(35), time)
+	const time = timeAtMeteorSolarLongitude(2006, deg(262.7), { ephemeris: METEOR_ANALYTICAL_EPHEMERIS, step: 7 })
+	const orbit = meteorOrbitFromRadiant({ rightAscension: deg(113), declination: deg(32.6) }, kilometerPerSecond(35), time, METEOR_ANALYTICAL_EPHEMERIS)
 	expect(Math.abs(orbit.periapsisDistance - 0.144)).toBeLessThan(0.01)
 	expect(Math.abs(orbit.eccentricity - 0.892)).toBeLessThan(0.02)
 	expect(Math.abs(toDeg(orbit.inclination) - 22.6)).toBeLessThan(2)
@@ -50,17 +51,17 @@ test('Geminid radiant reconstruction agrees with a published 2006 mean orbit', (
 })
 
 test('stream node encounters return both geometric nodes with independent candidates', () => {
-	const encounters = meteorStreamOrbitNodeEncounters(STREAM, REFERENCE_TDB)
+	const encounters = meteorStreamOrbitNodeEncounters(STREAM, REFERENCE_TDB, METEOR_ANALYTICAL_EPHEMERIS)
 	expect(encounters).toHaveLength(2)
 	expect(encounters.map((value) => value.node)).toEqual(['ascending', 'descending'])
-	expect(encounters[0].geocentricSpeed).toBeCloseTo(0.011150240117687293, 12)
-	expect(encounters[0].earthNodeDistance).toBeCloseTo(0.07588569391691781, 12)
-	expect(toDeg(encounters[0].radiant.rightAscension)).toBeCloseTo(94.37211301795976, 10)
-	expect(toDeg(encounters[0].radiant.declination)).toBeCloseTo(-42.62689539787008, 10)
-	expect(encounters[1].geocentricSpeed).toBeCloseTo(0.02471637749202035, 12)
-	expect(encounters[1].earthNodeDistance).toBeCloseTo(3.795329745722165, 12)
-	expect(meteorStreamOrbitNodeEncounters({ ...STREAM, perihelionDistance: 0 }, REFERENCE_TDB)).toEqual([])
-	expect(meteorStreamOrbitNodeEncounters({ ...STREAM, eccentricity: -1 }, REFERENCE_TDB)).toEqual([])
+	expect(encounters[0].geocentricSpeed).toBeCloseTo(0.011150243315735253, 12)
+	expect(encounters[0].earthNodeDistance).toBeCloseTo(0.07588554358197273, 12)
+	expect(toDeg(encounters[0].radiant.rightAscension)).toBeCloseTo(94.37211693773855, 10)
+	expect(toDeg(encounters[0].radiant.declination)).toBeCloseTo(-42.62688027248812, 10)
+	expect(encounters[1].geocentricSpeed).toBeCloseTo(0.024716378160685948, 12)
+	expect(encounters[1].earthNodeDistance).toBeCloseTo(3.7953297538414508, 12)
+	expect(meteorStreamOrbitNodeEncounters({ ...STREAM, perihelionDistance: 0 }, REFERENCE_TDB, METEOR_ANALYTICAL_EPHEMERIS)).toEqual([])
+	expect(meteorStreamOrbitNodeEncounters({ ...STREAM, eccentricity: -1 }, REFERENCE_TDB, METEOR_ANALYTICAL_EPHEMERIS)).toEqual([])
 })
 
 test('Southworth-Hawkins, Drummond and Jopek match the independent MNRAS formula table', () => {

@@ -1,4 +1,5 @@
 import { vecAngle } from '../../math/linear-algebra/vec3'
+import { relativeEphemerisState } from '../ephemeris/source'
 import { altitudeOf } from '../events/horizon'
 import { type GeographicPosition, localSiderealTime } from '../observer/location'
 import type { Time } from '../time/time'
@@ -13,15 +14,15 @@ import type { MeteorShowerBatchStateOptions, MeteorShowerComputationContext, Met
 // not retain global or persistent state.
 
 // Prepares solar longitude and the optional observer values used by one or many shower states, from
-// the Sun and Moon of options.ephemeris. The Sun is always evaluated, since it gives the solar
+// the geocentric Sun and Moon of the source options.ephemeris. The Sun is always evaluated, since it gives the solar
 // longitude, but kept only when the solar or lunar result group is enabled; the Moon is evaluated only
 // when its result group is enabled.
 export function meteorShowerComputationContext(time: Time, observer: GeographicPosition | undefined, options: MeteorShowerContextOptions): MeteorShowerComputationContext {
 	const { ephemeris } = options
 	const includeMoon = options.includeMoon ?? true
 	const includeSun = options.includeSun ?? observer !== undefined
-	const sun = ephemeris.sun(time)
-	return completeContext({ time, solarLongitude: meteorSolarLongitudeOf(sun), sun: includeSun || includeMoon ? sun : undefined, moon: includeMoon ? ephemeris.moon(time) : undefined, observer, ephemeris }, options)
+	const sun = relativeEphemerisState(ephemeris, 10, 399, time)[0]
+	return completeContext({ time, solarLongitude: meteorSolarLongitudeOf(sun), sun: includeSun || includeMoon ? sun : undefined, moon: includeMoon ? relativeEphemerisState(ephemeris, 301, 399, time)[0] : undefined, observer, ephemeris }, options)
 }
 
 // Computes one shower solution at a prepared instant. The function does not mutate the supplied
@@ -48,8 +49,8 @@ function completeContext(context: MeteorShowerComputationContext, options: Omit<
 	const includeMoon = options.includeMoon ?? true
 	const includeSun = options.includeSun ?? observer !== undefined
 	const needsSun = includeSun || includeMoon
-	const sun = context.sun ?? (needsSun ? context.ephemeris.sun(context.time) : undefined)
-	const moon = context.moon ?? (includeMoon ? context.ephemeris.moon(context.time) : undefined)
+	const sun = context.sun ?? (needsSun ? relativeEphemerisState(context.ephemeris, 10, 399, context.time)[0] : undefined)
+	const moon = context.moon ?? (includeMoon ? relativeEphemerisState(context.ephemeris, 301, 399, context.time)[0] : undefined)
 	return {
 		...context,
 		localSiderealTime: context.localSiderealTime ?? (observer !== undefined && includeHorizontal ? localSiderealTime(context.time, observer) : undefined),

@@ -1,12 +1,12 @@
 import { expect, test } from 'bun:test'
-import { meteorMoonDirection, meteorSunDirection } from '../../../src/astronomy/meteors/observation'
+import type { EphemerisSource } from '../../../src/astronomy/ephemeris/source'
 import { meteorGeometricObservingWindows, meteorObservingWindows } from '../../../src/astronomy/meteors/planner'
 import { meteorSolarLongitude, timeAtMeteorSolarLongitude } from '../../../src/astronomy/meteors/solar'
 import { meteorShowerComputationContext, meteorShowerState } from '../../../src/astronomy/meteors/state'
 import type { MeteorActivityProfile, MeteorShowerSolution } from '../../../src/astronomy/meteors/types'
 import { Ellipsoid, geodeticLocation } from '../../../src/astronomy/observer/location'
 import { type Time, timeShift, timeSubtract, timeToDate, timeToUnixMillis, timeUnix, timeYMDHMS, Timescale } from '../../../src/astronomy/time/time'
-import { vecNegate } from '../../../src/math/linear-algebra/vec3'
+import { vecMinus, vecMulScalar } from '../../../src/math/linear-algebra/vec3'
 import { deg } from '../../../src/math/units/angle'
 import { meter } from '../../../src/math/units/distance'
 import { BASE_SOLUTION, EXPONENTIAL_PROFILE, METEOR_ANALYTICAL_EPHEMERIS, OBSERVER, PLANNER_END, PLANNER_MULTI_PROFILE, PLANNER_START, SITE_EPOCH, SITE_EPOCH_END, SOLAR_DRIFT_SOLUTION, TEST_INTERVAL, ZERO_WIDTH_INTERVAL } from './util'
@@ -22,7 +22,8 @@ test('both observing-window overloads identify the same real short window', () =
 	expect(reversed[0].durationHours).toBeCloseTo(direct[0].durationHours, 12)
 	expect(reversed[0].expectedCount).toBeCloseTo(direct[0].expectedCount, 12)
 	expect(direct[0].durationHours).toBeCloseTo(2, 12)
-	expect(direct[0].expectedCount).toBeCloseTo(134.70823, 4)
+	// Frozen with the solar longitude of the analytical source (0.6 s from ERFA at the equinox).
+	expect(direct[0].expectedCount).toBeCloseTo(134.70783, 4)
 	expect(direct[0].bestTime).toBeDefined()
 	expect(direct[0].moonIlluminationAtBest).toBeUndefined()
 	expect(direct[0].maximumRadiantAltitude).toBeDefined()
@@ -73,7 +74,7 @@ test('a below-horizon Moon satisfies illumination, separation and inclusive alti
 })
 
 test('planner samples a sub-step catalog activity interval inside a broad profile', () => {
-	const center = meteorSolarLongitude(timeShift(SITE_EPOCH, 0.5 / 24))
+	const center = meteorSolarLongitude(METEOR_ANALYTICAL_EPHEMERIS, timeShift(SITE_EPOCH, 0.5 / 24))
 	const start = timeShift(SITE_EPOCH, 0.25 / 24)
 	const end = timeShift(SITE_EPOCH, 0.75 / 24)
 	const narrowCatalog = {
@@ -171,8 +172,8 @@ test('rate correction scales integrated count', () => {
 	})
 
 	expect(corrected).toHaveLength(1)
-	expect(corrected[0].expectedCount).toBeCloseTo(69.43674, 4)
-	expect(corrected[0].bestLocalHourlyRate).toBeCloseTo(35.68435, 4)
+	expect(corrected[0].expectedCount).toBeCloseTo(69.43653, 4)
+	expect(corrected[0].bestLocalHourlyRate).toBeCloseTo(35.68425, 4)
 })
 
 test('minimum duration filters a real short window', () => {
@@ -199,12 +200,12 @@ test('an unavailable drifting radiant removes the candidate window', () => {
 test('planner honors an inclusive catalog year range', () => {
 	const yearSpecific = { ...BASE_SOLUTION, activity: { kind: 'yearSpecific', source: '2014-16', years: { start: 2014, end: 2016 } } } satisfies MeteorShowerSolution
 	const hasWindows = [2013, 2014, 2015, 2016, 2017].map((year) => {
-		const start = timeAtMeteorSolarLongitude(year, BASE_SOLUTION.referenceSolarLongitude, { step: 7 })
+		const start = timeAtMeteorSolarLongitude(year, BASE_SOLUTION.referenceSolarLongitude, { ephemeris: METEOR_ANALYTICAL_EPHEMERIS, step: 7 })
 		return meteorObservingWindows(yearSpecific, EXPONENTIAL_PROFILE, OBSERVER, start, timeShift(start, 2 / 24), { ephemeris: METEOR_ANALYTICAL_EPHEMERIS, maximumSolarAltitude: deg(90), minimumRadiantAltitude: deg(-90), step: 1 / 48 }).length > 0
 	})
 
 	expect(hasWindows).toEqual([false, true, true, true, false])
-	const start = timeAtMeteorSolarLongitude(2017, BASE_SOLUTION.referenceSolarLongitude, { step: 7 })
+	const start = timeAtMeteorSolarLongitude(2017, BASE_SOLUTION.referenceSolarLongitude, { ephemeris: METEOR_ANALYTICAL_EPHEMERIS, step: 7 })
 	expect(meteorObservingWindows(yearSpecific, EXPONENTIAL_PROFILE, OBSERVER, start, timeShift(start, 2 / 24), { ephemeris: METEOR_ANALYTICAL_EPHEMERIS, maximumSolarAltitude: deg(90), minimumRadiantAltitude: deg(-90), extrapolateYearLimitedActivity: true, step: 1 / 48 })).toHaveLength(1)
 })
 
@@ -276,8 +277,8 @@ test('geometric windows of a narrow support stay inside it over a long search', 
 	const start = timeYMDHMS(2026, 9, 25, 0, 0, 0, Timescale.UTC)
 	const end = timeYMDHMS(2026, 10, 25, 0, 0, 0, Timescale.UTC)
 	const windows = meteorGeometricObservingWindows(narrow, OBSERVER, start, end, { ephemeris: METEOR_ANALYTICAL_EPHEMERIS })
-	const supportStart = timeAtMeteorSolarLongitude(2026, deg(194.7), { step: 7 })
-	const supportEnd = timeAtMeteorSolarLongitude(2026, deg(195.8), { step: 7 })
+	const supportStart = timeAtMeteorSolarLongitude(2026, deg(194.7), { ephemeris: METEOR_ANALYTICAL_EPHEMERIS, step: 7 })
+	const supportEnd = timeAtMeteorSolarLongitude(2026, deg(195.8), { ephemeris: METEOR_ANALYTICAL_EPHEMERIS, step: 7 })
 
 	expect(windows.length).toBeGreaterThan(0)
 	for (const window of windows) {
@@ -314,15 +315,15 @@ test('geometric and profile windows take the Sun and the Moon of a supplied ephe
 	const nightEnd = timeYMDHMS(2026, 6, 30, 12, 0, 0, Timescale.UTC)
 	const options = { step: 1 / 48, minimumRadiantAltitude: deg(10), maximumMoonIllumination: 1, minimumMoonRadiantSeparation: deg(1) } as const
 	let calls = 0
-	const ephemeris = {
-		sun: (time: Time) => {
+	const ephemeris: EphemerisSource = {
+		...METEOR_ANALYTICAL_EPHEMERIS,
+		state: (naif, time) => {
 			calls++
-			return meteorSunDirection(time)
+			return METEOR_ANALYTICAL_EPHEMERIS.state(naif, time)
 		},
-		moon: meteorMoonDirection,
 	}
 
-	// The theories wrapped by a counting ephemeris give the same windows, and are the ones evaluated.
+	// The theories wrapped by a counting source give the same windows, and are the ones evaluated.
 	const geometric = meteorGeometricObservingWindows(BASE_SOLUTION, OBSERVER, nightStart, nightEnd, { ...options, ephemeris: METEOR_ANALYTICAL_EPHEMERIS })
 	const supplied = meteorGeometricObservingWindows(BASE_SOLUTION, OBSERVER, nightStart, nightEnd, { ...options, ephemeris })
 	expect(calls).toBeGreaterThan(0)
@@ -332,7 +333,16 @@ test('geometric and profile windows take the Sun and the Moon of a supplied ephe
 	expect(meteorObservingWindows(BASE_SOLUTION, EXPONENTIAL_PROFILE, OBSERVER, nightStart, nightEnd, { ...options, ephemeris })).toEqual(profiled)
 
 	// A Sun on the far side of the sky moves the darkness, so the windows follow the ephemeris supplied.
-	const opposite = { sun: (time: Time) => vecNegate(meteorSunDirection(time)), moon: meteorMoonDirection }
+	const opposite: EphemerisSource = {
+		...METEOR_ANALYTICAL_EPHEMERIS,
+		state: (naif, time) => {
+			if (naif !== 10) return METEOR_ANALYTICAL_EPHEMERIS.state(naif, time)
+			// The Sun mirrored through the Earth.
+			const [earth] = METEOR_ANALYTICAL_EPHEMERIS.state(399, time)
+			const [sun, velocity] = METEOR_ANALYTICAL_EPHEMERIS.state(10, time)
+			return [vecMinus(vecMulScalar(earth, 2), sun), velocity]
+		},
+	}
 	const moved = meteorGeometricObservingWindows({ ...BASE_SOLUTION, activityInterval: undefined }, OBSERVER, nightStart, nightEnd, { ...options, ephemeris: opposite })
 	const night = meteorGeometricObservingWindows({ ...BASE_SOLUTION, activityInterval: undefined }, OBSERVER, nightStart, nightEnd, { ...options, ephemeris: METEOR_ANALYTICAL_EPHEMERIS })
 	expect(moved).not.toEqual(night)

@@ -3,7 +3,6 @@ import { brentMinimize } from '../../math/numerical/optimization'
 import { pchip, type PchipSpline } from '../../math/numerical/spline'
 import { type Angle, normalizeAngle, normalizePI } from '../../math/units/angle'
 import { timeShift, timeSubtract, timeToDate, type Time, utc } from '../time/time'
-import { meteorSolarLongitude } from './solar'
 import type { MeteorActivityPhase, MeteorActivityProfile, MeteorExponentialActivityProfile, MeteorSampledActivityProfile, MeteorShowerActivity, MeteorSolarLongitudeInterval } from './types'
 
 // Meteor activity profiles and visual-rate mathematics. Catalog support intervals only decide where
@@ -222,9 +221,9 @@ export function meteorActivityIntervalsAboveFraction(profile: MeteorActivityProf
 	return intervals
 }
 
-// Integrates ZHR over a time interval and returns meteors per ideal observer-hour (ZHR·h). The solar
-// longitude is recomputed at each sample unless a caller supplies a shared provider in options.
-export function integrateMeteorZhr(profile: MeteorActivityProfile, start: Time, end: Time, options: MeteorIntegrationOptions = {}): number {
+// Integrates ZHR over a time interval and returns meteors per ideal observer-hour (ZHR·h), with the solar
+// longitude of each sample from options.solarLongitude.
+export function integrateMeteorZhr(profile: MeteorActivityProfile, start: Time, end: Time, options: MeteorIntegrationOptions): number {
 	const duration = timeSubtract(end, start)
 	if (!(duration > 0)) return 0
 	const step = options.step ?? 1 / 24
@@ -232,7 +231,7 @@ export function integrateMeteorZhr(profile: MeteorActivityProfile, start: Time, 
 	const count = Math.max(1, Math.ceil(duration / step))
 	const h = duration / count
 
-	const longitudeAt = options.solarLongitude ?? meteorSolarLongitude
+	const longitudeAt = options.solarLongitude
 	// Simpson's rule is used only when an even number of panels is available; otherwise trapezoids
 	// preserve the requested endpoint and remain deterministic for arbitrary short windows.
 	if (count % 2 === 0) {
@@ -257,13 +256,13 @@ export function integrateMeteorZhr(profile: MeteorActivityProfile, start: Time, 
 	return trapezoid * 24
 }
 
-// Options controlling time integration. `solarLongitude` can point at a context-backed value in a
-// batch planner, avoiding a second ephemeris evaluation at the same instant.
+// Options controlling time integration. `solarLongitude` gives the solar longitude of a sample, such as
+// meteorSolarLongitude over a source or a context-backed value in a batch planner.
 export interface MeteorIntegrationOptions {
 	// Integration panel width in days.
 	readonly step?: number
-	// Shared solar-longitude provider.
-	readonly solarLongitude?: (time: Time) => Angle
+	// Solar longitude of a sample instant, in radians.
+	readonly solarLongitude: (time: Time) => Angle
 }
 
 // Evaluates an exponential activity component. The side slopes are per degree of solar longitude,

@@ -84,22 +84,16 @@ test('population index regression recovers a synthetic magnitude distribution', 
 })
 
 test('observation context and circumstances retain supplied local and lunar providers', () => {
-	const context = meteorObservationContext(REFERENCE_UTC, OBSERVER)
+	const context = meteorObservationContext(METEOR_ANALYTICAL_EPHEMERIS, REFERENCE_UTC, OBSERVER)
 	expect(context.time).toBe(REFERENCE_UTC)
 	expect(context.solarLongitude).toBeDefined()
 	expect(context.localSiderealTime).toBeDefined()
-	const noObserver = meteorObservationContext(REFERENCE_UTC)
+	const noObserver = meteorObservationContext(METEOR_ANALYTICAL_EPHEMERIS, REFERENCE_UTC)
 	expect(noObserver.localSiderealTime).toBeUndefined()
 
 	const time = timeYMDHMS(2024, 1, 4, 0, 0, 0, Timescale.UTC)
-	const horizontal = meteorRadiantHorizontal({ rightAscension: 0, declination: 0 }, OBSERVER, time, { time, solarLongitude: 0, localSiderealTime: deg(123) })
-	const conditions = meteorObservingConditionsAt({ rightAscension: 0, declination: 0 }, OBSERVER, time, METEOR_ANALYTICAL_EPHEMERIS, {
-		time,
-		solarLongitude: 0,
-		localSiderealTime: deg(123),
-		sun: vecX(),
-		moon: vecY(),
-	})
+	const horizontal = meteorRadiantHorizontal({ rightAscension: 0, declination: 0 }, OBSERVER, time, { ephemeris: METEOR_ANALYTICAL_EPHEMERIS, time, solarLongitude: 0, localSiderealTime: deg(123) })
+	const conditions = meteorObservingConditionsAt({ rightAscension: 0, declination: 0 }, OBSERVER, time, METEOR_ANALYTICAL_EPHEMERIS, { ephemeris: METEOR_ANALYTICAL_EPHEMERIS, time, solarLongitude: 0, localSiderealTime: deg(123), sun: vecX(), moon: vecY() })
 	expect(conditions.time).toBe(time)
 	expect(conditions.radiant).toEqual(horizontal)
 	expect(conditions.moonIllumination).toBeCloseTo((1 + Math.cos(PIOVERFOUR)) * 0.5, 14)

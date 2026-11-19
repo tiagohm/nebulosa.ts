@@ -2,6 +2,7 @@ import type { Vec3 } from '../../math/linear-algebra/vec3'
 import type { Angle } from '../../math/units/angle'
 import type { Distance } from '../../math/units/distance'
 import type { Velocity } from '../../math/units/velocity'
+import type { EphemerisSource } from '../ephemeris/source'
 import type { RiseTransitSetOptions } from '../events/horizon'
 import type { TimeSearchOptions } from '../events/search'
 import type { Ellipsoid, GeographicPosition } from '../observer/location'
@@ -215,12 +216,18 @@ export interface MeteorRadiantMaximumAltitude {
 }
 
 // Numerical and drift controls for a radiant-altitude search.
-export interface MeteorRadiantMaximumAltitudeOptions extends TimeSearchOptions, MeteorRadiantOptions {}
+export interface MeteorRadiantMaximumAltitudeOptions extends TimeSearchOptions, MeteorRadiantOptions {
+	// Source of the solar longitude of every sample.
+	readonly ephemeris: EphemerisSource
+}
 
 // Shared per-instant values used by batch radiant and activity calculations.
 export interface MeteorComputationContext {
 	// Evaluation instant.
 	readonly time: Time
+	// Source of the Sun, the Moon, and the solar longitude of the context, which also gives the instants of
+	// the reference longitudes of a daily radiant drift.
+	readonly ephemeris: EphemerisSource
 	// Geocentric geometric solar longitude in the J2000 ecliptic.
 	readonly solarLongitude: Angle
 	// Apparent local sidereal time in radians, when an observer is involved.
@@ -231,19 +238,7 @@ export interface MeteorComputationContext {
 	readonly moon?: Vec3
 }
 
-// Geocentric geometric Sun and Moon supplied by the caller in place of VSOP87E and ELPMPP02, such as
-// positions read from SPK kernels or interpolated between hourly nodes. Both return J2000 equatorial
-// vectors in AU (ICRS axes are accepted: their 23 mas frame bias is far below what meteor planning
-// resolves), without light-time or aberration, and may return a fresh or a shared vector that the
-// toolkit never mutates.
-export interface MeteorEphemeris {
-	// Geocentric geometric J2000 equatorial Sun vector in AU at an instant.
-	readonly sun: (time: Time) => Vec3
-	// Geocentric geometric J2000 equatorial Moon vector in AU at an instant.
-	readonly moon: (time: Time) => Vec3
-}
-
-// Joint solar values derived from one geocentric VSOP Sun/Earth evaluation.
+// Joint solar values derived from one geocentric Sun of an ephemeris source.
 export interface MeteorSolarState {
 	// Geometric geocentric solar longitude in the J2000 ecliptic, normalized to [0, 2π).
 	readonly solarLongitude: Angle
@@ -253,8 +248,6 @@ export interface MeteorSolarState {
 
 // Shared ephemeris and observer values for one or many instantaneous shower states.
 export interface MeteorShowerComputationContext extends MeteorComputationContext {
-	// Sun and Moon the context was prepared with, which complete it when a state asks for more.
-	readonly ephemeris: MeteorEphemeris
 	// Observer used for local horizontal quantities, when requested.
 	readonly observer?: GeographicPosition
 	// Geometric solar altitude in radians, shared by all showers at this observer and instant.
@@ -273,9 +266,9 @@ export interface MeteorShowerContextOptions {
 	readonly includeMoon?: boolean
 	// Prepare the Sun vector for solar altitude; defaults to true with an observer.
 	readonly includeSun?: boolean
-	// Sun and Moon of the context; the solar longitude is derived from its Sun too, so one context
-	// never mixes ephemerides.
-	readonly ephemeris: MeteorEphemeris
+	// Source of the Sun and the Moon of the context; the solar longitude is derived from its Sun too, so
+	// one context never mixes ephemerides.
+	readonly ephemeris: EphemerisSource
 }
 
 // Controls which optional quantities an instantaneous shower-state calculation evaluates.
@@ -376,6 +369,8 @@ export interface MeteorRadiantOptions {
 
 // Controls absolute-time radiant path sampling; the step is measured in days.
 export interface MeteorRadiantTimePathOptions extends MeteorRadiantOptions {
+	// Source of the solar longitude of every sample.
+	readonly ephemeris: EphemerisSource
 	// Sampling interval in days; defaults to one day and must be finite and positive.
 	readonly step?: number
 }
@@ -572,6 +567,8 @@ export interface MeteorHorizontalInput {
 
 // Search options for converting a catalog longitude into a time.
 export interface MeteorSolarLongitudeSearchOptions<S> extends TimeSearchOptions {
+	// Source of the Sun whose longitude is searched.
+	readonly ephemeris: EphemerisSource
 	// Output time scale, UTC by default.
 	readonly scale?: S
 }
@@ -622,10 +619,10 @@ export interface MeteorObservingWindowOptions extends TimeSearchOptions {
 	readonly altitudeExponent?: number
 	// Optional provider for explicit, time-varying rate corrections.
 	readonly rateCorrection?: (time: Time, conditions: MeteorObservingConditions) => number
-	// Sun and Moon of every sample, such as SPK positions interpolated between hourly nodes. meteorSunDirection and
-	// meteorMoonDirection give the toolkit's theories, but an ELPMPP02 evaluation costs about 10 ms and a window search
-	// evaluates hundreds of samples, so a caller should interpolate them between hourly nodes too.
-	readonly ephemeris: MeteorEphemeris
+	// Source of the Sun, the Moon, and the solar longitude of every sample; a window search evaluates hundreds of
+	// samples, so pass an interpolated source (interpolatedEphemerisSource), where an ELPMPP02 evaluation costs
+	// about 10 ms.
+	readonly ephemeris: EphemerisSource
 }
 
 // Restrictions and numerical options of the profile-independent geometric observing planner.
@@ -647,10 +644,10 @@ export interface MeteorGeometricObservingWindowOptions extends TimeSearchOptions
 	readonly maximumMoonAltitude?: Angle
 	// Minimum duration in hours.
 	readonly minimumDurationHours?: number
-	// Sun and Moon of every sample, such as SPK positions interpolated between hourly nodes. meteorSunDirection and
-	// meteorMoonDirection give the toolkit's theories, but an ELPMPP02 evaluation costs about 10 ms and a window search
-	// evaluates hundreds of samples, so a caller should interpolate them between hourly nodes too.
-	readonly ephemeris: MeteorEphemeris
+	// Source of the Sun, the Moon, and the solar longitude of every sample; a window search evaluates hundreds of
+	// samples, so pass an interpolated source (interpolatedEphemerisSource), where an ELPMPP02 evaluation costs
+	// about 10 ms.
+	readonly ephemeris: EphemerisSource
 }
 
 // Whether a geometric window lies inside a known activity support or only satisfies the geometry
@@ -700,7 +697,11 @@ export interface MeteorPopulationIndexOptions {
 }
 
 // Options used by local rise/transit/set evaluation.
-export type MeteorRadiantRiseTransitSetOptions = RiseTransitSetOptions & MeteorRadiantOptions
+export type MeteorRadiantRiseTransitSetOptions = RiseTransitSetOptions &
+	MeteorRadiantOptions & {
+		// Source of the solar longitude of every sample.
+		readonly ephemeris: EphemerisSource
+	}
 
 // Result of a heliocentric radiant reconstruction.
 export interface MeteorHeliocentricState {

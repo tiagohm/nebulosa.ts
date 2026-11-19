@@ -1,14 +1,14 @@
 import { type Vec3, vecAngle } from '../../math/linear-algebra/vec3'
 import { chiSquareQuantile } from '../../math/numerical/statistics'
 import { type Angle, normalizeAngle } from '../../math/units/angle'
-import { moon } from '../ephemeris/models/analytical/elpmpp02'
+import { type EphemerisSource, relativeEphemerisState } from '../ephemeris/source'
 import { altitudeOf } from '../events/horizon'
 import { localSiderealTime, type GeographicPosition } from '../observer/location'
 import { type Time, timeShift, timeSubtract } from '../time/time'
 import { meteorActivityZhr } from './activity'
 import { meteorRadiantHorizontal } from './radiant'
-import { meteorSolarLongitude, meteorSolarState } from './solar'
-import type { MeteorActivityProfile, MeteorComputationContext, MeteorEphemeris, MeteorHorizontalRadiant, MeteorMagnitudeBin, MeteorObservingConditions, MeteorPopulationIndexOptions, MeteorRadiant, MeteorVisualObservation, MeteorVisualRate } from './types'
+import { meteorSolarLongitude } from './solar'
+import type { MeteorActivityProfile, MeteorComputationContext, MeteorHorizontalRadiant, MeteorMagnitudeBin, MeteorObservingConditions, MeteorPopulationIndexOptions, MeteorRadiant, MeteorVisualObservation, MeteorVisualRate } from './types'
 
 // Visual meteor observation equations and local circumstances. Counts use the standard ZHR
 // correction with effective exposure in hours; local rates are idealized geometric rates and do not
@@ -109,34 +109,24 @@ export function meteorPopulationIndexFromMagnitudeBins(bins: readonly MeteorMagn
 	return result > 0 && Number.isFinite(result) ? result : undefined
 }
 
-// Creates a context once per instant, including the local sidereal time when an observer is given.
-export function meteorObservationContext(time: Time, observer?: GeographicPosition): MeteorComputationContext {
-	return { time, solarLongitude: meteorSolarLongitude(time), localSiderealTime: observer === undefined ? undefined : localSiderealTime(time, observer) }
+// Creates a context once per instant from a source, including the local sidereal time when an observer is given.
+export function meteorObservationContext(source: EphemerisSource, time: Time, observer?: GeographicPosition): MeteorComputationContext {
+	return { time, solarLongitude: meteorSolarLongitude(source, time), localSiderealTime: observer === undefined ? undefined : localSiderealTime(time, observer), ephemeris: source }
 }
 
 // Computes the Sun, Moon and radiant circumstances at one identified instant, with the Sun and Moon of
 // the context when it has them, else of ephemeris. All altitudes are geometric and no atmospheric
 // refraction is applied.
-export function meteorObservingConditionsAt(radiant: MeteorRadiant, observer: GeographicPosition, time: Time, ephemeris: MeteorEphemeris, context?: MeteorComputationContext): MeteorObservingConditions {
+export function meteorObservingConditionsAt(radiant: MeteorRadiant, observer: GeographicPosition, time: Time, ephemeris: EphemerisSource, context?: MeteorComputationContext): MeteorObservingConditions {
 	const horizontal = meteorRadiantHorizontal(radiant, observer, time, context)
-	const sunVector = context?.sun ?? ephemeris.sun(time)
-	const moonVector = context?.moon ?? ephemeris.moon(time)
+	const sunVector = context?.sun ?? relativeEphemerisState(ephemeris, 10, 399, time)[0]
+	const moonVector = context?.moon ?? relativeEphemerisState(ephemeris, 301, 399, time)[0]
 	const sunAltitude = altitudeOf(sunVector, time, observer)
 	const moonAltitude = altitudeOf(moonVector, time, observer)
 	const moonIllumination = meteorMoonIllumination(sunVector, moonVector)
 	const radiantVector = radiantVectorOf(radiant)
 	const moonRadiantSeparation = vecAngle(moonVector, radiantVector)
 	return { time, sunAltitude, moonAltitude, moonIllumination, moonRadiantSeparation, radiant: horizontal }
-}
-
-// Returns the geocentric J2000 equatorial Sun direction vector in AU.
-export function meteorSunDirection(time: Time): Vec3 {
-	return meteorSolarState(time).sun
-}
-
-// Returns the geocentric J2000 equatorial Moon direction vector in AU.
-export function meteorMoonDirection(time: Time): Vec3 {
-	return moon(time)[0]
 }
 
 // Computes the illuminated lunar fraction from geocentric J2000 Sun and Moon vectors.
@@ -219,12 +209,12 @@ export interface MeteorExpectedCountOptions {
 	readonly rateCorrection?: (time: Time) => number
 	// Integration panel width in days.
 	readonly step?: number
-	// Shared solar-longitude provider.
-	readonly solarLongitude?: (time: Time) => Angle
+	// Solar longitude of a sample instant in radians, such as meteorSolarLongitude over a source.
+	readonly solarLongitude: (time: Time) => Angle
 }
 
 function expectedRateAt(profile: MeteorActivityProfile, time: Time, options: MeteorExpectedCountOptions): number {
-	const longitude = options.solarLongitude?.(time) ?? meteorSolarLongitude(time)
+	const longitude = options.solarLongitude(time)
 	const altitude = options.radiantAltitude?.(time) ?? options.radiant?.(time)?.altitude ?? 0
 	const observation: MeteorVisualObservation = { count: 1, effectiveTime: 1, limitingMagnitude: options.limitingMagnitude, populationIndex: options.populationIndex, obstructionCorrection: options.obstructionCorrection, radiantAltitude: altitude, altitudeExponent: options.altitudeExponent }
 	return meteorLocalHourlyRate(meteorActivityZhr(profile, longitude), observation) * (options.rateCorrection?.(time) ?? 1)

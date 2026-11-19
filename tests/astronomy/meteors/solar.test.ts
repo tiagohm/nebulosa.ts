@@ -16,14 +16,14 @@ import {
 import type { MeteorShowerSolution } from '../../../src/astronomy/meteors/types'
 import { Timescale, timeSubtract, timeToDate, timeYMDHMS } from '../../../src/astronomy/time/time'
 import { deg, normalizeAngle, toDeg } from '../../../src/math/units/angle'
-import { BASE_SOLUTION, HORIZONS_EARTH_STATE, REFERENCE_TDB, REFERENCE_UTC, TOLERANCE, WRAPPED_EXPONENTIAL_PROFILE, WRAPPED_INTERVAL, YEAR_SPECIFIC_SOLUTION } from './util'
+import { BASE_SOLUTION, HORIZONS_EARTH_STATE, METEOR_ANALYTICAL_EPHEMERIS, REFERENCE_TDB, REFERENCE_UTC, TOLERANCE, WRAPPED_EXPONENTIAL_PROFILE, WRAPPED_INTERVAL, YEAR_SPECIFIC_SOLUTION } from './util'
 
 test('solar longitude and geocentric state match the frozen Horizons DE441 state', () => {
 	// Horizons DE441, 2024-01-04 00:00 TDB, geometric Earth relative to Sun,
 	// ecliptic J2000, AU and AU/day. The source computes the opposite Sun-Earth vector.
 	const expectedPosition = HORIZONS_EARTH_STATE.position.map((value) => -value)
 	const expectedVelocity = HORIZONS_EARTH_STATE.velocity.map((value) => -value)
-	const [position, velocity] = meteorSolarRelativeState(REFERENCE_TDB)
+	const [position, velocity] = meteorSolarRelativeState(METEOR_ANALYTICAL_EPHEMERIS, REFERENCE_TDB)
 
 	for (let i = 0; i < 3; i++) {
 		expect(position[i]).toBeCloseTo(expectedPosition[i], 6)
@@ -31,9 +31,9 @@ test('solar longitude and geocentric state match the frozen Horizons DE441 state
 	}
 	// The fixed longitude is atan2(Y, X) of the same Horizons vector; the small residual is
 	// the documented VSOP87E-versus-DE441 ephemeris difference.
-	expect(toDeg(meteorSolarLongitude(REFERENCE_TDB))).toBeCloseTo(282.7674525147974, 4)
-	const solar = meteorSolarState(REFERENCE_TDB)
-	expect(solar.solarLongitude).toBe(meteorSolarLongitude(REFERENCE_TDB))
+	expect(toDeg(meteorSolarLongitude(METEOR_ANALYTICAL_EPHEMERIS, REFERENCE_TDB))).toBeCloseTo(282.7674525147974, 4)
+	const solar = meteorSolarState(METEOR_ANALYTICAL_EPHEMERIS, REFERENCE_TDB)
+	expect(solar.solarLongitude).toBe(meteorSolarLongitude(METEOR_ANALYTICAL_EPHEMERIS, REFERENCE_TDB))
 	for (let i = 0; i < 3; i++) expect(Number.isFinite(solar.sun[i])).toBe(true)
 })
 
@@ -45,15 +45,16 @@ test('signed and forward longitude deltas use their distinct wrap conventions', 
 })
 
 test('solar-longitude inversion is stable at the annual seam and in a leap year', () => {
-	const equinox = timeAtMeteorSolarLongitude(2024, 0, { step: 7, tolerance: TOLERANCE.time })
-	const beforeEquinox = timeAtMeteorSolarLongitude(2024, deg(359), { step: 7, tolerance: TOLERANCE.time })
+	const equinox = timeAtMeteorSolarLongitude(2024, 0, { ephemeris: METEOR_ANALYTICAL_EPHEMERIS, step: 7, tolerance: TOLERANCE.time })
+	const beforeEquinox = timeAtMeteorSolarLongitude(2024, deg(359), { ephemeris: METEOR_ANALYTICAL_EPHEMERIS, step: 7, tolerance: TOLERANCE.time })
 	const equinoxDate = timeToDate(equinox)
 	const beforeDate = timeToDate(beforeEquinox)
 
-	expect(equinoxDate.slice(0, 6)).toEqual([2024, 3, 20, 11, 6, 42])
-	expect(beforeDate.slice(0, 6)).toEqual([2024, 3, 19, 10, 57, 22])
+	// 0.6 s before the Astropy/ERFA epv00 equinox of the cardinal-longitude test below.
+	expect(equinoxDate.slice(0, 6)).toEqual([2024, 3, 20, 11, 6, 43])
+	expect(beforeDate.slice(0, 6)).toEqual([2024, 3, 19, 10, 57, 23])
 	expect(timeSubtract(equinox, beforeEquinox)).toBeCloseTo(1 + 9.3437 / 1440, 5)
-	expect(toDeg(meteorSolarLongitude(equinox))).toBeCloseTo(0, 5)
+	expect(toDeg(meteorSolarLongitudeDelta(meteorSolarLongitude(METEOR_ANALYTICAL_EPHEMERIS, equinox), 0))).toBeCloseTo(0, 5)
 })
 
 test('cardinal solar longitudes agree with frozen ERFA epv00 references', () => {
@@ -65,8 +66,8 @@ test('cardinal solar longitudes agree with frozen ERFA epv00 references', () => 
 		[270, timeYMDHMS(2024, 12, 21, 17, 25, 33.791, Timescale.UTC)],
 	] as const
 	for (const [degrees, reference] of references) {
-		expect(Math.abs(meteorSolarLongitudeDelta(meteorSolarLongitude(reference), deg(degrees)))).toBeLessThan(deg(0.001))
-		const inverse = timeAtMeteorSolarLongitude(2024, deg(degrees), { step: 7, tolerance: TOLERANCE.time })
+		expect(Math.abs(meteorSolarLongitudeDelta(meteorSolarLongitude(METEOR_ANALYTICAL_EPHEMERIS, reference), deg(degrees)))).toBeLessThan(deg(0.001))
+		const inverse = timeAtMeteorSolarLongitude(2024, deg(degrees), { ephemeris: METEOR_ANALYTICAL_EPHEMERIS, step: 7, tolerance: TOLERANCE.time })
 		expect(Math.abs(timeSubtract(inverse, reference))).toBeLessThan(2 / 1440)
 	}
 })
@@ -74,74 +75,74 @@ test('cardinal solar longitudes agree with frozen ERFA epv00 references', () => 
 test('solar-longitude inversion requires a root instead of comparing radians to day tolerance', () => {
 	const start = timeYMDHMS(2023, 1, 1, 0, 0, 0, Timescale.UTC)
 	const end = timeYMDHMS(2024, 1, 1, 0, 0, 0, Timescale.UTC)
-	const finalLongitude = meteorSolarLongitude(end)
-	const annualGap = meteorSolarLongitudeForwardDelta(finalLongitude, meteorSolarLongitude(start))
+	const finalLongitude = meteorSolarLongitude(METEOR_ANALYTICAL_EPHEMERIS, end)
+	const annualGap = meteorSolarLongitudeForwardDelta(finalLongitude, meteorSolarLongitude(METEOR_ANALYTICAL_EPHEMERIS, start))
 	const targetInGap = normalizeAngle(finalLongitude + annualGap * 0.5)
 
 	// This midpoint is about 0.13 day beyond 2023, even though its angular residual is < 0.01 rad.
-	expect(() => timeAtMeteorSolarLongitude(2023, targetInGap, { step: 7, tolerance: 0.01 })).toThrow('does not occur')
+	expect(() => timeAtMeteorSolarLongitude(2023, targetInGap, { ephemeris: METEOR_ANALYTICAL_EPHEMERIS, step: 7, tolerance: 0.01 })).toThrow('does not occur')
 })
 
 test('longitude inversion preserves the requested UTC, TT and TDB output scales', () => {
-	const utc = timeAtMeteorSolarLongitude(2024, deg(20), { scale: Timescale.UTC, step: 7, tolerance: TOLERANCE.time })
-	const tt = timeAtMeteorSolarLongitude(2024, deg(20), { scale: Timescale.TT, step: 7, tolerance: TOLERANCE.time })
-	const tdb = timeAtMeteorSolarLongitude(2024, deg(20), { scale: Timescale.TDB, step: 7, tolerance: TOLERANCE.time })
+	const utc = timeAtMeteorSolarLongitude(2024, deg(20), { ephemeris: METEOR_ANALYTICAL_EPHEMERIS, scale: Timescale.UTC, step: 7, tolerance: TOLERANCE.time })
+	const tt = timeAtMeteorSolarLongitude(2024, deg(20), { ephemeris: METEOR_ANALYTICAL_EPHEMERIS, scale: Timescale.TT, step: 7, tolerance: TOLERANCE.time })
+	const tdb = timeAtMeteorSolarLongitude(2024, deg(20), { ephemeris: METEOR_ANALYTICAL_EPHEMERIS, scale: Timescale.TDB, step: 7, tolerance: TOLERANCE.time })
 
 	expect(utc.scale).toBe(Timescale.UTC)
 	expect(tt.scale).toBe(Timescale.TT)
 	expect(tdb.scale).toBe(Timescale.TDB)
 	expect(timeSubtract(tt, utc, Timescale.UTC)).toBeCloseTo(0, 9)
 	expect(timeSubtract(tdb, utc, Timescale.UTC)).toBeCloseTo(0, 9)
-	expect(toDeg(meteorSolarLongitude(tt))).toBeCloseTo(20, 5)
+	expect(toDeg(meteorSolarLongitude(METEOR_ANALYTICAL_EPHEMERIS, tt))).toBeCloseTo(20, 5)
 })
 
 test('batch longitude inversion preserves order and agrees with scalar inversion around wrap', () => {
-	expect(meteorSolarLongitudeTimes(2024, [])).toEqual([])
+	expect(meteorSolarLongitudeTimes(2024, [], { ephemeris: METEOR_ANALYTICAL_EPHEMERIS })).toEqual([])
 	const longitudes = [deg(180), deg(359.9), deg(0.1), deg(90), deg(270)]
-	const batch = meteorSolarLongitudeTimes(2024, longitudes, { step: 7, tolerance: TOLERANCE.time })
+	const batch = meteorSolarLongitudeTimes(2024, longitudes, { ephemeris: METEOR_ANALYTICAL_EPHEMERIS, step: 7, tolerance: TOLERANCE.time })
 	expect(batch).toHaveLength(longitudes.length)
 	for (let index = 0; index < batch.length; index++) {
-		const scalar = timeAtMeteorSolarLongitude(2024, longitudes[index], { step: 7, tolerance: TOLERANCE.time })
+		const scalar = timeAtMeteorSolarLongitude(2024, longitudes[index], { ephemeris: METEOR_ANALYTICAL_EPHEMERIS, step: 7, tolerance: TOLERANCE.time })
 		expect(timeSubtract(batch[index], scalar)).toBeCloseTo(0, 10)
-		expect(Math.abs(meteorSolarLongitudeDelta(meteorSolarLongitude(batch[index]), longitudes[index]))).toBeLessThan(deg(1e-5))
+		expect(Math.abs(meteorSolarLongitudeDelta(meteorSolarLongitude(METEOR_ANALYTICAL_EPHEMERIS, batch[index]), longitudes[index]))).toBeLessThan(deg(1e-5))
 	}
 })
 
 test('shower dates cross the angular seam and honor year-specific policy', () => {
 	const solution = { ...BASE_SOLUTION, activityInterval: WRAPPED_INTERVAL, referenceSolarLongitude: 0 } satisfies MeteorShowerSolution
-	const dates = meteorShowerDates(solution, 2024, { profile: WRAPPED_EXPONENTIAL_PROFILE, step: 7, tolerance: TOLERANCE.time })
+	const dates = meteorShowerDates(solution, 2024, { ephemeris: METEOR_ANALYTICAL_EPHEMERIS, profile: WRAPPED_EXPONENTIAL_PROFILE, step: 7, tolerance: TOLERANCE.time })
 
 	expect(timeToDate(dates.start!).slice(0, 3)).toEqual([2024, 3, 10])
 	expect(timeToDate(dates.reference!).slice(0, 3)).toEqual([2024, 3, 20])
 	expect(timeToDate(dates.end!).slice(0, 3)).toEqual([2024, 4, 9])
 	expect(timeToDate(dates.maximum!).slice(0, 3)).toEqual([2024, 3, 20])
 
-	expect(meteorShowerDates(YEAR_SPECIFIC_SOLUTION, 2025)).toEqual({})
-	const extrapolated = meteorShowerDates(YEAR_SPECIFIC_SOLUTION, 2025, { extrapolateYearLimitedActivity: true, step: 7 })
+	expect(meteorShowerDates(YEAR_SPECIFIC_SOLUTION, 2025, { ephemeris: METEOR_ANALYTICAL_EPHEMERIS })).toEqual({})
+	const extrapolated = meteorShowerDates(YEAR_SPECIFIC_SOLUTION, 2025, { ephemeris: METEOR_ANALYTICAL_EPHEMERIS, extrapolateYearLimitedActivity: true, step: 7 })
 	expect(extrapolated.start).toBeDefined()
 	const datedOutburst = { ...BASE_SOLUTION, activity: { kind: 'outburst', source: '1989out', years: { start: 1989, end: 1989 } } } satisfies MeteorShowerSolution
-	expect(meteorShowerDates(datedOutburst, 2024)).toEqual({})
-	expect(meteorShowerDates(datedOutburst, 2024, { extrapolateYearLimitedActivity: true, step: 7 }).start).toBeDefined()
+	expect(meteorShowerDates(datedOutburst, 2024, { ephemeris: METEOR_ANALYTICAL_EPHEMERIS })).toEqual({})
+	expect(meteorShowerDates(datedOutburst, 2024, { ephemeris: METEOR_ANALYTICAL_EPHEMERIS, extrapolateYearLimitedActivity: true, step: 7 }).start).toBeDefined()
 	const multiYear = { ...BASE_SOLUTION, activity: { kind: 'yearSpecific', source: '2014-16', years: { start: 2014, end: 2016 } } } satisfies MeteorShowerSolution
-	expect([2013, 2014, 2015, 2016, 2017].map((year) => meteorShowerDates(multiYear, year, { step: 7 }).start !== undefined)).toEqual([false, true, true, true, false])
+	expect([2013, 2014, 2015, 2016, 2017].map((year) => meteorShowerDates(multiYear, year, { ephemeris: METEOR_ANALYTICAL_EPHEMERIS, step: 7 }).start !== undefined)).toEqual([false, true, true, true, false])
 
 	const fullYear = { ...BASE_SOLUTION, activityInterval: { start: 0, end: 0, fullCircle: true } } satisfies MeteorShowerSolution
-	const fullYearDates = meteorShowerDates(fullYear, 2024, { step: 7, tolerance: TOLERANCE.time })
+	const fullYearDates = meteorShowerDates(fullYear, 2024, { ephemeris: METEOR_ANALYTICAL_EPHEMERIS, step: 7, tolerance: TOLERANCE.time })
 	expect(timeSubtract(fullYearDates.end!, fullYearDates.start!)).toBeGreaterThan(365)
 })
 
 test('computation context caches the solar value and retains observer LST', () => {
-	const context = meteorComputationContext(REFERENCE_UTC, deg(123))
+	const context = meteorComputationContext(METEOR_ANALYTICAL_EPHEMERIS, REFERENCE_UTC, deg(123))
 	expect(context.time).toBe(REFERENCE_UTC)
 	expect(context.localSiderealTime).toBe(deg(123))
-	expect(context.solarLongitude).toBe(meteorSolarLongitude(REFERENCE_UTC))
+	expect(context.solarLongitude).toBe(meteorSolarLongitude(METEOR_ANALYTICAL_EPHEMERIS, REFERENCE_UTC))
 })
 
 test('an occurrence crossing the new year keeps its reference and maximum after its start', () => {
 	// Quadrantids (IAU 10, CAMS solution 008): activity 271°-294°, reference 283.1°.
 	const quadrantids = { ...BASE_SOLUTION, activityInterval: { start: deg(271), end: deg(294) }, referenceSolarLongitude: deg(283.1) } satisfies MeteorShowerSolution
 	const profile = { type: 'exponential', support: { start: deg(271), end: deg(294) }, solarLongitude: deg(283.15), zhr: 110, slopeBefore: 0.4, slopeAfter: 0.4 } as const
-	const dates = meteorShowerDates(quadrantids, 2025, { profile, step: 7, tolerance: TOLERANCE.time })
+	const dates = meteorShowerDates(quadrantids, 2025, { ephemeris: METEOR_ANALYTICAL_EPHEMERIS, profile, step: 7, tolerance: TOLERANCE.time })
 
 	expect(timeToDate(dates.start!).slice(0, 3)).toEqual([2025, 12, 22])
 	expect(timeToDate(dates.reference!).slice(0, 3)).toEqual([2026, 1, 3])
@@ -150,11 +151,11 @@ test('an occurrence crossing the new year keeps its reference and maximum after 
 
 	// A reference published just before the start is the crossing of the same year, not of the next.
 	const early = { ...BASE_SOLUTION, activityInterval: { start: deg(100), end: deg(150) }, referenceSolarLongitude: deg(99) } satisfies MeteorShowerSolution
-	const earlyDates = meteorShowerDates(early, 2025, { step: 7, tolerance: TOLERANCE.time })
+	const earlyDates = meteorShowerDates(early, 2025, { ephemeris: METEOR_ANALYTICAL_EPHEMERIS, step: 7, tolerance: TOLERANCE.time })
 	expect(timeSubtract(earlyDates.start!, earlyDates.reference!)).toBeCloseTo(1, 0)
 
 	// Without an interval the reference stays in the requested year.
-	const referenceOnly = meteorShowerDates({ ...BASE_SOLUTION, activityInterval: undefined, referenceSolarLongitude: deg(283.1) }, 2025, { step: 7, tolerance: TOLERANCE.time })
+	const referenceOnly = meteorShowerDates({ ...BASE_SOLUTION, activityInterval: undefined, referenceSolarLongitude: deg(283.1) }, 2025, { ephemeris: METEOR_ANALYTICAL_EPHEMERIS, step: 7, tolerance: TOLERANCE.time })
 	expect(timeToDate(referenceOnly.reference!).slice(0, 3)).toEqual([2025, 1, 3])
 })
 
@@ -163,24 +164,24 @@ test('a start the civil year never reaches starts no occurrence in that year', (
 	// λ☉ 280.21° to 279.95°, so 280.043° occurs on 2025 December 31 and 2027 January 1 but never in 2026.
 	const solution = { ...BASE_SOLUTION, activityInterval: { start: deg(280.043), end: deg(289.761) }, referenceSolarLongitude: deg(283.4) } satisfies MeteorShowerSolution
 
-	const before = meteorShowerDates(solution, 2025, { step: 7, tolerance: TOLERANCE.time })
+	const before = meteorShowerDates(solution, 2025, { ephemeris: METEOR_ANALYTICAL_EPHEMERIS, step: 7, tolerance: TOLERANCE.time })
 	expect(timeToDate(before.start!).slice(0, 3)).toEqual([2025, 12, 31])
 	expect(timeToDate(before.reference!).slice(0, 3)).toEqual([2026, 1, 4])
 	expect(timeToDate(before.end!).slice(0, 3)).toEqual([2026, 1, 10])
-	expect(meteorShowerDates(solution, 2026, { step: 7, tolerance: TOLERANCE.time })).toEqual({})
-	expect(timeToDate(meteorShowerDates(solution, 2027, { step: 7, tolerance: TOLERANCE.time }).start!).slice(0, 3)).toEqual([2027, 1, 1])
-	expect(meteorSolarLongitudeCrossingTimes(2026, [deg(280.043), deg(290)], { step: 7 }).map((time) => time === undefined)).toEqual([true, false])
+	expect(meteorShowerDates(solution, 2026, { ephemeris: METEOR_ANALYTICAL_EPHEMERIS, step: 7, tolerance: TOLERANCE.time })).toEqual({})
+	expect(timeToDate(meteorShowerDates(solution, 2027, { ephemeris: METEOR_ANALYTICAL_EPHEMERIS, step: 7, tolerance: TOLERANCE.time }).start!).slice(0, 3)).toEqual([2027, 1, 1])
+	expect(meteorSolarLongitudeCrossingTimes(2026, [deg(280.043), deg(290)], { ephemeris: METEOR_ANALYTICAL_EPHEMERIS, step: 7 }).map((time) => time === undefined)).toEqual([true, false])
 	// The daily-drift reference of the radiant falls back to the neighboring years.
 	const drifting = { ...solution, referenceSolarLongitude: deg(280.05), rightAscension: deg(230), declination: deg(49), radiantDrift: { basis: 'day', rightAscensionRate: deg(0.8), declinationRate: deg(-0.2) } } satisfies MeteorShowerSolution
 	const time = timeYMDHMS(2026, 6, 1, 0, 0, 0, Timescale.UTC)
-	expect(meteorRadiantJ2000(drifting, { time, solarLongitude: meteorSolarLongitude(time) })).toBeDefined()
+	expect(meteorRadiantJ2000(drifting, { ephemeris: METEOR_ANALYTICAL_EPHEMERIS, time, solarLongitude: meteorSolarLongitude(METEOR_ANALYTICAL_EPHEMERIS, time) })).toBeDefined()
 })
 
 test('the solar longitude of a supplied J2000 equatorial Sun vector is that of VSOP87E for its own Sun', () => {
 	for (const month of [1, 4, 7, 10]) {
 		const time = timeYMDHMS(2026, month, 15, 0, 0, 0, Timescale.UTC)
-		const { sun, solarLongitude } = meteorSolarState(time)
+		const { sun, solarLongitude } = meteorSolarState(METEOR_ANALYTICAL_EPHEMERIS, time)
 		expect(meteorSolarLongitudeOf(sun)).toBeCloseTo(solarLongitude, 12)
-		expect(meteorSolarLongitudeOf(sun)).toBeCloseTo(meteorSolarLongitude(time), 12)
+		expect(meteorSolarLongitudeOf(sun)).toBeCloseTo(meteorSolarLongitude(METEOR_ANALYTICAL_EPHEMERIS, time), 12)
 	}
 })

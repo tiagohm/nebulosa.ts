@@ -3,6 +3,7 @@ import { vecX } from '../../math/linear-algebra/vec3'
 import { brentMinimize } from '../../math/numerical/optimization'
 import { deg, normalizeAngle } from '../../math/units/angle'
 import { equatorialFromJ2000, equatorialToHorizontal } from '../coordinates/coordinate'
+import type { EphemerisSource } from '../ephemeris/source'
 import { riseTransitSet, type RiseTransitSet } from '../events/horizon'
 import { localSiderealTime, type GeographicPosition } from '../observer/location'
 import { timeShift, timeSubtract, timeToDate, type Time } from '../time/time'
@@ -27,9 +28,10 @@ import type {
 // Drift is applied only with its declared unit basis, RA is wrapped after extrapolation, and a
 // declination that crosses a pole is rejected because reflecting it would change the parameterization.
 
-// Per-solution daily-drift caches retain the three adjacent occurrences for each calendar-year/search
-// variant. Weak ownership follows catalog solutions and bounded entries prevent unbounded histories.
-const DAILY_DRIFT_REFERENCE_CACHE = new WeakMap<MeteorShowerSolution, Map<string, readonly Time[]>>()
+// Per-source and per-solution daily-drift caches retain the three adjacent occurrences for each
+// calendar-year/search variant. Weak ownership follows the sources and the catalog solutions, and bounded
+// entries prevent unbounded histories.
+const DAILY_DRIFT_REFERENCE_CACHE = new WeakMap<EphemerisSource, WeakMap<MeteorShowerSolution, Map<string, readonly Time[]>>>()
 const DAILY_DRIFT_REFERENCE_CACHE_LIMIT = 6
 
 // Evaluates a shower solution's radiant at a context instant.
@@ -46,7 +48,7 @@ export function meteorRadiantJ2000(solution: MeteorShowerSolution, context: Mete
 	if (drift.basis === 'solarLongitude') {
 		return meteorRadiantAtSolarLongitude(solution, context.solarLongitude, options)
 	} else {
-		const reference = nearestDailyDriftReference(solution, solution.referenceSolarLongitude, context.time, options)
+		const reference = nearestDailyDriftReference(solution, solution.referenceSolarLongitude, context.time, context.ephemeris, options)
 		delta = timeSubtract(context.time, reference, context.time.scale)
 		if (options.extrapolate === false && delta !== 0) return undefined
 		const limit = options.maxExtrapolationDays ?? 366
@@ -90,7 +92,7 @@ export function meteorRadiantPath(solution: MeteorShowerSolution, startSolarLong
 
 // Samples any fixed, solar-longitude or daily radiant drift over an absolute forward time interval.
 // Times are retained in their input scales, the step is in days, and the final endpoint appears once.
-export function meteorRadiantPathBetween(solution: MeteorShowerSolution, start: Time, end: Time, options: MeteorRadiantTimePathOptions = {}): readonly TimedMeteorRadiantPathPoint[] {
+export function meteorRadiantPathBetween(solution: MeteorShowerSolution, start: Time, end: Time, options: MeteorRadiantTimePathOptions): readonly TimedMeteorRadiantPathPoint[] {
 	const points: TimedMeteorRadiantPathPoint[] = []
 	for (const segment of meteorRadiantPathSegmentsBetween(solution, start, end, options)) for (const point of segment) points.push(point)
 	return points
@@ -98,7 +100,7 @@ export function meteorRadiantPathBetween(solution: MeteorShowerSolution, start: 
 
 // Samples absolute-time radiants into separate continuous runs so unavailable model regions cannot
 // be bridged accidentally by a rendering polyline. Inverted intervals return no segments.
-export function meteorRadiantPathSegmentsBetween(solution: MeteorShowerSolution, start: Time, end: Time, options: MeteorRadiantTimePathOptions = {}): readonly TimedMeteorRadiantPathSegment[] {
+export function meteorRadiantPathSegmentsBetween(solution: MeteorShowerSolution, start: Time, end: Time, options: MeteorRadiantTimePathOptions): readonly TimedMeteorRadiantPathSegment[] {
 	const step = options.step ?? 1
 	if (!(step > 0) || !Number.isFinite(step)) throw new Error('meteor radiant time-path step must be finite and positive')
 
@@ -145,16 +147,16 @@ export function meteorRadiantPathSegmentsBetween(solution: MeteorShowerSolution,
 }
 
 // Evaluates one absolute-time radiant while retaining drift provenance for an available sample.
-function timedMeteorRadiantPoint(solution: MeteorShowerSolution, time: Time, options: MeteorRadiantOptions): TimedMeteorRadiantPathPoint | undefined {
-	const solarLongitude = meteorSolarLongitude(time)
-	const result = meteorRadiantJ2000(solution, { time, solarLongitude }, options)
+function timedMeteorRadiantPoint(solution: MeteorShowerSolution, time: Time, options: MeteorRadiantTimePathOptions): TimedMeteorRadiantPathPoint | undefined {
+	const solarLongitude = meteorSolarLongitude(options.ephemeris, time)
+	const result = meteorRadiantJ2000(solution, { time, solarLongitude, ephemeris: options.ephemeris }, options)
 	return result === undefined ? undefined : { ...result.radiant, solarLongitude, time, extrapolated: result.extrapolated }
 }
 
 // Finds the highest above-horizon radiant position in a bounded interval by coarse sampling followed
 // by a bounded Brent refinement around the best sample. A wholly invisible or unavailable radiant
 // returns undefined.
-export function meteorRadiantMaximumAltitude(solution: MeteorShowerSolution, observer: GeographicPosition, start: Time, end: Time, options: MeteorRadiantMaximumAltitudeOptions = {}): MeteorRadiantMaximumAltitude | undefined {
+export function meteorRadiantMaximumAltitude(solution: MeteorShowerSolution, observer: GeographicPosition, start: Time, end: Time, options: MeteorRadiantMaximumAltitudeOptions): MeteorRadiantMaximumAltitude | undefined {
 	const duration = timeSubtract(end, start)
 	if (!(duration >= 0)) return undefined
 	const step = options.step ?? 1 / 24
@@ -167,9 +169,10 @@ export function meteorRadiantMaximumAltitude(solution: MeteorShowerSolution, obs
 
 	const horizontalAt = (offset: number) => {
 		const time = timeShift(start, offset)
-		const solarLongitude = needsSolarLongitude ? meteorSolarLongitude(time) : fallbackSolarLongitude
-		const radiant = meteorRadiantJ2000(solution, { time, solarLongitude }, options)?.radiant
-		return radiant === undefined ? undefined : meteorRadiantHorizontal(radiant, observer, time, { time, solarLongitude })
+		const solarLongitude = needsSolarLongitude ? meteorSolarLongitude(options.ephemeris, time) : fallbackSolarLongitude
+		const context = { time, solarLongitude, ephemeris: options.ephemeris }
+		const radiant = meteorRadiantJ2000(solution, context, options)?.radiant
+		return radiant === undefined ? undefined : meteorRadiantHorizontal(radiant, observer, time, context)
 	}
 
 	for (let index = 0; index <= panels; index++) {
@@ -215,16 +218,16 @@ function meteorRadiantAtSolarLongitude(solution: MeteorShowerSolution, solarLong
 // on either side of the context year so a December reference remains near a following January date.
 // A seven-day coarse scan is safe for the one monotonic annual solar-longitude root and avoids the
 // general hourly event-search default before the result is cached.
-function nearestDailyDriftReference(solution: MeteorShowerSolution, referenceSolarLongitude: number, time: Time, options: MeteorRadiantOptions): Time {
+function nearestDailyDriftReference(solution: MeteorShowerSolution, referenceSolarLongitude: number, time: Time, ephemeris: EphemerisSource, options: MeteorRadiantOptions): Time {
 	const [year] = timeToDate(time)
 	const key = dailyDriftReferenceKey(year, time, options)
-	const cached = DAILY_DRIFT_REFERENCE_CACHE.get(solution)?.get(key)
+	const cached = DAILY_DRIFT_REFERENCE_CACHE.get(ephemeris)?.get(solution)?.get(key)
 	if (cached !== undefined) return nearestDailyDriftReferenceAt(time, cached)
 
-	const search = { step: 7, ...options.solarLongitudeSearch, scale: time.scale }
+	const search = { step: 7, ...options.solarLongitudeSearch, scale: time.scale, ephemeris }
 	// A reference longitude the civil year never reaches occurs in both neighboring years, so at least two remain.
 	const references = [year - 1, year, year + 1].flatMap((civilYear) => meteorSolarLongitudeCrossingTimes(civilYear, [referenceSolarLongitude], search).filter((reference) => reference !== undefined))
-	cacheDailyDriftReference(solution, key, references)
+	cacheDailyDriftReference(ephemeris, solution, key, references)
 	return nearestDailyDriftReferenceAt(time, references)
 }
 
@@ -254,12 +257,19 @@ function dailyDriftReferenceKey(year: number, time: Time, options: MeteorRadiant
 }
 
 // Stores one reference while evicting the oldest entry after the fixed per-solution capacity.
-function cacheDailyDriftReference(solution: MeteorShowerSolution, key: string, references: readonly Time[]): void {
-	let cache = DAILY_DRIFT_REFERENCE_CACHE.get(solution)
+function cacheDailyDriftReference(ephemeris: EphemerisSource, solution: MeteorShowerSolution, key: string, references: readonly Time[]): void {
+	let solutions = DAILY_DRIFT_REFERENCE_CACHE.get(ephemeris)
+
+	if (solutions === undefined) {
+		solutions = new WeakMap()
+		DAILY_DRIFT_REFERENCE_CACHE.set(ephemeris, solutions)
+	}
+
+	let cache = solutions.get(solution)
 
 	if (cache === undefined) {
 		cache = new Map()
-		DAILY_DRIFT_REFERENCE_CACHE.set(solution, cache)
+		solutions.set(solution, cache)
 	}
 
 	if (cache.size >= DAILY_DRIFT_REFERENCE_CACHE_LIMIT) {
@@ -293,7 +303,7 @@ function meteorRadiantHorizontalFromOfDate(radiant: MeteorRadiant, ofDate: Meteo
 // Computes rise, upper transit and set for a possibly drifting shower radiant over the requested
 // window. The shared horizon finder classifies the full interval and is not replaced by a one-sample
 // circumpolar test.
-export function meteorRadiantRiseTransitSet(solution: MeteorShowerSolution, observer: GeographicPosition, time: Time, options: import('./types').MeteorRadiantRiseTransitSetOptions = {}): RiseTransitSet | undefined {
+export function meteorRadiantRiseTransitSet(solution: MeteorShowerSolution, observer: GeographicPosition, time: Time, options: import('./types').MeteorRadiantRiseTransitSetOptions): RiseTransitSet | undefined {
 	if (solution.rightAscension === undefined || solution.declination === undefined) return undefined
 
 	const stop = timeShift(time, options.window ?? 1)
@@ -303,7 +313,7 @@ export function meteorRadiantRiseTransitSet(solution: MeteorShowerSolution, obse
 
 	const result = riseTransitSet(
 		(current) => {
-			const context: MeteorComputationContext = { time: current, solarLongitude: needsSolarLongitude ? meteorSolarLongitude(current) : fallbackSolarLongitude, localSiderealTime: localSiderealTime(current, observer) }
+			const context: MeteorComputationContext = { time: current, solarLongitude: needsSolarLongitude ? meteorSolarLongitude(options.ephemeris, current) : fallbackSolarLongitude, localSiderealTime: localSiderealTime(current, observer), ephemeris: options.ephemeris }
 			const result = meteorRadiantJ2000(solution, context, options)
 			if (result === undefined) {
 				if (timeSubtract(current, time) >= 0 && timeSubtract(stop, current) >= 0) unavailable = true

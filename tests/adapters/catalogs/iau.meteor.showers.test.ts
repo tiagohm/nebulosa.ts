@@ -135,19 +135,19 @@ test('normalized IAU bounds and daily drift feed time paths and tri-state shower
 	})
 	const solution = normalizeIauMeteorShowerCatalog(catalog).showers[0].solutions[0]
 	expect(solution.radiantDrift?.basis).toBe('day')
-	const start = timeAtMeteorSolarLongitude(2015, solution.referenceSolarLongitude!, { step: 7 })
+	const start = timeAtMeteorSolarLongitude(2015, solution.referenceSolarLongitude!, { ephemeris: METEOR_ANALYTICAL_EPHEMERIS, step: 7 })
 	const end = timeShift(start, 2)
-	const path = meteorRadiantPathBetween(solution, start, end, { step: 1, solarLongitudeSearch: { step: 7 } })
+	const path = meteorRadiantPathBetween(solution, start, end, { ephemeris: METEOR_ANALYTICAL_EPHEMERIS, step: 1, solarLongitudeSearch: { step: 7 } })
 
 	expect(path).toHaveLength(3)
 	expect(path[1].rightAscension).toBeGreaterThan(path[0].rightAscension)
 	expect(path[1].declination).toBeGreaterThan(path[0].declination)
-	const context = { time: start, solarLongitude: meteorSolarLongitude(start), ephemeris: METEOR_ANALYTICAL_EPHEMERIS }
+	const context = { time: start, solarLongitude: meteorSolarLongitude(METEOR_ANALYTICAL_EPHEMERIS, start), ephemeris: METEOR_ANALYTICAL_EPHEMERIS }
 	const options = { includeHorizontal: false, includeMoon: false, includeRadiantOfDate: false, includeSun: false } as const
 	expect(meteorShowerState(solution, context, options).active).toBe(true)
 	expect(meteorShowerState({ ...solution, activityInterval: undefined }, context, options).active).toBeUndefined()
-	const future = timeAtMeteorSolarLongitude(2017, solution.referenceSolarLongitude!, { step: 7 })
-	expect(meteorShowerState(solution, { time: future, solarLongitude: meteorSolarLongitude(future), ephemeris: METEOR_ANALYTICAL_EPHEMERIS }, options).active).toBe(false)
+	const future = timeAtMeteorSolarLongitude(2017, solution.referenceSolarLongitude!, { ephemeris: METEOR_ANALYTICAL_EPHEMERIS, step: 7 })
+	expect(meteorShowerState(solution, { time: future, solarLongitude: meteorSolarLongitude(METEOR_ANALYTICAL_EPHEMERIS, future), ephemeris: METEOR_ANALYTICAL_EPHEMERIS }, options).active).toBe(false)
 })
 
 test('reads slash suffixes above 12 as survey year ranges and keeps month suffixes as one year', () => {

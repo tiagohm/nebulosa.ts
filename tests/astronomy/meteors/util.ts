@@ -1,5 +1,5 @@
-import { meteorMoonDirection, meteorSunDirection } from '../../../src/astronomy/meteors/observation'
-import type { MeteorActivityProfile, MeteorEphemeris, MeteorExponentialActivityProfile, MeteorSolarLongitudeInterval, MeteorShowerSolution, MeteorVisualObservation } from '../../../src/astronomy/meteors/types'
+import { analyticalEphemerisSource } from '../../../src/astronomy/ephemeris/source'
+import type { MeteorActivityProfile, MeteorExponentialActivityProfile, MeteorSolarLongitudeInterval, MeteorShowerSolution, MeteorVisualObservation } from '../../../src/astronomy/meteors/types'
 import { Ellipsoid, geodeticLocation } from '../../../src/astronomy/observer/location'
 import { Timescale, timeYMDHMS } from '../../../src/astronomy/time/time'
 import { deg } from '../../../src/math/units/angle'
@@ -8,8 +8,8 @@ import { kilometerPerSecond } from '../../../src/math/units/velocity'
 
 // Shared deterministic epochs, observer, normalized solutions, activity profiles and external-reference tolerances for meteor tests.
 
-// The toolkit's VSOP87E Sun and ELPMPP02 Moon at every sample, the ephemeris of the planner tests.
-export const METEOR_ANALYTICAL_EPHEMERIS: MeteorEphemeris = { sun: meteorSunDirection, moon: meteorMoonDirection }
+// The toolkit's theories (the VSOP87E Sun and Earth, the ELPMPP02 Moon) at every sample, the source of the meteor tests.
+export const METEOR_ANALYTICAL_EPHEMERIS = analyticalEphemerisSource
 
 export const REFERENCE_UTC = timeYMDHMS(2024, 1, 4, 0, 0, 0, Timescale.UTC)
 export const REFERENCE_TDB = timeYMDHMS(2024, 1, 4, 0, 0, 0, Timescale.TDB)
@@ -36,7 +36,8 @@ export const SOLAR_DRIFT_SOLUTION = {
 
 export const DAILY_DRIFT_SOLUTION = {
 	...BASE_SOLUTION,
-	referenceSolarLongitude: deg(282.76828982389947),
+	// The solar longitude of the analytical source at REFERENCE_UTC.
+	referenceSolarLongitude: deg(282.76827660166526),
 	rightAscension: deg(359),
 	declination: deg(10),
 	radiantDrift: { basis: 'day', rightAscensionRate: deg(1), declinationRate: deg(-0.25) },

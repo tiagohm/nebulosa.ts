@@ -13,11 +13,12 @@ import {
 	meteorShowerActivityYearApplies,
 	meteorSolarLongitudeForwardDelta,
 } from '../../../src/astronomy/meteors/activity'
+import { meteorSolarLongitude } from '../../../src/astronomy/meteors/solar'
 import type { MeteorActivityProfile } from '../../../src/astronomy/meteors/types'
-import { timeYMDHMS, Timescale, tt, tdb } from '../../../src/astronomy/time/time'
+import { timeYMDHMS, Timescale, tt, tdb, type Time } from '../../../src/astronomy/time/time'
 import { PI } from '../../../src/core/constants'
 import { deg, toDeg } from '../../../src/math/units/angle'
-import { EXPONENTIAL_PROFILE, MULTI_PEAK_PROFILE, REFERENCE_UTC, SAMPLED_PROFILE, WRAPPED_EXPONENTIAL_PROFILE, WRAPPED_INTERVAL, ZERO_WIDTH_INTERVAL } from './util'
+import { EXPONENTIAL_PROFILE, METEOR_ANALYTICAL_EPHEMERIS, MULTI_PEAK_PROFILE, REFERENCE_UTC, SAMPLED_PROFILE, WRAPPED_EXPONENTIAL_PROFILE, WRAPPED_INTERVAL, ZERO_WIDTH_INTERVAL } from './util'
 
 test('circular intervals handle the 0/2π seam and expose phase', () => {
 	expect(meteorSolarLongitudeForwardDelta(deg(350), deg(10))).toBeCloseTo(deg(20), 14)
@@ -191,6 +192,6 @@ test('activity integration uses Simpson for even panels and trapezoids otherwise
 	).toBeCloseTo(120 * 24, 12)
 	expect(samples).toBe(4)
 	expect(integrateMeteorZhr(EXPONENTIAL_PROFILE, end, start, { solarLongitude: () => deg(100) })).toBe(0)
-	expect(() => integrateMeteorZhr(EXPONENTIAL_PROFILE, start, end, { step: 0 })).toThrow('finite and positive')
-	expect(() => integrateMeteorZhr(EXPONENTIAL_PROFILE, start, end, { step: Number.POSITIVE_INFINITY })).toThrow('finite and positive')
+	expect(() => integrateMeteorZhr(EXPONENTIAL_PROFILE, start, end, { solarLongitude: (time: Time) => meteorSolarLongitude(METEOR_ANALYTICAL_EPHEMERIS, time), step: 0 })).toThrow('finite and positive')
+	expect(() => integrateMeteorZhr(EXPONENTIAL_PROFILE, start, end, { solarLongitude: (time: Time) => meteorSolarLongitude(METEOR_ANALYTICAL_EPHEMERIS, time), step: Number.POSITIVE_INFINITY })).toThrow('finite and positive')
 })

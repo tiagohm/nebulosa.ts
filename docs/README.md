@@ -3084,6 +3084,7 @@ ZHR(λ☉) = ZHRmax · 10^(−b · |λ☉ − λmax|)   (b in decades per degree
 A catalog solution only carries the interval of solar longitude where the shower is active. The ZHR curve itself is explicit, caller-supplied data: a single exponential peak with separate rise and decay slopes, interpolated samples, or a sum of exponential components for showers with several peaks; it is zero outside its support. All longitudes are geocentric solar longitudes in radians (see [Meteor Solar Longitude](#meteor-solar-longitude)), and intervals advance in increasing longitude, so a window such as 350°–20° wraps through 0. Integrated over time, the ZHR gives the meteors an ideal observer would see; for the rates of a real observer see [Meteor Visual Rates](#meteor-visual-rates).
 
 ```ts
+import { analyticalEphemerisSource } from 'nebulosa/src/astronomy/ephemeris/source'
 import {
 	integrateMeteorZhr,
 	isMeteorShowerActive,
@@ -3097,6 +3098,7 @@ import {
 	meteorActivityZhr,
 	meteorShowerActivityYearApplies,
 } from 'nebulosa/src/astronomy/meteors/activity'
+import { meteorSolarLongitude } from 'nebulosa/src/astronomy/meteors/solar'
 import type { MeteorActivityProfile, MeteorShowerActivity } from 'nebulosa/src/astronomy/meteors/types'
 import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
 import { deg, toDeg } from 'nebulosa/src/math/units/angle'
@@ -3127,7 +3129,7 @@ console.log(isMeteorShowerActivityYearLimited(outburst), meteorShowerActivityYea
 
 // The ZHR integrated over a time span, in ZHR·hours.
 const quadrantids: MeteorActivityProfile = { type: 'exponential', support: { start: deg(280), end: deg(286) }, solarLongitude: deg(283), zhr: 110, slopeBefore: 0.2, slopeAfter: 0.2 }
-console.log(integrateMeteorZhr(quadrantids, timeYMDHMS(2024, 1, 3, 12, 0, 0, Timescale.UTC), timeYMDHMS(2024, 1, 4, 12, 0, 0, Timescale.UTC))) // 2302.26
+console.log(integrateMeteorZhr(quadrantids, timeYMDHMS(2024, 1, 3, 12, 0, 0, Timescale.UTC), timeYMDHMS(2024, 1, 4, 12, 0, 0, Timescale.UTC), { solarLongitude: (time) => meteorSolarLongitude(analyticalEphemerisSource, time) })) // 2302.25
 ```
 
 ### Meteor Observing Windows
@@ -3142,10 +3144,11 @@ HR = ZHR · sin^γ(h) / (F · r^(6.5 − lm))
 
 Most catalog showers have no activity profile, so `meteorGeometricObservingWindows` plans the same constraints without one and returns the windows in chronological order, with a geometric opportunity measure (the integral of the sine of the radiant altitude) that is never a meteor count.
 
-Both planners take the Sun and the Moon of every sample from an ephemeris the caller chooses, which also gives the solar longitude of the activity. `meteorSunDirection` and `meteorMoonDirection` give the toolkit's VSOP87E Sun and ELPMPP02 Moon; a search evaluates hundreds of samples and an ELPMPP02 evaluation costs about 10 ms, so an application that plans many nights should supply geocentric J2000 vectors from SPK kernels or interpolated between hourly nodes, which changes the windows by well under a second. The conditions at one instant, the altitudes of the Sun, the Moon, and the radiant, the lunar illumination, and the Moon-radiant separation, are available directly, and are what a rate-correction callback receives.
+Both planners take the Sun and the Moon of every sample from the [ephemeris source](#ephemeris-sources) the caller chooses, which also gives the solar longitude of the activity: the SPK kernels, or the analytical theories. A search evaluates hundreds of samples and an ELPMPP02 evaluation costs about 10 ms, so pass an interpolated source, which changes the windows by well under a second. The conditions at one instant, the altitudes of the Sun, the Moon, and the radiant, the lunar illumination, and the Moon-radiant separation, are available directly, and are what a rate-correction callback receives.
 
 ```ts
-import { meteorMoonDirection, meteorMoonIllumination, meteorObservationContext, meteorObservingConditionsAt, meteorSunDirection } from 'nebulosa/src/astronomy/meteors/observation'
+import { analyticalEphemerisSource, interpolatedEphemerisSource, relativeEphemerisState } from 'nebulosa/src/astronomy/ephemeris/source'
+import { meteorMoonIllumination, meteorObservationContext, meteorObservingConditionsAt } from 'nebulosa/src/astronomy/meteors/observation'
 import { meteorGeometricObservingWindows, meteorObservingWindows } from 'nebulosa/src/astronomy/meteors/planner'
 import type { MeteorActivityProfile, MeteorShowerSolution } from 'nebulosa/src/astronomy/meteors/types'
 import { Ellipsoid, geodeticLocation } from 'nebulosa/src/astronomy/observer/location'
@@ -3161,8 +3164,8 @@ const observer = geodeticLocation(deg(-8), deg(40), meter(100), Ellipsoid.WGS84)
 const start = timeYMDHMS(2024, 1, 3, 12, 0, 0, Timescale.UTC)
 const end = timeYMDHMS(2024, 1, 5, 12, 0, 0, Timescale.UTC)
 
-// The Sun and the Moon of every sample: here the toolkit's theories.
-const ephemeris = { sun: meteorSunDirection, moon: meteorMoonDirection }
+// The Sun and the Moon of every sample: here the toolkit's theories, interpolated for the window searches.
+const ephemeris = interpolatedEphemerisSource(analyticalEphemerisSource)
 
 // Dark-sky windows with their expected counts, most productive first, for a limiting magnitude of 6.0.
 const [best] = meteorObservingWindows(solution, profile, observer, start, end, { ephemeris, limitingMagnitude: 6, populationIndex: 2.1, minimumDurationHours: 0.5 })
@@ -3176,13 +3179,13 @@ for (const window of meteorGeometricObservingWindows(solution, observer, start, 
 
 // The Sun, Moon, and radiant at one instant, with the solar longitude and sidereal time computed once in a context.
 const instant = timeYMDHMS(2024, 1, 4, 3, 0, 0, Timescale.UTC)
-const context = meteorObservationContext(instant, observer)
+const context = meteorObservationContext(ephemeris, instant, observer)
 const conditions = meteorObservingConditionsAt({ rightAscension: deg(230.1), declination: deg(48.5) }, observer, instant, ephemeris, context)
 
 console.log(toDeg(conditions.sunAltitude), conditions.moonIllumination, toDeg(conditions.radiant.altitude)) // −55.22 0.5034 28.70
 
 // The geocentric J2000 Sun and Moon vectors (AU), and the illuminated lunar fraction from them.
-console.log(meteorMoonIllumination(meteorSunDirection(instant), meteorMoonDirection(instant))) // 0.5034
+console.log(meteorMoonIllumination(relativeEphemerisState(ephemeris, 10, 399, instant)[0], relativeEphemerisState(ephemeris, 301, 399, instant)[0])) // 0.5034
 ```
 
 ### Meteor Orbit Reconstruction
@@ -3194,6 +3197,7 @@ States and elements are heliocentric in the **ecliptic J2000** frame, the frame 
 The inverse question is where a stream with known elements (`q`, `e`, `ω`, `Ω`, `i`, without epoch) meets the Earth. A stream can only produce meteors near one of its two nodes, where its orbit crosses the ecliptic; each node gives a candidate geocentric radiant and speed, and the Earth-node distance tells whether the Earth actually passes close to it. Choosing the distance limit that makes a node a real encounter is left to the caller.
 
 ```ts
+import { analyticalEphemerisSource } from 'nebulosa/src/astronomy/ephemeris/source'
 import { meteorHeliocentricState, meteorOrbitFromRadiant, meteorStreamOrbitNodeEncounters } from 'nebulosa/src/astronomy/meteors/orbit'
 import type { MeteorCompleteStreamOrbit, MeteorRadiant } from 'nebulosa/src/astronomy/meteors/types'
 import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
@@ -3206,17 +3210,17 @@ const speed = kilometerPerSecond(33.8)
 const time = timeYMDHMS(2023, 12, 14, 12, 0, 0, Timescale.UTC)
 
 // Heliocentric state of the meteoroid (AU, AU/day, ecliptic J2000) and the Earth state used.
-const state = meteorHeliocentricState(radiant, speed, time)
+const state = meteorHeliocentricState(radiant, speed, time, analyticalEphemerisSource)
 console.log(state.position, state.velocity)
 
 // The same state as a Kepler orbit.
-const orbit = meteorOrbitFromRadiant(radiant, speed, time)
+const orbit = meteorOrbitFromRadiant(radiant, speed, time, analyticalEphemerisSource)
 console.log(orbit.semiMajorAxis, orbit.eccentricity, toDeg(orbit.inclination)) // 1.3517 AU, 0.88773, 22.02°
 
 // Candidate radiants at the two nodes of a stream orbit, with the Earth-node distance (AU).
 const stream: MeteorCompleteStreamOrbit = { perihelionDistance: 0.14, eccentricity: 0.89, argumentOfPerihelion: deg(324.3), longitudeOfAscendingNode: deg(261.2), inclination: deg(22.9) }
 
-for (const encounter of meteorStreamOrbitNodeEncounters(stream, time)) {
+for (const encounter of meteorStreamOrbitNodeEncounters(stream, time, analyticalEphemerisSource)) {
 	console.log(encounter.node, toDeg(encounter.radiant.rightAscension), toDeg(encounter.radiant.declination), toKilometerPerSecond(encounter.geocentricSpeed), encounter.earthNodeDistance)
 }
 // ascending 152.94 −7.239 131.53 1.138 — the Earth is 1.14 AU from this node
@@ -3236,6 +3240,7 @@ D_SH² = (q₂ − q₁)² + (e₂ − e₁)² + (2 sin(I/2))² + (ē · 2 sin(�
 The three values are not on the same scale and must not be compared with each other's thresholds. A criterion is undefined when the geometry is singular, for an orbit in the ecliptic (`i` of 0 or π) whose node does not exist.
 
 ```ts
+import { analyticalEphemerisSource } from 'nebulosa/src/astronomy/ephemeris/source'
 import { meteorComparableOrbitFromKepler, meteorDDrummond, meteorDJopek, meteorDSouthworthHawkins, meteorOrbitFromRadiant } from 'nebulosa/src/astronomy/meteors/orbit'
 import type { MeteorComparableOrbit } from 'nebulosa/src/astronomy/meteors/types'
 import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
@@ -3244,7 +3249,7 @@ import { kilometerPerSecond } from 'nebulosa/src/math/units/velocity'
 
 // Orbit reconstructed from a Geminid-like radiant and speed, reduced to the compared elements.
 const time = timeYMDHMS(2023, 12, 14, 12, 0, 0, Timescale.UTC)
-const measured = meteorComparableOrbitFromKepler(meteorOrbitFromRadiant({ rightAscension: deg(112.5), declination: deg(32.3) }, kilometerPerSecond(33.8), time))!
+const measured = meteorComparableOrbitFromKepler(meteorOrbitFromRadiant({ rightAscension: deg(112.5), declination: deg(32.3) }, kilometerPerSecond(33.8), time, analyticalEphemerisSource))!
 
 // Mean orbit of the stream (AU and radians).
 const stream: MeteorComparableOrbit = { perihelionDistance: 0.14, eccentricity: 0.89, inclination: deg(22.9), longitudeOfAscendingNode: deg(261.2), argumentOfPerihelion: deg(324.3) }
@@ -3262,6 +3267,7 @@ A meteor radiant is the point of the sky from which the meteors of a shower appe
 For a local observer the radiant is precessed and nutated to the true equator of date and rotated to the horizon with the apparent sidereal time; azimuth is measured north through east and no refraction is applied. The radiant altitude governs how many meteors are seen (see [Meteor Visual Rates](#meteor-visual-rates)), so planning needs when the radiant rises, culminates, and sets. The rise and set instants use the standard horizon altitude of the shared event finder, not the geometric crossing of zero altitude.
 
 ```ts
+import { analyticalEphemerisSource } from 'nebulosa/src/astronomy/ephemeris/source'
 import {
 	meteorRadiantDegrees,
 	meteorRadiantHorizontal,
@@ -3295,15 +3301,15 @@ const observer = geodeticLocation(deg(-8), deg(40), meter(100), Ellipsoid.WGS84)
 const time = timeYMDHMS(2024, 1, 4, 5, 0, 0, Timescale.UTC)
 
 // Geocentric J2000 radiant at the instant, with the drift applied away from the reference.
-const result = meteorRadiantJ2000(solution, meteorComputationContext(time))!
+const result = meteorRadiantJ2000(solution, meteorComputationContext(analyticalEphemerisSource, time))!
 console.log(toDeg(result.radiant.rightAscension), toDeg(result.radiant.declination), result.extrapolated) // 229.924 48.544 true
 
 // A radiant from catalog degrees, and its unit J2000 direction vector.
 console.log(meteorRadiantVector(meteorRadiantDegrees(230.1, 48.5))) // [-0.4250, -0.5083, 0.7490]
 
 // Radiant path sampled daily between two instants; the segments variant splits it where the model is unavailable.
-const path = meteorRadiantPathBetween(solution, timeYMDHMS(2024, 1, 3, 0, 0, 0, Timescale.UTC), timeYMDHMS(2024, 1, 5, 0, 0, 0, Timescale.UTC))
-const segments = meteorRadiantPathSegmentsBetween(solution, timeYMDHMS(2024, 1, 3, 0, 0, 0, Timescale.UTC), timeYMDHMS(2024, 1, 5, 0, 0, 0, Timescale.UTC))
+const path = meteorRadiantPathBetween(solution, timeYMDHMS(2024, 1, 3, 0, 0, 0, Timescale.UTC), timeYMDHMS(2024, 1, 5, 0, 0, 0, Timescale.UTC), { ephemeris: analyticalEphemerisSource })
+const segments = meteorRadiantPathSegmentsBetween(solution, timeYMDHMS(2024, 1, 3, 0, 0, 0, Timescale.UTC), timeYMDHMS(2024, 1, 5, 0, 0, 0, Timescale.UTC), { ephemeris: analyticalEphemerisSource })
 
 // Radiant path over solar longitude in 1° steps, for a drift declared per radian of solar longitude.
 const perLongitude: MeteorShowerSolution = { ...solution, radiantDrift: { basis: 'solarLongitude', rightAscensionRate: 0.8, declinationRate: -0.2 } }
@@ -3314,8 +3320,8 @@ const ofDate = meteorRadiantOfDate(result.radiant, time)
 const horizontal = meteorRadiantHorizontal(result.radiant, observer, time)
 
 // Highest altitude in an interval, and the rise, transit, and set instants with their classification.
-const highest = meteorRadiantMaximumAltitude(solution, observer, timeYMDHMS(2024, 1, 4, 0, 0, 0, Timescale.UTC), timeYMDHMS(2024, 1, 5, 0, 0, 0, Timescale.UTC))
-const events = meteorRadiantRiseTransitSet(solution, observer, time)
+const highest = meteorRadiantMaximumAltitude(solution, observer, timeYMDHMS(2024, 1, 4, 0, 0, 0, Timescale.UTC), timeYMDHMS(2024, 1, 5, 0, 0, 0, Timescale.UTC), { ephemeris: analyticalEphemerisSource })
+const events = meteorRadiantRiseTransitSet(solution, observer, time, { ephemeris: analyticalEphemerisSource })
 console.log(meteorRadiantVisibility(events)) // risesAndSets
 ```
 
@@ -3323,10 +3329,10 @@ console.log(meteorRadiantVisibility(events)) // risesAndSets
 
 Planning a night of meteor observing needs, for each shower, a snapshot of several quantities at once: whether the shower is active, its expected zenithal hourly rate (ZHR), where its radiant is in the sky, and how dark the sky is, from the Sun's depression and the Moon's altitude, phase, and distance to the radiant. These are what decide whether a shower is worth watching at a given hour.
 
-The quantities that do not depend on the shower (solar longitude, sidereal time, Sun and Moon directions and altitudes, lunar illumination) are computed once in a computation context and shared by any number of shower solutions, so a whole catalog costs one ephemeris evaluation. The Sun and the Moon come from an ephemeris the caller supplies, such as SPK positions or the toolkit's `meteorSunDirection` and `meteorMoonDirection`, and the solar longitude from that same Sun. Without an observer the context is geocentric and the state has no local geometry. Activity and ZHR come from the catalog interval and from an optional activity profile; all altitudes are geometric, without refraction.
+The quantities that do not depend on the shower (solar longitude, sidereal time, Sun and Moon directions and altitudes, lunar illumination) are computed once in a computation context and shared by any number of shower solutions, so a whole catalog costs one ephemeris evaluation. The Sun and the Moon come from the [ephemeris source](#ephemeris-sources) the caller supplies, the SPK kernels or the analytical theories, and the solar longitude from that same Sun. Without an observer the context is geocentric and the state has no local geometry. Activity and ZHR come from the catalog interval and from an optional activity profile; all altitudes are geometric, without refraction.
 
 ```ts
-import { meteorMoonDirection, meteorSunDirection } from 'nebulosa/src/astronomy/meteors/observation'
+import { analyticalEphemerisSource } from 'nebulosa/src/astronomy/ephemeris/source'
 import { meteorShowerComputationContext, meteorShowerState, meteorShowerStates } from 'nebulosa/src/astronomy/meteors/state'
 import type { MeteorActivityProfile, MeteorShowerSolution } from 'nebulosa/src/astronomy/meteors/types'
 import { Ellipsoid, geodeticLocation } from 'nebulosa/src/astronomy/observer/location'
@@ -3340,7 +3346,7 @@ const profile: MeteorActivityProfile = { type: 'exponential', support: { start: 
 
 // Shared Sun, Moon, and sidereal-time quantities for one observer and instant, with the toolkit's theories.
 const observer = geodeticLocation(deg(-8), deg(40), meter(100), Ellipsoid.WGS84) // longitude, latitude, height
-const context = meteorShowerComputationContext(timeYMDHMS(2024, 1, 4, 5, 0, 0, Timescale.UTC), observer, { ephemeris: { sun: meteorSunDirection, moon: meteorMoonDirection } })
+const context = meteorShowerComputationContext(timeYMDHMS(2024, 1, 4, 5, 0, 0, Timescale.UTC), observer, { ephemeris: analyticalEphemerisSource })
 
 // Activity, ZHR, radiant, and sky circumstances of one shower.
 const state = meteorShowerState(quadrantids, context, { profile })
@@ -3356,21 +3362,22 @@ const states = meteorShowerStates([{ solution: quadrantids, profile }], context)
 
 Meteor catalogs locate a shower by the solar longitude `λ☉`, the Sun's ecliptic longitude, rather than by calendar date. A shower happens when the Earth crosses a meteoroid stream, which occurs at a fixed point of the Earth's orbit, so `λ☉` is the same every year, while the calendar date of that point wanders because of leap years and the calendar.
 
-The meteor modules compute it as the geometric geocentric longitude of the Sun in the **J2000 ecliptic**, from the VSOP87E Sun and Earth positions, with no light-time, aberration, or precession to the date, which is the convention of meteor catalogs. A caller that takes the Sun from another ephemeris, such as SPK kernels, derives the longitude from that Sun vector instead, so the activity and the darkness of a computation come from one ephemeris. Because the frame is fixed at J2000, longitude 0° is reached about eight hours after the 2024 March equinox, not at it. Longitudes are in radians in `[0, 2π)`.
+The meteor modules compute it as the geometric geocentric longitude of the Sun in the **J2000 ecliptic**, from the Sun and the Earth of an [ephemeris source](#ephemeris-sources) (SPK kernels or the VSOP87E theory) rotated from ICRF axes, with no light-time, aberration, or precession to the date, which is the convention of meteor catalogs. A Sun vector the caller already has gives its longitude directly, so the activity and the darkness of a computation come from one ephemeris. Because the frame is fixed at J2000, longitude 0° is reached about eight hours after the 2024 March equinox, not at it. Longitudes are in radians in `[0, 2π)`.
 
 Converting a longitude to a time searches one civil UTC year. A civil year is shorter than the orbital period, so a fraction of a degree of longitude at the year turn (around 280° today) does not occur in a given year; the plain solver throws there, while the crossing solver answers `undefined`. The dates of a shower solution (start, reference, end, and the maximum of an explicit activity profile) are resolved for the occurrence that starts in the requested year, so an interval that wraps through the new year ends in the following year. The catalog reference longitude is the mean activity longitude, not necessarily the ZHR maximum.
 
 ```ts
+import { analyticalEphemerisSource } from 'nebulosa/src/astronomy/ephemeris/source'
 import { meteorShowerDates, meteorSolarLongitude, meteorSolarLongitudeCrossingTimes, meteorSolarLongitudeDelta, meteorSolarLongitudeForwardDelta, meteorSolarLongitudeOf, meteorSolarLongitudeTimes, meteorSolarState, timeAtMeteorSolarLongitude } from 'nebulosa/src/astronomy/meteors/solar'
 import type { MeteorShowerSolution } from 'nebulosa/src/astronomy/meteors/types'
 import { Timescale, timeToDate, timeYMDHMS, utc } from 'nebulosa/src/astronomy/time/time'
 import { deg, toDeg } from 'nebulosa/src/math/units/angle'
 
 // Solar longitude (J2000 ecliptic) at an instant.
-console.log(toDeg(meteorSolarLongitude(timeYMDHMS(2024, 1, 4, 0, 0, 0, Timescale.UTC)))) // 282.768 — degrees
+console.log(toDeg(meteorSolarLongitude(analyticalEphemerisSource, timeYMDHMS(2024, 1, 4, 0, 0, 0, Timescale.UTC)))) // 282.768 — degrees
 
 // The same longitude with the geocentric J2000 equatorial Sun vector (AU) from one ephemeris evaluation.
-const state = meteorSolarState(timeYMDHMS(2024, 1, 4, 0, 0, 0, Timescale.UTC))
+const state = meteorSolarState(analyticalEphemerisSource, timeYMDHMS(2024, 1, 4, 0, 0, 0, Timescale.UTC))
 
 // The longitude of a geocentric J2000 equatorial Sun vector supplied by another ephemeris.
 console.log(toDeg(meteorSolarLongitudeOf(state.sun))) // 282.768 — degrees
@@ -3379,17 +3386,17 @@ console.log(toDeg(meteorSolarLongitudeOf(state.sun))) // 282.768 — degrees
 console.log(toDeg(meteorSolarLongitudeDelta(deg(5), deg(355))), toDeg(meteorSolarLongitudeForwardDelta(deg(5), deg(355)))) // 10 350 — degrees
 
 // First instant of the year at which the Sun reaches a longitude; throws if it does not occur.
-console.log(timeToDate(utc(timeAtMeteorSolarLongitude(2024, deg(283))))) // [2024, 1, 4, 5, 27, 22, 228]
+console.log(timeToDate(utc(timeAtMeteorSolarLongitude(2024, deg(283), { ephemeris: analyticalEphemerisSource })))) // [2024, 1, 4, 5, 27, 23, 348]
 
 // Several longitudes at once: meteorSolarLongitudeTimes throws like the single solver, the crossing variant answers undefined.
-const solved = meteorSolarLongitudeTimes(2024, [deg(90), deg(283)])
-const times = meteorSolarLongitudeCrossingTimes(2024, [0, deg(90), deg(180), deg(270)])
+const solved = meteorSolarLongitudeTimes(2024, [deg(90), deg(283)], { ephemeris: analyticalEphemerisSource })
+const times = meteorSolarLongitudeCrossingTimes(2024, [0, deg(90), deg(180), deg(270)], { ephemeris: analyticalEphemerisSource })
 
 // Start, reference, and end instants of a catalog solution in a civil year.
 const solution: MeteorShowerSolution = { activity: { kind: 'annual', source: 'annual' }, activityInterval: { start: deg(280), end: deg(286) }, referenceSolarLongitude: deg(283) }
-const dates = meteorShowerDates(solution, 2024)
-console.log(timeToDate(utc(dates.start!))) // [2024, 1, 1, 6, 48, 21, 801]
-console.log(timeToDate(utc(dates.end!))) // [2024, 1, 7, 4, 5, 28, 443]
+const dates = meteorShowerDates(solution, 2024, { ephemeris: analyticalEphemerisSource })
+console.log(timeToDate(utc(dates.start!))) // [2024, 1, 1, 6, 48, 22, 922]
+console.log(timeToDate(utc(dates.end!))) // [2024, 1, 7, 4, 5, 29, 563]
 ```
 
 ### Meteor Track Association
@@ -3500,6 +3507,7 @@ Here `N` is the count, `F ≥ 1` the obstruction correction, `r` the population 
 The population index `r` is the ratio of meteor counts between consecutive magnitude classes, `N(m + 1) / N(m)`, and is related to the mass index by `s = 1 + 2.3 · log10(r)`; it is estimated from counts per magnitude bin by a regression of `ln N` on magnitude. Counts are Poisson-distributed, so small counts have wide uncertainties: Garwood's exact interval gives the confidence interval of the expected count, and of the ZHR scaled from it. The expected number of meteors seen over a night integrates an activity profile through the same correction, with the radiant altitude and any weather or lunar losses supplied explicitly.
 
 ```ts
+import { analyticalEphemerisSource } from 'nebulosa/src/astronomy/ephemeris/source'
 import {
 	combineMeteorVisualObservations,
 	integrateMeteorExpectedCount,
@@ -3513,6 +3521,7 @@ import {
 	meteorVisualRate,
 	meteorZhrFromObservation,
 } from 'nebulosa/src/astronomy/meteors/observation'
+import { meteorSolarLongitude } from 'nebulosa/src/astronomy/meteors/solar'
 import type { MeteorVisualObservation } from 'nebulosa/src/astronomy/meteors/types'
 import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
 import { deg } from 'nebulosa/src/math/units/angle'
@@ -3548,7 +3557,14 @@ console.log(
 
 // Expected meteors in two hours from an activity profile, with a 45° radiant and 20% losses to clouds.
 const profile = { type: 'exponential', support: { start: deg(280), end: deg(286) }, solarLongitude: deg(283), zhr: 110, slopeBefore: 0.2, slopeAfter: 0.2 } as const
-const count = integrateMeteorExpectedCount(profile, timeYMDHMS(2024, 1, 4, 2, 0, 0, Timescale.UTC), timeYMDHMS(2024, 1, 4, 4, 0, 0, Timescale.UTC), { limitingMagnitude: 6.5, populationIndex: 2.1, obstructionCorrection: 1, radiantAltitude: () => deg(45), rateCorrection: () => 0.8 })
+const count = integrateMeteorExpectedCount(profile, timeYMDHMS(2024, 1, 4, 2, 0, 0, Timescale.UTC), timeYMDHMS(2024, 1, 4, 4, 0, 0, Timescale.UTC), {
+	solarLongitude: (time) => meteorSolarLongitude(analyticalEphemerisSource, time),
+	limitingMagnitude: 6.5,
+	populationIndex: 2.1,
+	obstructionCorrection: 1,
+	radiantAltitude: () => deg(45),
+	rateCorrection: () => 0.8,
+})
 console.log(count) // 118.62 — meteors
 ```
 

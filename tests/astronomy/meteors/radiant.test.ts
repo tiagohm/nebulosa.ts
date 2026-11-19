@@ -17,12 +17,12 @@ import type { MeteorComputationContext, MeteorShowerSolution } from '../../../sr
 import { timeShift, timeSubtract, timeYMDHMS, Timescale, type Time } from '../../../src/astronomy/time/time'
 import { PIOVERTWO, TAU } from '../../../src/core/constants'
 import { deg, toDeg } from '../../../src/math/units/angle'
-import { ASTROPY_HORIZONTAL, ASTROPY_RADIANT_OF_DATE, BASE_SOLUTION, DAILY_DRIFT_SOLUTION, MISSING_RADIANT_SOLUTION, OBSERVER, REFERENCE_UTC, SITE_EPOCH, SITE_EPOCH_END, SOLAR_DRIFT_SOLUTION, TOLERANCE } from './util'
+import { ASTROPY_HORIZONTAL, ASTROPY_RADIANT_OF_DATE, BASE_SOLUTION, DAILY_DRIFT_SOLUTION, METEOR_ANALYTICAL_EPHEMERIS, MISSING_RADIANT_SOLUTION, OBSERVER, REFERENCE_UTC, SITE_EPOCH, SITE_EPOCH_END, SOLAR_DRIFT_SOLUTION, TOLERANCE } from './util'
 
 const ASTROPY_EPOCH = timeYMDHMS(2026, 6, 29, 21, 0, 0, Timescale.UTC)
 
 function context(time: Time, solarLongitude: number): MeteorComputationContext {
-	return { time, solarLongitude }
+	return { time, solarLongitude, ephemeris: METEOR_ANALYTICAL_EPHEMERIS }
 }
 
 test('radiant evaluation handles absent coordinates and a fixed J2000 radiant', () => {
@@ -62,26 +62,26 @@ test('radiant path applies drift across ordinary and wrapped longitude intervals
 })
 
 test('absolute-time radiant paths sample fixed, solar and daily drift through the final endpoint', () => {
-	const start = timeAtMeteorSolarLongitude(2024, DAILY_DRIFT_SOLUTION.referenceSolarLongitude, { step: 7, tolerance: TOLERANCE.time })
+	const start = timeAtMeteorSolarLongitude(2024, DAILY_DRIFT_SOLUTION.referenceSolarLongitude, { ephemeris: METEOR_ANALYTICAL_EPHEMERIS, step: 7, tolerance: TOLERANCE.time })
 	const end = timeShift(start, 2.5)
-	const daily = meteorRadiantPathBetween(DAILY_DRIFT_SOLUTION, start, end, { step: 1, solarLongitudeSearch: { step: 7, tolerance: TOLERANCE.time } })
+	const daily = meteorRadiantPathBetween(DAILY_DRIFT_SOLUTION, start, end, { ephemeris: METEOR_ANALYTICAL_EPHEMERIS, step: 1, solarLongitudeSearch: { step: 7, tolerance: TOLERANCE.time } })
 
 	expect(daily).toHaveLength(4)
 	expect(daily.at(-1)!.time).toBe(end)
 	expect(daily.map((point) => point.extrapolated)).toEqual([false, true, true, true])
-	expect(meteorRadiantPathBetween(DAILY_DRIFT_SOLUTION, timeShift(start, -1), start, { step: 1, solarLongitudeSearch: { step: 7, tolerance: TOLERANCE.time } }).map((point) => point.extrapolated)).toEqual([true, false])
+	expect(meteorRadiantPathBetween(DAILY_DRIFT_SOLUTION, timeShift(start, -1), start, { ephemeris: METEOR_ANALYTICAL_EPHEMERIS, step: 1, solarLongitudeSearch: { step: 7, tolerance: TOLERANCE.time } }).map((point) => point.extrapolated)).toEqual([true, false])
 	for (let index = 0; index < daily.length; index++) {
-		expect(daily[index].solarLongitude).toBeCloseTo(meteorSolarLongitude(daily[index].time), 14)
+		expect(daily[index].solarLongitude).toBeCloseTo(meteorSolarLongitude(METEOR_ANALYTICAL_EPHEMERIS, daily[index].time), 14)
 		expect(toDeg(daily[index].rightAscension)).toBeCloseTo([359, 0, 1, 1.5][index], 5)
 		expect(toDeg(daily[index].declination)).toBeCloseTo([10, 9.75, 9.5, 9.375][index], 5)
 	}
 
-	const fixed = meteorRadiantPathBetween(BASE_SOLUTION, start, end, { step: 1 })
+	const fixed = meteorRadiantPathBetween(BASE_SOLUTION, start, end, { ephemeris: METEOR_ANALYTICAL_EPHEMERIS, step: 1 })
 	expect(fixed).toHaveLength(4)
 	expect(fixed.every((point) => point.rightAscension === BASE_SOLUTION.rightAscension)).toBe(true)
 	expect(fixed.every((point) => point.extrapolated === false)).toBe(true)
-	const solarStart = timeAtMeteorSolarLongitude(2024, SOLAR_DRIFT_SOLUTION.referenceSolarLongitude, { step: 7, tolerance: TOLERANCE.time })
-	const solar = meteorRadiantPathBetween(SOLAR_DRIFT_SOLUTION, solarStart, timeShift(solarStart, 2.5), { step: 1 })
+	const solarStart = timeAtMeteorSolarLongitude(2024, SOLAR_DRIFT_SOLUTION.referenceSolarLongitude, { ephemeris: METEOR_ANALYTICAL_EPHEMERIS, step: 7, tolerance: TOLERANCE.time })
+	const solar = meteorRadiantPathBetween(SOLAR_DRIFT_SOLUTION, solarStart, timeShift(solarStart, 2.5), { ephemeris: METEOR_ANALYTICAL_EPHEMERIS, step: 1 })
 	expect(solar).toHaveLength(4)
 	for (const point of solar) {
 		expect(point).toMatchObject(meteorRadiantJ2000(SOLAR_DRIFT_SOLUTION, context(point.time, point.solarLongitude))!.radiant)
@@ -90,7 +90,7 @@ test('absolute-time radiant paths sample fixed, solar and daily drift through th
 })
 
 test('segmented time paths preserve unavailable gaps without changing the flat path', () => {
-	const start = timeAtMeteorSolarLongitude(2024, 0, { step: 7, tolerance: TOLERANCE.time })
+	const start = timeAtMeteorSolarLongitude(2024, 0, { ephemeris: METEOR_ANALYTICAL_EPHEMERIS, step: 7, tolerance: TOLERANCE.time })
 	const gapSolution = {
 		...BASE_SOLUTION,
 		referenceSolarLongitude: 0,
@@ -98,24 +98,24 @@ test('segmented time paths preserve unavailable gaps without changing the flat p
 		radiantDrift: { basis: 'solarLongitude', rightAscensionRate: 0, declinationRate: 1 },
 	} satisfies MeteorShowerSolution
 	const end = timeShift(start, 365)
-	const segments = meteorRadiantPathSegmentsBetween(gapSolution, start, end, { step: 60 })
-	const flat = meteorRadiantPathBetween(gapSolution, start, end, { step: 60 })
+	const segments = meteorRadiantPathSegmentsBetween(gapSolution, start, end, { ephemeris: METEOR_ANALYTICAL_EPHEMERIS, step: 60 })
+	const flat = meteorRadiantPathBetween(gapSolution, start, end, { ephemeris: METEOR_ANALYTICAL_EPHEMERIS, step: 60 })
 
 	expect(segments).toHaveLength(2)
 	expect(segments.every((segment) => segment.length > 0)).toBe(true)
 	expect(flat).toHaveLength(segments[0].length + segments[1].length)
 	expect(flat[0].rightAscension).toBeCloseTo(segments[0][0].rightAscension, 14)
 	expect(flat.at(-1)!.rightAscension).toBeCloseTo(segments[1].at(-1)!.rightAscension, 14)
-	expect(meteorRadiantPathSegmentsBetween(BASE_SOLUTION, start, end, { step: 60 })).toEqual([meteorRadiantPathBetween(BASE_SOLUTION, start, end, { step: 60 })])
-	expect(meteorRadiantPathSegmentsBetween(MISSING_RADIANT_SOLUTION, start, end, { step: 60 })).toEqual([])
-	expect(meteorRadiantPathSegmentsBetween(gapSolution, start, timeShift(start, 730), { step: 60 })).toHaveLength(3)
+	expect(meteorRadiantPathSegmentsBetween(BASE_SOLUTION, start, end, { ephemeris: METEOR_ANALYTICAL_EPHEMERIS, step: 60 })).toEqual([meteorRadiantPathBetween(BASE_SOLUTION, start, end, { ephemeris: METEOR_ANALYTICAL_EPHEMERIS, step: 60 })])
+	expect(meteorRadiantPathSegmentsBetween(MISSING_RADIANT_SOLUTION, start, end, { ephemeris: METEOR_ANALYTICAL_EPHEMERIS, step: 60 })).toEqual([])
+	expect(meteorRadiantPathSegmentsBetween(gapSolution, start, timeShift(start, 730), { ephemeris: METEOR_ANALYTICAL_EPHEMERIS, step: 60 })).toHaveLength(3)
 })
 
 test('segmented time paths preserve unavailable gaps at both interval edges', () => {
-	const reference = timeAtMeteorSolarLongitude(2024, DAILY_DRIFT_SOLUTION.referenceSolarLongitude, { step: 7, tolerance: TOLERANCE.time })
+	const reference = timeAtMeteorSolarLongitude(2024, DAILY_DRIFT_SOLUTION.referenceSolarLongitude, { ephemeris: METEOR_ANALYTICAL_EPHEMERIS, step: 7, tolerance: TOLERANCE.time })
 	const options = { step: 1, maxExtrapolationDays: 0.1, solarLongitudeSearch: { step: 7, tolerance: TOLERANCE.time } } as const
-	const gapAtStart = meteorRadiantPathSegmentsBetween(DAILY_DRIFT_SOLUTION, timeShift(reference, -2), reference, options)
-	const gapAtEnd = meteorRadiantPathSegmentsBetween(DAILY_DRIFT_SOLUTION, reference, timeShift(reference, 2), options)
+	const gapAtStart = meteorRadiantPathSegmentsBetween(DAILY_DRIFT_SOLUTION, timeShift(reference, -2), reference, { ...options, ephemeris: METEOR_ANALYTICAL_EPHEMERIS })
+	const gapAtEnd = meteorRadiantPathSegmentsBetween(DAILY_DRIFT_SOLUTION, reference, timeShift(reference, 2), { ...options, ephemeris: METEOR_ANALYTICAL_EPHEMERIS })
 
 	expect(gapAtStart).toHaveLength(1)
 	expect(gapAtStart[0]).toHaveLength(1)
@@ -135,15 +135,15 @@ test('absolute-time radiant paths handle year boundaries, unavailable samples an
 	} satisfies MeteorShowerSolution
 	const start = timeYMDHMS(2023, 12, 31, 0, 0, 0, Timescale.UTC)
 	const end = timeYMDHMS(2024, 1, 2, 0, 0, 0, Timescale.UTC)
-	const path = meteorRadiantPathBetween(decemberReference, start, end, { step: 0.5, maxExtrapolationDays: 20 })
+	const path = meteorRadiantPathBetween(decemberReference, start, end, { ephemeris: METEOR_ANALYTICAL_EPHEMERIS, step: 0.5, maxExtrapolationDays: 20 })
 
 	expect(path.length).toBeLessThan(5)
 	expect(path.every((point) => point.declination <= PIOVERTWO)).toBe(true)
 	expect(path.some((point) => point.rightAscension < deg(20))).toBe(true)
-	expect(meteorRadiantPathBetween(decemberReference, start, end, { step: 0.5, maxExtrapolationDays: 0.1 })).toEqual([])
-	expect(meteorRadiantPathBetween(BASE_SOLUTION, end, start)).toEqual([])
-	expect(() => meteorRadiantPathBetween(BASE_SOLUTION, start, end, { step: 0 })).toThrow('finite and positive')
-	expect(() => meteorRadiantPathBetween(BASE_SOLUTION, start, end, { step: 1e-7 })).toThrow('too many points')
+	expect(meteorRadiantPathBetween(decemberReference, start, end, { ephemeris: METEOR_ANALYTICAL_EPHEMERIS, step: 0.5, maxExtrapolationDays: 0.1 })).toEqual([])
+	expect(meteorRadiantPathBetween(BASE_SOLUTION, end, start, { ephemeris: METEOR_ANALYTICAL_EPHEMERIS })).toEqual([])
+	expect(() => meteorRadiantPathBetween(BASE_SOLUTION, start, end, { ephemeris: METEOR_ANALYTICAL_EPHEMERIS, step: 0 })).toThrow('finite and positive')
+	expect(() => meteorRadiantPathBetween(BASE_SOLUTION, start, end, { ephemeris: METEOR_ANALYTICAL_EPHEMERIS, step: 1e-7 })).toThrow('too many points')
 })
 
 test('published Perseid and Geminid drift directions retain their signs and scales', () => {
@@ -172,7 +172,7 @@ test('published Perseid and Geminid drift directions retain their signs and scal
 })
 
 test('radiant maximum altitude refines a visible interval and rejects an always-down radiant', () => {
-	const maximum = meteorRadiantMaximumAltitude(BASE_SOLUTION, OBSERVER, SITE_EPOCH, SITE_EPOCH_END, { step: 1 / 48 })
+	const maximum = meteorRadiantMaximumAltitude(BASE_SOLUTION, OBSERVER, SITE_EPOCH, SITE_EPOCH_END, { ephemeris: METEOR_ANALYTICAL_EPHEMERIS, step: 1 / 48 })
 	expect(maximum).toBeDefined()
 	let bruteAltitude = Number.NEGATIVE_INFINITY
 	for (let index = 0; index <= 240; index++) {
@@ -182,8 +182,8 @@ test('radiant maximum altitude refines a visible interval and rejects an always-
 	}
 	expect(Math.abs(maximum!.altitude - bruteAltitude)).toBeLessThan(deg(0.01))
 	expect(maximum!.azimuth).toBeGreaterThanOrEqual(0)
-	expect(meteorRadiantMaximumAltitude({ ...BASE_SOLUTION, declination: deg(85) }, OBSERVER, SITE_EPOCH, SITE_EPOCH_END, { step: 1 / 48 })).toBeUndefined()
-	expect(() => meteorRadiantMaximumAltitude(BASE_SOLUTION, OBSERVER, SITE_EPOCH, SITE_EPOCH_END, { step: 0 })).toThrow('finite and positive')
+	expect(meteorRadiantMaximumAltitude({ ...BASE_SOLUTION, declination: deg(85) }, OBSERVER, SITE_EPOCH, SITE_EPOCH_END, { ephemeris: METEOR_ANALYTICAL_EPHEMERIS, step: 1 / 48 })).toBeUndefined()
+	expect(() => meteorRadiantMaximumAltitude(BASE_SOLUTION, OBSERVER, SITE_EPOCH, SITE_EPOCH_END, { ephemeris: METEOR_ANALYTICAL_EPHEMERIS, step: 0 })).toThrow('finite and positive')
 })
 
 test('daily drift uses the reference longitude inversion and rejects pole crossing', () => {
@@ -238,7 +238,7 @@ test('J2000 radiant reduction agrees with frozen Astropy geometric coordinates',
 	expect(Math.abs(horizontal.altitude - ASTROPY_HORIZONTAL.altitude)).toBeLessThan(TOLERANCE.externalAngle)
 	expect(horizontal.time).toBe(ASTROPY_EPOCH)
 
-	const suppliedContext = meteorRadiantHorizontal(radiant, OBSERVER, ASTROPY_EPOCH, { time: ASTROPY_EPOCH, solarLongitude: 0, localSiderealTime: deg(123) })
+	const suppliedContext = meteorRadiantHorizontal(radiant, OBSERVER, ASTROPY_EPOCH, { ephemeris: METEOR_ANALYTICAL_EPHEMERIS, time: ASTROPY_EPOCH, solarLongitude: 0, localSiderealTime: deg(123) })
 	expect(suppliedContext.altitude).not.toBeCloseTo(horizontal.altitude, 8)
 })
 
@@ -253,14 +253,14 @@ test('radiant vectors are unit vectors and degree construction normalizes RA', (
 test('rise/transit/set classification reports a normal rising and setting radiant', () => {
 	const day = timeYMDHMS(2026, 6, 29, 0, 0, 0, Timescale.UTC)
 	const ordinary = { ...BASE_SOLUTION, rightAscension: deg(100) } satisfies MeteorShowerSolution
-	const risesAndSets = meteorRadiantRiseTransitSet(ordinary, OBSERVER, day, { step: 1 / 48 })
+	const risesAndSets = meteorRadiantRiseTransitSet(ordinary, OBSERVER, day, { ephemeris: METEOR_ANALYTICAL_EPHEMERIS, step: 1 / 48 })
 	expect(meteorRadiantVisibility(risesAndSets)).toBe('risesAndSets')
 })
 
 test('rise/transit/set classification distinguishes one-sided crossings', () => {
 	const ordinary = { ...BASE_SOLUTION, rightAscension: deg(100) } satisfies MeteorShowerSolution
-	const risesOnly = meteorRadiantRiseTransitSet(ordinary, OBSERVER, timeYMDHMS(2026, 6, 29, 8, 0, 0, Timescale.UTC), { window: 0.5, step: 1 / 48 })
-	const setsOnly = meteorRadiantRiseTransitSet(ordinary, OBSERVER, timeYMDHMS(2026, 6, 29, 12, 0, 0, Timescale.UTC), { window: 0.5, step: 1 / 48 })
+	const risesOnly = meteorRadiantRiseTransitSet(ordinary, OBSERVER, timeYMDHMS(2026, 6, 29, 8, 0, 0, Timescale.UTC), { ephemeris: METEOR_ANALYTICAL_EPHEMERIS, window: 0.5, step: 1 / 48 })
+	const setsOnly = meteorRadiantRiseTransitSet(ordinary, OBSERVER, timeYMDHMS(2026, 6, 29, 12, 0, 0, Timescale.UTC), { ephemeris: METEOR_ANALYTICAL_EPHEMERIS, window: 0.5, step: 1 / 48 })
 	expect(meteorRadiantVisibility(risesOnly)).toBe('risesOnly')
 	expect(meteorRadiantVisibility(setsOnly)).toBe('setsOnly')
 })
@@ -268,8 +268,8 @@ test('rise/transit/set classification distinguishes one-sided crossings', () => 
 test('rise/transit/set classification reports circumpolar and unknown states', () => {
 	const day = timeYMDHMS(2026, 6, 29, 0, 0, 0, Timescale.UTC)
 	const ordinary = { ...BASE_SOLUTION, rightAscension: deg(100) } satisfies MeteorShowerSolution
-	const alwaysUp = meteorRadiantRiseTransitSet({ ...ordinary, declination: deg(-85) }, OBSERVER, day, { step: 1 / 48 })
-	const alwaysDown = meteorRadiantRiseTransitSet({ ...ordinary, declination: deg(85) }, OBSERVER, day, { step: 1 / 48 })
+	const alwaysUp = meteorRadiantRiseTransitSet({ ...ordinary, declination: deg(-85) }, OBSERVER, day, { ephemeris: METEOR_ANALYTICAL_EPHEMERIS, step: 1 / 48 })
+	const alwaysDown = meteorRadiantRiseTransitSet({ ...ordinary, declination: deg(85) }, OBSERVER, day, { ephemeris: METEOR_ANALYTICAL_EPHEMERIS, step: 1 / 48 })
 	expect(meteorRadiantVisibility(alwaysUp)).toBe('alwaysUp')
 	expect(meteorRadiantVisibility(alwaysDown)).toBe('alwaysDown')
 	expect(meteorRadiantVisibility(undefined)).toBe('unknown')

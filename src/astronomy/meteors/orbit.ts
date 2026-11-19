@@ -3,8 +3,8 @@ import { matIdentity, matMulVec, matTransposeMulVec } from '../../math/linear-al
 import { type Vec3, vecAngle, vecLength, vecNormalize } from '../../math/linear-algebra/vec3'
 import { type Angle, normalizeAngle, normalizePI } from '../../math/units/angle'
 import type { Velocity } from '../../math/units/velocity'
-import { equatorial, relativePositionAndVelocity } from '../coordinates/astrometry'
-import { earth, sun } from '../ephemeris/models/analytical/vsop87e'
+import { equatorial, type PositionAndVelocityMut } from '../coordinates/astrometry'
+import { type EphemerisSource, relativeEphemerisState } from '../ephemeris/source'
 import { KeplerOrbit } from '../orbits/asteroid'
 import type { Time } from '../time/time'
 import { meteorRadiantVector } from './radiant'
@@ -14,9 +14,10 @@ import type { MeteorComparableOrbit, MeteorCompleteStreamOrbit, MeteorHeliocentr
 // ecliptic J2000 frame, while radiants are geocentric equatorial J2000. Partial catalog elements are
 // never propagated as if they carried an epoch; node encounters are evaluated geometrically instead.
 
-// Reconstructs a heliocentric ecliptic-J2000 state from a geocentric radiant and asymptotic speed.
-export function meteorHeliocentricState(radiant: MeteorRadiant, geocentricSpeed: Velocity, time: Time): MeteorHeliocentricState {
-	const earthState = relativePositionAndVelocity(earthEcliptic, sunEcliptic, time)
+// Reconstructs a heliocentric ecliptic-J2000 state from a geocentric radiant and asymptotic speed, with the
+// Earth of a source.
+export function meteorHeliocentricState(radiant: MeteorRadiant, geocentricSpeed: Velocity, time: Time, ephemeris: EphemerisSource): MeteorHeliocentricState {
+	const earthState = heliocentricEarth(ephemeris, time)
 	const radiantEquatorial = meteorRadiantVector(radiant)
 	const radiantEcliptic = matMulVec(ECLIPTIC_J2000_MATRIX, radiantEquatorial)
 	const velocity: Vec3 = [earthState[1][0] - geocentricSpeed * radiantEcliptic[0], earthState[1][1] - geocentricSpeed * radiantEcliptic[1], earthState[1][2] - geocentricSpeed * radiantEcliptic[2]]
@@ -25,14 +26,14 @@ export function meteorHeliocentricState(radiant: MeteorRadiant, geocentricSpeed:
 
 // Builds a KeplerOrbit from a geocentric radiant. The input state is already ecliptic J2000, so an
 // identity output rotation keeps q, i, Ω and ω in the same frame as the MDC stream elements.
-export function meteorOrbitFromRadiant(radiant: MeteorRadiant, geocentricSpeed: Velocity, time: Time, mu: number = GM_SUN_PITJEVA_2005): KeplerOrbit {
-	const state = meteorHeliocentricState(radiant, geocentricSpeed, time)
+export function meteorOrbitFromRadiant(radiant: MeteorRadiant, geocentricSpeed: Velocity, time: Time, ephemeris: EphemerisSource, mu: number = GM_SUN_PITJEVA_2005): KeplerOrbit {
+	const state = meteorHeliocentricState(radiant, geocentricSpeed, time, ephemeris)
 	return new KeplerOrbit(state.position, state.velocity, time, mu, matIdentity())
 }
 
 // Evaluates both ascending and descending stream-node encounter candidates at an instant. No
 // candidate is silently selected based on distance; the caller decides the physical encounter limit.
-export function meteorStreamOrbitNodeEncounters(stream: MeteorCompleteStreamOrbit, time: Time, mu: number = GM_SUN_PITJEVA_2005): readonly MeteorNodeEncounter[] {
+export function meteorStreamOrbitNodeEncounters(stream: MeteorCompleteStreamOrbit, time: Time, ephemeris: EphemerisSource, mu: number = GM_SUN_PITJEVA_2005): readonly MeteorNodeEncounter[] {
 	const q = stream.perihelionDistance
 	const e = stream.eccentricity
 
@@ -42,7 +43,7 @@ export function meteorStreamOrbitNodeEncounters(stream: MeteorCompleteStreamOrbi
 	const node = stream.longitudeOfAscendingNode
 	const argument = stream.argumentOfPerihelion
 
-	const earthState = relativePositionAndVelocity(earthEcliptic, sunEcliptic, time)
+	const earthState = heliocentricEarth(ephemeris, time)
 	const candidates: MeteorNodeEncounter[] = []
 
 	for (const [kind, trueAnomaly] of [
@@ -167,12 +168,10 @@ function square(value: number): number {
 	return value * value
 }
 
-function earthEcliptic(time: Time) {
-	return earth(time, 'eclipticJ2000')
-}
-
-function sunEcliptic(time: Time) {
-	return sun(time, 'eclipticJ2000')
+// Heliocentric state of the Earth of a source in the J2000 ecliptic (AU, AU/day), freshly allocated.
+function heliocentricEarth(ephemeris: EphemerisSource, time: Time): PositionAndVelocityMut {
+	const [position, velocity] = relativeEphemerisState(ephemeris, 399, 10, time)
+	return [matMulVec(ECLIPTIC_J2000_MATRIX, position), matMulVec(ECLIPTIC_J2000_MATRIX, velocity)]
 }
 
 // Keep a direct identity use in this module explicit for consumers comparing orbital frame choices.

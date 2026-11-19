@@ -14,9 +14,8 @@ import type { MeteorActivityProfile, MeteorGeometricObservingWindow, MeteorGeome
 // windows by integrated expected local count, with all returned lunar values tied to their best-time
 // instant through the condition object used during evaluation. The geometric planner needs no
 // activity profile, returns no rate or count, and orders its windows chronologically. Every sample
-// takes its Sun, its Moon, and its solar longitude from the required options.ephemeris; the candidate
-// intervals of a span longer than 512 steps are still bracketed with VSOP87E solar longitudes, and
-// the samples inside them decide the activity.
+// takes its Sun, its Moon, and its solar longitude from the required options.ephemeris, which also
+// brackets the candidate intervals of a span longer than 512 steps.
 
 // Plans observing windows for one shower, one explicit activity profile and one observer.
 export function meteorObservingWindows(solution: MeteorShowerSolution, profile: MeteorActivityProfile, observer: GeographicPosition, start: Time, end: Time, options: MeteorObservingWindowOptions): readonly MeteorObservingWindow[]
@@ -418,7 +417,7 @@ function plannerCandidateIntervals(
 	start: Time,
 	end: Time,
 	step: number,
-	options: Pick<MeteorObservingWindowOptions, 'tolerance' | 'extrapolateYearLimitedActivity'>,
+	options: Pick<MeteorObservingWindowOptions, 'tolerance' | 'extrapolateYearLimitedActivity' | 'ephemeris'>,
 ): readonly PlannerCandidateInterval[] {
 	const duration = timeSubtract(end, start)
 	if (duration / step <= 512) return [{ start, end }]
@@ -462,7 +461,7 @@ function plannerCandidateIntervals(
 		for (const span of spans) {
 			const startLongitude = span.start === TAU ? 0 : span.start
 			const endLongitude = span.end === TAU ? 0 : span.end
-			const search = { step: 7, tolerance: options.tolerance, scale: start.scale }
+			const search = { step: 7, tolerance: options.tolerance, scale: start.scale, ephemeris: options.ephemeris }
 			// A longitude the civil year never reaches belongs to a neighboring year's candidate, which the loop also visits.
 			const [spanStart, spanEnd] = meteorSolarLongitudeCrossingTimes(year, [startLongitude, endLongitude], search)
 			if (spanStart === undefined) continue
