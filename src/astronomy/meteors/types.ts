@@ -620,8 +620,9 @@ export interface MeteorObservingWindowOptions extends TimeSearchOptions {
 	readonly altitudeExponent?: number
 	// Optional provider for explicit, time-varying rate corrections.
 	readonly rateCorrection?: (time: Time, conditions: MeteorObservingConditions) => number
-	// Sun and Moon of every sample in place of VSOP87E and ELPMPP02 (see MeteorShowerContextOptions).
-	readonly ephemeris?: MeteorEphemeris
+	// Sun and Moon of every sample: METEOR_ANALYTICAL_EPHEMERIS for the toolkit's theories, or the caller's own, such as
+	// SPK positions interpolated between hourly nodes, which a window search evaluates far faster.
+	readonly ephemeris: MeteorEphemeris
 }
 
 // Restrictions and numerical options of the profile-independent geometric observing planner.
@@ -643,8 +644,9 @@ export interface MeteorGeometricObservingWindowOptions extends TimeSearchOptions
 	readonly maximumMoonAltitude?: Angle
 	// Minimum duration in hours.
 	readonly minimumDurationHours?: number
-	// Sun and Moon of every sample in place of VSOP87E and ELPMPP02 (see MeteorShowerContextOptions).
-	readonly ephemeris?: MeteorEphemeris
+	// Sun and Moon of every sample: METEOR_ANALYTICAL_EPHEMERIS for the toolkit's theories, or the caller's own, such as
+	// SPK positions interpolated between hourly nodes, which a window search evaluates far faster.
+	readonly ephemeris: MeteorEphemeris
 }
 
 // Whether a geometric window lies inside a known activity support or only satisfies the geometry

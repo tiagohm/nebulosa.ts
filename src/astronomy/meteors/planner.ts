@@ -14,16 +14,16 @@ import type { MeteorActivityProfile, MeteorGeometricObservingWindow, MeteorGeome
 // windows by integrated expected local count, with all returned lunar values tied to their best-time
 // instant through the condition object used during evaluation. The geometric planner needs no
 // activity profile, returns no rate or count, and orders its windows chronologically. Every sample
-// takes its Sun and Moon from options.ephemeris when given, else from VSOP87E and ELPMPP02; the
-// candidate intervals of a span longer than 512 steps are still bracketed with VSOP87E solar
-// longitudes, and the samples inside them decide the activity.
+// takes its Sun, its Moon, and its solar longitude from the required options.ephemeris; the candidate
+// intervals of a span longer than 512 steps are still bracketed with VSOP87E solar longitudes, and
+// the samples inside them decide the activity.
 
 // Plans observing windows for one shower, one explicit activity profile and one observer.
-export function meteorObservingWindows(solution: MeteorShowerSolution, profile: MeteorActivityProfile, observer: GeographicPosition, start: Time, end: Time, options?: MeteorObservingWindowOptions): readonly MeteorObservingWindow[]
+export function meteorObservingWindows(solution: MeteorShowerSolution, profile: MeteorActivityProfile, observer: GeographicPosition, start: Time, end: Time, options: MeteorObservingWindowOptions): readonly MeteorObservingWindow[]
 // Equivalent argument order for applications that naturally select a profile first.
-export function meteorObservingWindows(profile: MeteorActivityProfile, solution: MeteorShowerSolution, observer: GeographicPosition, start: Time, end: Time, options?: MeteorObservingWindowOptions): readonly MeteorObservingWindow[]
+export function meteorObservingWindows(profile: MeteorActivityProfile, solution: MeteorShowerSolution, observer: GeographicPosition, start: Time, end: Time, options: MeteorObservingWindowOptions): readonly MeteorObservingWindow[]
 
-export function meteorObservingWindows(first: MeteorShowerSolution | MeteorActivityProfile, second: MeteorActivityProfile | MeteorShowerSolution, observer: GeographicPosition, start: Time, end: Time, options: MeteorObservingWindowOptions = {}): readonly MeteorObservingWindow[] {
+export function meteorObservingWindows(first: MeteorShowerSolution | MeteorActivityProfile, second: MeteorActivityProfile | MeteorShowerSolution, observer: GeographicPosition, start: Time, end: Time, options: MeteorObservingWindowOptions): readonly MeteorObservingWindow[] {
 	const duration = timeSubtract(end, start)
 	if (!(duration > 0)) return []
 	const solution = isSolution(first) ? first : (second as MeteorShowerSolution)
@@ -44,7 +44,7 @@ export function meteorObservingWindows(first: MeteorShowerSolution | MeteorActiv
 // extrapolateYearLimitedActivity is set. Windows carry no ZHR, rate or count and are returned in
 // chronological order; the Sun and Moon at bestTime are evaluated once per window. A non-positive
 // span returns an empty array.
-export function meteorGeometricObservingWindows(solution: MeteorShowerSolution, observer: GeographicPosition, start: Time, end: Time, options: MeteorGeometricObservingWindowOptions = {}): readonly MeteorGeometricObservingWindow[] {
+export function meteorGeometricObservingWindows(solution: MeteorShowerSolution, observer: GeographicPosition, start: Time, end: Time, options: MeteorGeometricObservingWindowOptions): readonly MeteorGeometricObservingWindow[] {
 	if (!(timeSubtract(end, start) > 0)) return []
 	const support = options.support ?? solution.activityInterval
 	const step = chooseStep(support === undefined ? [] : [support], options.step)
