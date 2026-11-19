@@ -3095,7 +3095,7 @@ for (const window of meteorGeometricObservingWindows(solution, observer, start, 
 // The Sun, Moon, and radiant at one instant, with the solar longitude and sidereal time computed once in a context.
 const instant = timeYMDHMS(2024, 1, 4, 3, 0, 0, Timescale.UTC)
 const context = meteorObservationContext(instant, observer)
-const conditions = meteorObservingConditionsAt({ rightAscension: deg(230.1), declination: deg(48.5) }, observer, instant, context)
+const conditions = meteorObservingConditionsAt({ rightAscension: deg(230.1), declination: deg(48.5) }, observer, instant, ephemeris, context)
 
 console.log(toDeg(conditions.sunAltitude), conditions.moonIllumination, toDeg(conditions.radiant.altitude)) // −55.22 0.5034 28.70
 
@@ -3241,9 +3241,10 @@ console.log(meteorRadiantVisibility(events)) // risesAndSets
 
 Planning a night of meteor observing needs, for each shower, a snapshot of several quantities at once: whether the shower is active, its expected zenithal hourly rate (ZHR), where its radiant is in the sky, and how dark the sky is, from the Sun's depression and the Moon's altitude, phase, and distance to the radiant. These are what decide whether a shower is worth watching at a given hour.
 
-The quantities that do not depend on the shower (solar longitude, sidereal time, Sun and Moon directions and altitudes, lunar illumination) are computed once in a computation context and shared by any number of shower solutions, so a whole catalog costs one ephemeris evaluation. Without an observer the context is geocentric and the state has no local geometry. Activity and ZHR come from the catalog interval and from an optional activity profile; all altitudes are geometric, without refraction.
+The quantities that do not depend on the shower (solar longitude, sidereal time, Sun and Moon directions and altitudes, lunar illumination) are computed once in a computation context and shared by any number of shower solutions, so a whole catalog costs one ephemeris evaluation. The Sun and the Moon come from an ephemeris the caller supplies, such as SPK positions or the toolkit's `meteorSunDirection` and `meteorMoonDirection`, and the solar longitude from that same Sun. Without an observer the context is geocentric and the state has no local geometry. Activity and ZHR come from the catalog interval and from an optional activity profile; all altitudes are geometric, without refraction.
 
 ```ts
+import { meteorMoonDirection, meteorSunDirection } from 'nebulosa/src/astronomy/meteors/observation'
 import { meteorShowerComputationContext, meteorShowerState, meteorShowerStates } from 'nebulosa/src/astronomy/meteors/state'
 import type { MeteorActivityProfile, MeteorShowerSolution } from 'nebulosa/src/astronomy/meteors/types'
 import { Ellipsoid, geodeticLocation } from 'nebulosa/src/astronomy/observer/location'
@@ -3255,9 +3256,9 @@ import { meter } from 'nebulosa/src/math/units/distance'
 const quadrantids: MeteorShowerSolution = { activity: { kind: 'annual', source: 'annual' }, activityInterval: { start: deg(280), end: deg(286) }, referenceSolarLongitude: deg(283.16), rightAscension: deg(230.1), declination: deg(48.5) }
 const profile: MeteorActivityProfile = { type: 'exponential', support: { start: deg(280), end: deg(286) }, solarLongitude: deg(283.16), zhr: 110, slopeBefore: 0.2, slopeAfter: 0.2 }
 
-// Shared Sun, Moon, and sidereal-time quantities for one observer and instant.
+// Shared Sun, Moon, and sidereal-time quantities for one observer and instant, with the toolkit's theories.
 const observer = geodeticLocation(deg(-8), deg(40), meter(100), Ellipsoid.WGS84) // longitude, latitude, height
-const context = meteorShowerComputationContext(timeYMDHMS(2024, 1, 4, 5, 0, 0, Timescale.UTC), observer)
+const context = meteorShowerComputationContext(timeYMDHMS(2024, 1, 4, 5, 0, 0, Timescale.UTC), observer, { ephemeris: { sun: meteorSunDirection, moon: meteorMoonDirection } })
 
 // Activity, ZHR, radiant, and sky circumstances of one shower.
 const state = meteorShowerState(quadrantids, context, { profile })

@@ -3,35 +3,25 @@ import { altitudeOf } from '../events/horizon'
 import { type GeographicPosition, localSiderealTime } from '../observer/location'
 import type { Time } from '../time/time'
 import { isMeteorShowerActive, meteorActivityMaximumZhr, meteorActivityZhr, meteorShowerActivityYearApplies } from './activity'
-import { meteorMoonDirection, meteorMoonIllumination, meteorSunDirection } from './observation'
+import { meteorMoonIllumination } from './observation'
 import { meteorRadiantHorizontal, meteorRadiantJ2000, meteorRadiantOfDate, meteorRadiantVector } from './radiant'
-import { meteorSolarLongitude, meteorSolarLongitudeOf, meteorSolarState } from './solar'
+import { meteorSolarLongitudeOf } from './solar'
 import type { MeteorShowerBatchStateOptions, MeteorShowerComputationContext, MeteorShowerContextOptions, MeteorShowerSolution, MeteorShowerState, MeteorShowerStateInput, MeteorShowerStateOptions } from './types'
 
 // High-level instantaneous meteor-shower states. A prepared context owns all shared solar, lunar and
 // observer work for one instant; batch evaluation allocates only per-solution result objects and does
 // not retain global or persistent state.
 
-// Prepares solar longitude and the optional observer/ephemeris values used by one or many shower
-// states. Sun and Moon vectors are evaluated only when their corresponding result groups are enabled;
-// with options.ephemeris, its Sun gives the solar longitude too and VSOP87E and ELPMPP02 are never
-// evaluated.
-export function meteorShowerComputationContext(time: Time, observer?: GeographicPosition, options: MeteorShowerContextOptions = {}): MeteorShowerComputationContext {
+// Prepares solar longitude and the optional observer values used by one or many shower states, from
+// the Sun and Moon of options.ephemeris. The Sun is always evaluated, since it gives the solar
+// longitude, but kept only when the solar or lunar result group is enabled; the Moon is evaluated only
+// when its result group is enabled.
+export function meteorShowerComputationContext(time: Time, observer: GeographicPosition | undefined, options: MeteorShowerContextOptions): MeteorShowerComputationContext {
+	const { ephemeris } = options
 	const includeMoon = options.includeMoon ?? true
 	const includeSun = options.includeSun ?? observer !== undefined
-	const ephemeris = options.ephemeris
-
-	if (ephemeris !== undefined) {
-		const sun = ephemeris.sun(time)
-		return completeContext({ time, solarLongitude: meteorSolarLongitudeOf(sun), sun, moon: includeMoon ? ephemeris.moon(time) : undefined, observer }, options)
-	}
-
-	if (includeSun || includeMoon) {
-		const solar = meteorSolarState(time)
-		return completeContext({ time, solarLongitude: solar.solarLongitude, sun: solar.sun, observer }, options)
-	}
-
-	return completeContext({ time, solarLongitude: meteorSolarLongitude(time), observer }, options)
+	const sun = ephemeris.sun(time)
+	return completeContext({ time, solarLongitude: meteorSolarLongitudeOf(sun), sun: includeSun || includeMoon ? sun : undefined, moon: includeMoon ? ephemeris.moon(time) : undefined, observer, ephemeris }, options)
 }
 
 // Computes one shower solution at a prepared instant. The function does not mutate the supplied
@@ -50,15 +40,16 @@ export function meteorShowerStates(inputs: readonly MeteorShowerStateInput[], co
 	})
 }
 
-// Adds only the common values selected by options, preserving caller-supplied ephemerides.
-function completeContext(context: MeteorShowerComputationContext, options: MeteorShowerContextOptions): MeteorShowerComputationContext {
+// Adds only the common values selected by options, preserving those already prepared and taking a
+// missing Sun or Moon from the context's ephemeris.
+function completeContext(context: MeteorShowerComputationContext, options: Omit<MeteorShowerContextOptions, 'ephemeris'>): MeteorShowerComputationContext {
 	const observer = context.observer
 	const includeHorizontal = options.includeHorizontal ?? observer !== undefined
 	const includeMoon = options.includeMoon ?? true
 	const includeSun = options.includeSun ?? observer !== undefined
 	const needsSun = includeSun || includeMoon
-	const sun = context.sun ?? (needsSun ? meteorSunDirection(context.time) : undefined)
-	const moon = context.moon ?? (includeMoon ? meteorMoonDirection(context.time) : undefined)
+	const sun = context.sun ?? (needsSun ? context.ephemeris.sun(context.time) : undefined)
+	const moon = context.moon ?? (includeMoon ? context.ephemeris.moon(context.time) : undefined)
 	return {
 		...context,
 		localSiderealTime: context.localSiderealTime ?? (observer !== undefined && includeHorizontal ? localSiderealTime(context.time, observer) : undefined),

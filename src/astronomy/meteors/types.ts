@@ -253,6 +253,8 @@ export interface MeteorSolarState {
 
 // Shared ephemeris and observer values for one or many instantaneous shower states.
 export interface MeteorShowerComputationContext extends MeteorComputationContext {
+	// Sun and Moon the context was prepared with, which complete it when a state asks for more.
+	readonly ephemeris: MeteorEphemeris
 	// Observer used for local horizontal quantities, when requested.
 	readonly observer?: GeographicPosition
 	// Geometric solar altitude in radians, shared by all showers at this observer and instant.
@@ -271,9 +273,9 @@ export interface MeteorShowerContextOptions {
 	readonly includeMoon?: boolean
 	// Prepare the Sun vector for solar altitude; defaults to true with an observer.
 	readonly includeSun?: boolean
-	// Sun and Moon of the context in place of VSOP87E and ELPMPP02. When given, the solar longitude
-	// is also derived from its Sun, so one context never mixes ephemerides.
-	readonly ephemeris?: MeteorEphemeris
+	// Sun and Moon of the context; the solar longitude is derived from its Sun too, so one context
+	// never mixes ephemerides.
+	readonly ephemeris: MeteorEphemeris
 }
 
 // Controls which optional quantities an instantaneous shower-state calculation evaluates.

@@ -66,7 +66,7 @@ test('planner applies lunar altitude and retains sampled lunar metrics', () => {
 test('a below-horizon Moon satisfies illumination, separation and inclusive altitude limits', () => {
 	const start = timeShift(SITE_EPOCH, -6 / 24)
 	const end = timeShift(SITE_EPOCH, -4 / 24)
-	const moonLimit = meteorShowerState(BASE_SOLUTION, meteorShowerComputationContext(end, OBSERVER)).moonAltitude!
+	const moonLimit = meteorShowerState(BASE_SOLUTION, meteorShowerComputationContext(end, OBSERVER, { ephemeris: METEOR_ANALYTICAL_EPHEMERIS })).moonAltitude!
 	const windows = meteorObservingWindows(BASE_SOLUTION, EXPONENTIAL_PROFILE, OBSERVER, start, end, { ephemeris: METEOR_ANALYTICAL_EPHEMERIS, maximumSolarAltitude: deg(90), minimumRadiantAltitude: 0, maximumMoonAltitude: moonLimit, maximumMoonIllumination: 0, minimumMoonRadiantSeparation: deg(180), step: 1 / 48 })
 	expect(windows).toHaveLength(1)
 	expect(windows[0].maximumMoonAltitude).toBeLessThanOrEqual(moonLimit + 1e-10)
@@ -236,7 +236,7 @@ test('geometric windows match the profile windows where the profile is positive 
 	const best = geometric[0]
 	for (let k = 0; k <= 20; k++) {
 		const time = timeShift(best.start, (timeSubtract(best.end, best.start) * k) / 20)
-		const state = meteorShowerState(BASE_SOLUTION, meteorShowerComputationContext(time, OBSERVER, { includeMoon: false }), { includeMoon: false })
+		const state = meteorShowerState(BASE_SOLUTION, meteorShowerComputationContext(time, OBSERVER, { ephemeris: METEOR_ANALYTICAL_EPHEMERIS, includeMoon: false }), { includeMoon: false })
 		expect(state.horizontal!.altitude).toBeLessThanOrEqual(best.maximumRadiantAltitude + 1e-7)
 	}
 })

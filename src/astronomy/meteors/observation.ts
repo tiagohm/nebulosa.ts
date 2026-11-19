@@ -8,7 +8,7 @@ import { type Time, timeShift, timeSubtract } from '../time/time'
 import { meteorActivityZhr } from './activity'
 import { meteorRadiantHorizontal } from './radiant'
 import { meteorSolarLongitude, meteorSolarState } from './solar'
-import type { MeteorActivityProfile, MeteorComputationContext, MeteorHorizontalRadiant, MeteorMagnitudeBin, MeteorObservingConditions, MeteorPopulationIndexOptions, MeteorRadiant, MeteorVisualObservation, MeteorVisualRate } from './types'
+import type { MeteorActivityProfile, MeteorComputationContext, MeteorEphemeris, MeteorHorizontalRadiant, MeteorMagnitudeBin, MeteorObservingConditions, MeteorPopulationIndexOptions, MeteorRadiant, MeteorVisualObservation, MeteorVisualRate } from './types'
 
 // Visual meteor observation equations and local circumstances. Counts use the standard ZHR
 // correction with effective exposure in hours; local rates are idealized geometric rates and do not
@@ -114,12 +114,13 @@ export function meteorObservationContext(time: Time, observer?: GeographicPositi
 	return { time, solarLongitude: meteorSolarLongitude(time), localSiderealTime: observer === undefined ? undefined : localSiderealTime(time, observer) }
 }
 
-// Computes the Sun, Moon and radiant circumstances at one identified instant. All altitudes are
-// geometric and no atmospheric refraction is applied.
-export function meteorObservingConditionsAt(radiant: MeteorRadiant, observer: GeographicPosition, time: Time, context?: MeteorComputationContext): MeteorObservingConditions {
+// Computes the Sun, Moon and radiant circumstances at one identified instant, with the Sun and Moon of
+// the context when it has them, else of ephemeris. All altitudes are geometric and no atmospheric
+// refraction is applied.
+export function meteorObservingConditionsAt(radiant: MeteorRadiant, observer: GeographicPosition, time: Time, ephemeris: MeteorEphemeris, context?: MeteorComputationContext): MeteorObservingConditions {
 	const horizontal = meteorRadiantHorizontal(radiant, observer, time, context)
-	const sunVector = context?.sun ?? meteorSunDirection(time)
-	const moonVector = context?.moon ?? meteorMoonDirection(time)
+	const sunVector = context?.sun ?? ephemeris.sun(time)
+	const moonVector = context?.moon ?? ephemeris.moon(time)
 	const sunAltitude = altitudeOf(sunVector, time, observer)
 	const moonAltitude = altitudeOf(moonVector, time, observer)
 	const moonIllumination = meteorMoonIllumination(sunVector, moonVector)

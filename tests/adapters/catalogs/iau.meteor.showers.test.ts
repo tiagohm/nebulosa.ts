@@ -6,6 +6,7 @@ import { meteorShowerState } from '../../../src/astronomy/meteors/state'
 import { timeShift } from '../../../src/astronomy/time/time'
 import { toDeg } from '../../../src/math/units/angle'
 import { toKilometerPerSecond } from '../../../src/math/units/velocity'
+import { METEOR_ANALYTICAL_EPHEMERIS } from '../../astronomy/meteors/util'
 
 test('normalizes the versioned IAU shower object without inventing activity data', () => {
 	const catalog = parseIauMeteorShowerCatalog({
@@ -141,12 +142,12 @@ test('normalized IAU bounds and daily drift feed time paths and tri-state shower
 	expect(path).toHaveLength(3)
 	expect(path[1].rightAscension).toBeGreaterThan(path[0].rightAscension)
 	expect(path[1].declination).toBeGreaterThan(path[0].declination)
-	const context = { time: start, solarLongitude: meteorSolarLongitude(start) }
+	const context = { time: start, solarLongitude: meteorSolarLongitude(start), ephemeris: METEOR_ANALYTICAL_EPHEMERIS }
 	const options = { includeHorizontal: false, includeMoon: false, includeRadiantOfDate: false, includeSun: false } as const
 	expect(meteorShowerState(solution, context, options).active).toBe(true)
 	expect(meteorShowerState({ ...solution, activityInterval: undefined }, context, options).active).toBeUndefined()
 	const future = timeAtMeteorSolarLongitude(2017, solution.referenceSolarLongitude!, { step: 7 })
-	expect(meteorShowerState(solution, { time: future, solarLongitude: meteorSolarLongitude(future) }, options).active).toBe(false)
+	expect(meteorShowerState(solution, { time: future, solarLongitude: meteorSolarLongitude(future), ephemeris: METEOR_ANALYTICAL_EPHEMERIS }, options).active).toBe(false)
 })
 
 test('reads slash suffixes above 12 as survey year ranges and keeps month suffixes as one year', () => {

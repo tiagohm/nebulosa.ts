@@ -20,7 +20,7 @@ import { Timescale, timeYMDHMS } from '../../../src/astronomy/time/time'
 import { PIOVERFOUR, PIOVERTWO } from '../../../src/core/constants'
 import { vecX, vecY } from '../../../src/math/linear-algebra/vec3'
 import { deg } from '../../../src/math/units/angle'
-import { EXPONENTIAL_PROFILE, OBSERVER, REFERENCE_UTC, VISUAL_OBSERVATION } from './util'
+import { EXPONENTIAL_PROFILE, METEOR_ANALYTICAL_EPHEMERIS, OBSERVER, REFERENCE_UTC, VISUAL_OBSERVATION } from './util'
 
 test('visual ZHR and local rate apply magnitude, population, obstruction and altitude', () => {
 	// The standard equation gives 24 ZHR for this frozen visual observation.
@@ -93,7 +93,7 @@ test('observation context and circumstances retain supplied local and lunar prov
 
 	const time = timeYMDHMS(2024, 1, 4, 0, 0, 0, Timescale.UTC)
 	const horizontal = meteorRadiantHorizontal({ rightAscension: 0, declination: 0 }, OBSERVER, time, { time, solarLongitude: 0, localSiderealTime: deg(123) })
-	const conditions = meteorObservingConditionsAt({ rightAscension: 0, declination: 0 }, OBSERVER, time, {
+	const conditions = meteorObservingConditionsAt({ rightAscension: 0, declination: 0 }, OBSERVER, time, METEOR_ANALYTICAL_EPHEMERIS, {
 		time,
 		solarLongitude: 0,
 		localSiderealTime: deg(123),
