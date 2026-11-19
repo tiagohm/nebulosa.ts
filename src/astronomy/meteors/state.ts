@@ -5,7 +5,7 @@ import type { Time } from '../time/time'
 import { isMeteorShowerActive, meteorActivityMaximumZhr, meteorActivityZhr, meteorShowerActivityYearApplies } from './activity'
 import { meteorMoonDirection, meteorMoonIllumination, meteorSunDirection } from './observation'
 import { meteorRadiantHorizontal, meteorRadiantJ2000, meteorRadiantOfDate, meteorRadiantVector } from './radiant'
-import { meteorSolarLongitude, meteorSolarState } from './solar'
+import { meteorSolarLongitude, meteorSolarLongitudeOf, meteorSolarState } from './solar'
 import type { MeteorShowerBatchStateOptions, MeteorShowerComputationContext, MeteorShowerContextOptions, MeteorShowerSolution, MeteorShowerState, MeteorShowerStateInput, MeteorShowerStateOptions } from './types'
 
 // High-level instantaneous meteor-shower states. A prepared context owns all shared solar, lunar and
@@ -13,10 +13,18 @@ import type { MeteorShowerBatchStateOptions, MeteorShowerComputationContext, Met
 // not retain global or persistent state.
 
 // Prepares solar longitude and the optional observer/ephemeris values used by one or many shower
-// states. Sun and Moon vectors are evaluated only when their corresponding result groups are enabled.
+// states. Sun and Moon vectors are evaluated only when their corresponding result groups are enabled;
+// with options.ephemeris, its Sun gives the solar longitude too and VSOP87E and ELPMPP02 are never
+// evaluated.
 export function meteorShowerComputationContext(time: Time, observer?: GeographicPosition, options: MeteorShowerContextOptions = {}): MeteorShowerComputationContext {
 	const includeMoon = options.includeMoon ?? true
 	const includeSun = options.includeSun ?? observer !== undefined
+	const ephemeris = options.ephemeris
+
+	if (ephemeris !== undefined) {
+		const sun = ephemeris.sun(time)
+		return completeContext({ time, solarLongitude: meteorSolarLongitudeOf(sun), sun, moon: includeMoon ? ephemeris.moon(time) : undefined, observer }, options)
+	}
 
 	if (includeSun || includeMoon) {
 		const solar = meteorSolarState(time)

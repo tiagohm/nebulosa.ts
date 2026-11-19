@@ -1,5 +1,6 @@
 import { DAYSPERTY, ECLIPTIC_J2000_MATRIX, TAU } from '../../core/constants'
-import { matTransposeMulVec } from '../../math/linear-algebra/mat3'
+import { matMulVec, matTransposeMulVec } from '../../math/linear-algebra/mat3'
+import type { Vec3 } from '../../math/linear-algebra/vec3'
 import { normalizeAngle, normalizePI, type Angle } from '../../math/units/angle'
 import { relativePositionAndVelocity, type PositionAndVelocityMut } from '../coordinates/astrometry'
 import { earth, sun } from '../ephemeris/models/analytical/vsop87e'
@@ -17,6 +18,13 @@ import type { MeteorShowerDates, MeteorShowerDateOptions, MeteorShowerSolution, 
 export function meteorSolarLongitude(time: Time): Angle {
 	const [position] = meteorSolarRelativeState(time)
 	return normalizeAngle(Math.atan2(position[1], position[0]))
+}
+
+// Computes the solar longitude of a geocentric J2000 equatorial Sun vector (any length), in the J2000
+// ecliptic and normalized to [0, 2π): the catalog convention for a Sun supplied by the caller.
+export function meteorSolarLongitudeOf(sun: Vec3): Angle {
+	const ecliptic = matMulVec(ECLIPTIC_J2000_MATRIX, sun)
+	return normalizeAngle(Math.atan2(ecliptic[1], ecliptic[0]))
 }
 
 // Computes solar longitude and the equatorial Sun vector from one shared geocentric VSOP state.

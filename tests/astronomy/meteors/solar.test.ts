@@ -1,6 +1,18 @@
 import { expect, test } from 'bun:test'
 import { meteorRadiantJ2000 } from '../../../src/astronomy/meteors/radiant'
-import { meteorComputationContext, meteorShowerDates, meteorSolarLongitude, meteorSolarLongitudeCrossingTimes, meteorSolarLongitudeDelta, meteorSolarLongitudeForwardDelta, meteorSolarLongitudeTimes, meteorSolarRelativeState, meteorSolarState, timeAtMeteorSolarLongitude } from '../../../src/astronomy/meteors/solar'
+import {
+	meteorComputationContext,
+	meteorShowerDates,
+	meteorSolarLongitude,
+	meteorSolarLongitudeCrossingTimes,
+	meteorSolarLongitudeDelta,
+	meteorSolarLongitudeForwardDelta,
+	meteorSolarLongitudeOf,
+	meteorSolarLongitudeTimes,
+	meteorSolarRelativeState,
+	meteorSolarState,
+	timeAtMeteorSolarLongitude,
+} from '../../../src/astronomy/meteors/solar'
 import type { MeteorShowerSolution } from '../../../src/astronomy/meteors/types'
 import { Timescale, timeSubtract, timeToDate, timeYMDHMS } from '../../../src/astronomy/time/time'
 import { deg, normalizeAngle, toDeg } from '../../../src/math/units/angle'
@@ -162,4 +174,13 @@ test('a start the civil year never reaches starts no occurrence in that year', (
 	const drifting = { ...solution, referenceSolarLongitude: deg(280.05), rightAscension: deg(230), declination: deg(49), radiantDrift: { basis: 'day', rightAscensionRate: deg(0.8), declinationRate: deg(-0.2) } } satisfies MeteorShowerSolution
 	const time = timeYMDHMS(2026, 6, 1, 0, 0, 0, Timescale.UTC)
 	expect(meteorRadiantJ2000(drifting, { time, solarLongitude: meteorSolarLongitude(time) })).toBeDefined()
+})
+
+test('the solar longitude of a supplied J2000 equatorial Sun vector is that of VSOP87E for its own Sun', () => {
+	for (const month of [1, 4, 7, 10]) {
+		const time = timeYMDHMS(2026, month, 15, 0, 0, 0, Timescale.UTC)
+		const { sun, solarLongitude } = meteorSolarState(time)
+		expect(meteorSolarLongitudeOf(sun)).toBeCloseTo(solarLongitude, 12)
+		expect(meteorSolarLongitudeOf(sun)).toBeCloseTo(meteorSolarLongitude(time), 12)
+	}
 })

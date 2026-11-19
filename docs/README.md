@@ -3268,12 +3268,12 @@ const states = meteorShowerStates([{ solution: quadrantids, profile }], context)
 
 Meteor catalogs locate a shower by the solar longitude `λ☉`, the Sun's ecliptic longitude, rather than by calendar date. A shower happens when the Earth crosses a meteoroid stream, which occurs at a fixed point of the Earth's orbit, so `λ☉` is the same every year, while the calendar date of that point wanders because of leap years and the calendar.
 
-The meteor modules compute it as the geometric geocentric longitude of the Sun in the **J2000 ecliptic**, from the VSOP87E Sun and Earth positions, with no light-time, aberration, or precession to the date, which is the convention of meteor catalogs. Because the frame is fixed at J2000, longitude 0° is reached about eight hours after the 2024 March equinox, not at it. Longitudes are in radians in `[0, 2π)`.
+The meteor modules compute it as the geometric geocentric longitude of the Sun in the **J2000 ecliptic**, from the VSOP87E Sun and Earth positions, with no light-time, aberration, or precession to the date, which is the convention of meteor catalogs. A caller that takes the Sun from another ephemeris, such as SPK kernels, derives the longitude from that Sun vector instead, so the activity and the darkness of a computation come from one ephemeris. Because the frame is fixed at J2000, longitude 0° is reached about eight hours after the 2024 March equinox, not at it. Longitudes are in radians in `[0, 2π)`.
 
 Converting a longitude to a time searches one civil UTC year. A civil year is shorter than the orbital period, so a fraction of a degree of longitude at the year turn (around 280° today) does not occur in a given year; the plain solver throws there, while the crossing solver answers `undefined`. The dates of a shower solution (start, reference, end, and the maximum of an explicit activity profile) are resolved for the occurrence that starts in the requested year, so an interval that wraps through the new year ends in the following year. The catalog reference longitude is the mean activity longitude, not necessarily the ZHR maximum.
 
 ```ts
-import { meteorShowerDates, meteorSolarLongitude, meteorSolarLongitudeCrossingTimes, meteorSolarLongitudeDelta, meteorSolarLongitudeForwardDelta, meteorSolarLongitudeTimes, meteorSolarState, timeAtMeteorSolarLongitude } from 'nebulosa/src/astronomy/meteors/solar'
+import { meteorShowerDates, meteorSolarLongitude, meteorSolarLongitudeCrossingTimes, meteorSolarLongitudeDelta, meteorSolarLongitudeForwardDelta, meteorSolarLongitudeOf, meteorSolarLongitudeTimes, meteorSolarState, timeAtMeteorSolarLongitude } from 'nebulosa/src/astronomy/meteors/solar'
 import type { MeteorShowerSolution } from 'nebulosa/src/astronomy/meteors/types'
 import { Timescale, timeToDate, timeYMDHMS, utc } from 'nebulosa/src/astronomy/time/time'
 import { deg, toDeg } from 'nebulosa/src/math/units/angle'
@@ -3283,6 +3283,9 @@ console.log(toDeg(meteorSolarLongitude(timeYMDHMS(2024, 1, 4, 0, 0, 0, Timescale
 
 // The same longitude with the geocentric J2000 equatorial Sun vector (AU) from one ephemeris evaluation.
 const state = meteorSolarState(timeYMDHMS(2024, 1, 4, 0, 0, 0, Timescale.UTC))
+
+// The longitude of a geocentric J2000 equatorial Sun vector supplied by another ephemeris.
+console.log(toDeg(meteorSolarLongitudeOf(state.sun))) // 282.768 — degrees
 
 // Signed shortest difference in (−π, π] and forward difference in [0, 2π) of two longitudes, across 0°.
 console.log(toDeg(meteorSolarLongitudeDelta(deg(5), deg(355))), toDeg(meteorSolarLongitudeForwardDelta(deg(5), deg(355)))) // 10 350 — degrees

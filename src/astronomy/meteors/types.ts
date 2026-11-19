@@ -231,6 +231,18 @@ export interface MeteorComputationContext {
 	readonly moon?: Vec3
 }
 
+// Geocentric geometric Sun and Moon supplied by the caller in place of VSOP87E and ELPMPP02, such as
+// positions read from SPK kernels or interpolated between hourly nodes. Both return J2000 equatorial
+// vectors in AU (ICRS axes are accepted: their 23 mas frame bias is far below what meteor planning
+// resolves), without light-time or aberration, and may return a fresh or a shared vector that the
+// toolkit never mutates.
+export interface MeteorEphemeris {
+	// Geocentric geometric J2000 equatorial Sun vector in AU at an instant.
+	readonly sun: (time: Time) => Vec3
+	// Geocentric geometric J2000 equatorial Moon vector in AU at an instant.
+	readonly moon: (time: Time) => Vec3
+}
+
 // Joint solar values derived from one geocentric VSOP Sun/Earth evaluation.
 export interface MeteorSolarState {
 	// Geometric geocentric solar longitude in the J2000 ecliptic, normalized to [0, 2π).
@@ -259,6 +271,9 @@ export interface MeteorShowerContextOptions {
 	readonly includeMoon?: boolean
 	// Prepare the Sun vector for solar altitude; defaults to true with an observer.
 	readonly includeSun?: boolean
+	// Sun and Moon of the context in place of VSOP87E and ELPMPP02. When given, the solar longitude
+	// is also derived from its Sun, so one context never mixes ephemerides.
+	readonly ephemeris?: MeteorEphemeris
 }
 
 // Controls which optional quantities an instantaneous shower-state calculation evaluates.
@@ -605,6 +620,8 @@ export interface MeteorObservingWindowOptions extends TimeSearchOptions {
 	readonly altitudeExponent?: number
 	// Optional provider for explicit, time-varying rate corrections.
 	readonly rateCorrection?: (time: Time, conditions: MeteorObservingConditions) => number
+	// Sun and Moon of every sample in place of VSOP87E and ELPMPP02 (see MeteorShowerContextOptions).
+	readonly ephemeris?: MeteorEphemeris
 }
 
 // Restrictions and numerical options of the profile-independent geometric observing planner.
@@ -626,6 +643,8 @@ export interface MeteorGeometricObservingWindowOptions extends TimeSearchOptions
 	readonly maximumMoonAltitude?: Angle
 	// Minimum duration in hours.
 	readonly minimumDurationHours?: number
+	// Sun and Moon of every sample in place of VSOP87E and ELPMPP02 (see MeteorShowerContextOptions).
+	readonly ephemeris?: MeteorEphemeris
 }
 
 // Whether a geometric window lies inside a known activity support or only satisfies the geometry

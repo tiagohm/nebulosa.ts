@@ -13,7 +13,10 @@ import type { MeteorActivityProfile, MeteorGeometricObservingWindow, MeteorGeome
 // and opt-in lunar constraints, and refines every detected boundary. The profile planner orders its
 // windows by integrated expected local count, with all returned lunar values tied to their best-time
 // instant through the condition object used during evaluation. The geometric planner needs no
-// activity profile, returns no rate or count, and orders its windows chronologically.
+// activity profile, returns no rate or count, and orders its windows chronologically. Every sample
+// takes its Sun and Moon from options.ephemeris when given, else from VSOP87E and ELPMPP02; the
+// candidate intervals of a span longer than 512 steps are still bracketed with VSOP87E solar
+// longitudes, and the samples inside them decide the activity.
 
 // Plans observing windows for one shower, one explicit activity profile and one observer.
 export function meteorObservingWindows(solution: MeteorShowerSolution, profile: MeteorActivityProfile, observer: GeographicPosition, start: Time, end: Time, options?: MeteorObservingWindowOptions): readonly MeteorObservingWindow[]
@@ -52,7 +55,7 @@ export function meteorGeometricObservingWindows(solution: MeteorShowerSolution, 
 
 	for (const candidate of candidates) {
 		const evaluate = cachedByTime((time): GeometricEvaluation => {
-			const context = meteorShowerComputationContext(time, observer, { includeHorizontal: true, includeSun: true, includeMoon })
+			const context = meteorShowerComputationContext(time, observer, { includeHorizontal: true, includeSun: true, includeMoon, ephemeris: options.ephemeris })
 			const state = meteorShowerState(solution, context, { includeRadiantOfDate: false, includeHorizontal: true, includeSun: true, includeMoon, includeActivity: false, extrapolateYearLimitedActivity: extrapolate })
 			const yearApplies = extrapolate || meteorShowerActivityYearApplies(solution.activity, time)
 			const active = yearApplies && (support === undefined || isMeteorShowerActive(support, context.solarLongitude) === true)
@@ -71,7 +74,7 @@ export function meteorGeometricObservingWindows(solution: MeteorShowerSolution, 
 
 		for (const [left, right] of qualifyingSegments(score, candidate.start, candidate.end, step, options)) {
 			const summary = summarizeRate(sineAt, left, right, step, options.tolerance)
-			const best = meteorShowerState(solution, meteorShowerComputationContext(summary.bestTime, observer, { includeHorizontal: true, includeSun: true, includeMoon: true }), {
+			const best = meteorShowerState(solution, meteorShowerComputationContext(summary.bestTime, observer, { includeHorizontal: true, includeSun: true, includeMoon: true, ephemeris: options.ephemeris }), {
 				includeRadiantOfDate: false,
 				includeHorizontal: true,
 				includeSun: true,
@@ -188,7 +191,7 @@ function constraintMargin(state: MeteorShowerState, options: MeteorGeometricObse
 // lunar constraint or a condition-aware rate correction requires them.
 function plannerEvaluationAt(solution: MeteorShowerSolution, profile: MeteorActivityProfile, observer: GeographicPosition, time: Time, options: MeteorObservingWindowOptions, activityMaximumZhr: number | undefined, rateModel: PlannerRateModel): PlannerEvaluation {
 	const includeMoon = needsMoon(options)
-	const context = meteorShowerComputationContext(time, observer, { includeHorizontal: true, includeSun: true, includeMoon })
+	const context = meteorShowerComputationContext(time, observer, { includeHorizontal: true, includeSun: true, includeMoon, ephemeris: options.ephemeris })
 	const state = meteorShowerState(solution, context, { profile, activityMaximumZhr, includeRadiantOfDate: false, includeHorizontal: true, includeSun: true, includeMoon, extrapolateYearLimitedActivity: options.extrapolateYearLimitedActivity })
 	if (state.horizontal === undefined || state.zhr === undefined) return { state, rate: 0 }
 	const sine = Math.sin(state.horizontal.altitude)

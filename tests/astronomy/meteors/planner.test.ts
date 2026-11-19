@@ -1,10 +1,12 @@
 import { expect, test } from 'bun:test'
+import { meteorMoonDirection, meteorSunDirection } from '../../../src/astronomy/meteors/observation'
 import { meteorGeometricObservingWindows, meteorObservingWindows } from '../../../src/astronomy/meteors/planner'
 import { meteorSolarLongitude, timeAtMeteorSolarLongitude } from '../../../src/astronomy/meteors/solar'
 import { meteorShowerComputationContext, meteorShowerState } from '../../../src/astronomy/meteors/state'
 import type { MeteorActivityProfile, MeteorShowerSolution } from '../../../src/astronomy/meteors/types'
 import { Ellipsoid, geodeticLocation } from '../../../src/astronomy/observer/location'
-import { timeShift, timeSubtract, timeToDate, timeToUnixMillis, timeUnix, timeYMDHMS, Timescale } from '../../../src/astronomy/time/time'
+import { type Time, timeShift, timeSubtract, timeToDate, timeToUnixMillis, timeUnix, timeYMDHMS, Timescale } from '../../../src/astronomy/time/time'
+import { vecNegate } from '../../../src/math/linear-algebra/vec3'
 import { deg } from '../../../src/math/units/angle'
 import { meter } from '../../../src/math/units/distance'
 import { BASE_SOLUTION, EXPONENTIAL_PROFILE, OBSERVER, PLANNER_END, PLANNER_MULTI_PROFILE, PLANNER_START, SITE_EPOCH, SITE_EPOCH_END, SOLAR_DRIFT_SOLUTION, TEST_INTERVAL, ZERO_WIDTH_INTERVAL } from './util'
@@ -319,4 +321,33 @@ test('geometric windows join the pieces two root searches leave around one cross
 	expect(windows).toHaveLength(1)
 	expect(timeToUnixMillis(windows[0].start)).toBeCloseTo(Date.UTC(2026, 10, 18, 5, 46, 40), -3)
 	expect(timeToUnixMillis(windows[0].end)).toBeCloseTo(Date.UTC(2026, 10, 18, 6, 47, 27), -3)
+})
+
+test('geometric and profile windows take the Sun and the Moon of a supplied ephemeris', () => {
+	const nightStart = timeYMDHMS(2026, 6, 29, 18, 0, 0, Timescale.UTC)
+	const nightEnd = timeYMDHMS(2026, 6, 30, 12, 0, 0, Timescale.UTC)
+	const options = { step: 1 / 48, minimumRadiantAltitude: deg(10), maximumMoonIllumination: 1, minimumMoonRadiantSeparation: deg(1) } as const
+	let calls = 0
+	const ephemeris = {
+		sun: (time: Time) => {
+			calls++
+			return meteorSunDirection(time)
+		},
+		moon: meteorMoonDirection,
+	}
+
+	// The toolkit's own models, supplied from outside, give the very same windows.
+	const geometric = meteorGeometricObservingWindows(BASE_SOLUTION, OBSERVER, nightStart, nightEnd, options)
+	const supplied = meteorGeometricObservingWindows(BASE_SOLUTION, OBSERVER, nightStart, nightEnd, { ...options, ephemeris })
+	expect(calls).toBeGreaterThan(0)
+	expect(supplied).toEqual(geometric)
+
+	const profiled = meteorObservingWindows(BASE_SOLUTION, EXPONENTIAL_PROFILE, OBSERVER, nightStart, nightEnd, options)
+	expect(meteorObservingWindows(BASE_SOLUTION, EXPONENTIAL_PROFILE, OBSERVER, nightStart, nightEnd, { ...options, ephemeris })).toEqual(profiled)
+
+	// A Sun on the far side of the sky moves the darkness, so the windows are not those of VSOP87E.
+	const opposite = { sun: (time: Time) => vecNegate(meteorSunDirection(time)), moon: meteorMoonDirection }
+	const moved = meteorGeometricObservingWindows({ ...BASE_SOLUTION, activityInterval: undefined }, OBSERVER, nightStart, nightEnd, { ...options, ephemeris: opposite })
+	const night = meteorGeometricObservingWindows({ ...BASE_SOLUTION, activityInterval: undefined }, OBSERVER, nightStart, nightEnd, options)
+	expect(moved).not.toEqual(night)
 })
