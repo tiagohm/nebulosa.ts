@@ -1,4 +1,7 @@
 import { expect, test } from 'bun:test'
+import { jovianEphemeris } from '../../../src/astronomy/ephemeris/jovian'
+import { saturnianEphemeris } from '../../../src/astronomy/ephemeris/saturnian'
+import { analyticalEphemerisSource } from '../../../src/astronomy/ephemeris/source'
 import { galileanMutualEvents, saturnianMutualEvents } from '../../../src/astronomy/events/mutual'
 import { Timescale, type Time, timeSubtract, timeYMDHMS } from '../../../src/astronomy/time/time'
 
@@ -15,7 +18,7 @@ function secondsAfter(time: Time, reference: Time): number {
 
 test('finds the Europa-Ganymede mutual occultation on 2026-12-05', () => {
 	const start = timeYMDHMS(2026, 12, 5, 18, 0, 0, Timescale.UTC)
-	const events = galileanMutualEvents(start, timeYMDHMS(2026, 12, 5, 21, 0, 0, Timescale.UTC))
+	const events = galileanMutualEvents(jovianEphemeris(analyticalEphemerisSource), start, timeYMDHMS(2026, 12, 5, 21, 0, 0, Timescale.UTC))
 	expect(events.length).toBe(1)
 
 	const occultation = events[0]
@@ -37,7 +40,7 @@ test('finds the Europa-Ganymede mutual occultation on 2026-12-05', () => {
 
 test('finds the Ganymede-shadow mutual eclipses on 2026-12-02', () => {
 	const start = timeYMDHMS(2026, 12, 2, 19, 0, 0, Timescale.UTC)
-	const events = galileanMutualEvents(start, timeYMDHMS(2026, 12, 2, 22, 0, 0, Timescale.UTC))
+	const events = galileanMutualEvents(jovianEphemeris(analyticalEphemerisSource), start, timeYMDHMS(2026, 12, 2, 22, 0, 0, Timescale.UTC))
 	expect(events.length).toBe(2)
 
 	// Ganymede is nearer the Sun and casts its shadow; the first event is a nearly central eclipse of
@@ -63,7 +66,7 @@ test('reports an event that is only underway during the window', () => {
 	// window start, so it must still be reported with the first contact blanked as undefined.
 	const start = timeYMDHMS(2026, 12, 5, 19, 20, 0, Timescale.UTC)
 	const stop = timeYMDHMS(2026, 12, 5, 19, 30, 0, Timescale.UTC)
-	const events = galileanMutualEvents(start, stop)
+	const events = galileanMutualEvents(jovianEphemeris(analyticalEphemerisSource), start, stop)
 	expect(events.length).toBe(1)
 
 	const event = events[0]
@@ -83,7 +86,7 @@ test('finds the Titan-Rhea mutual events in the 2025 Saturn season', () => {
 	// Near Saturn's 2025 conjunction (just after the ring-plane crossing) the Sun and Earth are almost in
 	// line, so Titan eclipses Rhea and then occults it a few minutes later.
 	const start = timeYMDHMS(2025, 3, 12, 10, 0, 0, Timescale.UTC)
-	const events = saturnianMutualEvents(start, timeYMDHMS(2025, 3, 12, 13, 0, 0, Timescale.UTC))
+	const events = saturnianMutualEvents(saturnianEphemeris(analyticalEphemerisSource), start, timeYMDHMS(2025, 3, 12, 13, 0, 0, Timescale.UTC))
 	expect(events.length).toBe(2)
 
 	const eclipse = events[0]
@@ -104,7 +107,7 @@ test('finds the Titan-Rhea mutual events in the 2025 Saturn season', () => {
 })
 
 test('contacts bracket every event and impact parameters stay in range', () => {
-	const events = galileanMutualEvents(timeYMDHMS(2026, 12, 2, 19, 0, 0, Timescale.UTC), timeYMDHMS(2026, 12, 2, 22, 0, 0, Timescale.UTC))
+	const events = galileanMutualEvents(jovianEphemeris(analyticalEphemerisSource), timeYMDHMS(2026, 12, 2, 19, 0, 0, Timescale.UTC), timeYMDHMS(2026, 12, 2, 22, 0, 0, Timescale.UTC))
 	expect(events.length).toBeGreaterThan(0)
 
 	for (const event of events) {

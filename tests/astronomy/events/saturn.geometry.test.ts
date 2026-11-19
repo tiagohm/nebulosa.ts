@@ -1,7 +1,8 @@
 import { expect, test } from 'bun:test'
 import { orientation, positionAngleOfPole, SATURN_ROTATION } from '../../../src/astronomy/bodies/orientation'
 import { SaturnMoons } from '../../../src/astronomy/ephemeris/meeus'
-import { analyticalSaturnianEphemeris, interpolatedSaturnianEphemeris, SATURNIAN_MOONS, type SaturnianBody, type SaturnianEphemeris, type SaturnianMoon } from '../../../src/astronomy/ephemeris/saturnian'
+import { interpolatedSaturnianEphemeris, SATURNIAN_MOONS, type SaturnianBody, type SaturnianEphemeris, type SaturnianMoon, saturnianEphemeris } from '../../../src/astronomy/ephemeris/saturnian'
+import { analyticalEphemerisSource, EphemerisMiss, spkEphemerisSource } from '../../../src/astronomy/ephemeris/source'
 import { saturnianSeparationMaxima, saturnianView } from '../../../src/astronomy/events/saturn.geometry'
 import { SATURN_RING_MODEL } from '../../../src/astronomy/events/saturn.rings'
 import { time, type Time, Timescale, timeShift, timeSubtract, timeYMDHMS } from '../../../src/astronomy/time/time'
@@ -35,7 +36,7 @@ const HORIZONS: readonly { time: Time; offsets: Readonly<Record<SaturnianMoon, r
 
 test('the apparent satellite offsets match JPL Horizons within the accuracy of TASS 1.7', () => {
 	for (const reference of HORIZONS) {
-		const view = saturnianView(analyticalSaturnianEphemeris, reference.time)
+		const view = saturnianView(saturnianEphemeris(analyticalEphemerisSource), reference.time)
 		const unit = view.equatorialRadius * RAD_TO_ARCSEC
 
 		for (const moon of view.moons) {
@@ -54,7 +55,7 @@ test('the apparent satellite offsets match JPL Horizons within the accuracy of T
 test('the satellites agree with Meeus example 46.a within its unit scale', () => {
 	// 1999 October 1, 0h TD (JDE 2451439.50074).
 	const jde = 2451439.50074
-	const view = saturnianView(analyticalSaturnianEphemeris, time(jde, 0, Timescale.TT))
+	const view = saturnianView(saturnianEphemeris(analyticalEphemerisSource), time(jde, 0, Timescale.TT))
 	const meeus = SaturnMoons.positions(jde)
 	// Meeus's chapter 46 ordering puts Hyperion before Iapetus.
 	const index: Readonly<Record<SaturnianMoon, number>> = { mimas: 0, enceladus: 1, tethys: 2, dione: 3, rhea: 4, titan: 5, iapetus: 7 }
@@ -74,7 +75,7 @@ test('the satellites agree with Meeus example 46.a within its unit scale', () =>
 
 test('the pole position angle matches the toolkit orientation', () => {
 	const t = utc(2026, 11, 1)
-	const view = saturnianView(analyticalSaturnianEphemeris, t)
+	const view = saturnianView(saturnianEphemeris(analyticalEphemerisSource), t)
 	const toEarth = vecMinus(view.earth, view.saturn)
 	expect(toDeg(view.polePositionAngle)).toBeCloseTo(toDeg(positionAngleOfPole(SATURN_ROTATION, t, toEarth)), 2)
 })
@@ -159,7 +160,7 @@ function separation(ephemeris: SaturnianEphemeris, moon: SaturnianMoon, at: Time
 }
 
 test('the separation maxima are the true maxima of the separation, found completely', () => {
-	const ephemeris = interpolatedSaturnianEphemeris(analyticalSaturnianEphemeris)
+	const ephemeris = interpolatedSaturnianEphemeris(analyticalEphemerisSource)
 	const start = utc(2026, 11, 1)
 	const stop = utc(2026, 12, 1)
 	const maxima = saturnianSeparationMaxima(ephemeris, start, stop)
@@ -188,7 +189,7 @@ test('the separation maxima are the true maxima of the separation, found complet
 })
 
 test('the Iapetus separation maximum differs from the maximum of its east offset', () => {
-	const ephemeris = interpolatedSaturnianEphemeris(analyticalSaturnianEphemeris)
+	const ephemeris = interpolatedSaturnianEphemeris(analyticalEphemerisSource)
 	const [maximum] = saturnianSeparationMaxima(ephemeris, utc(2026, 11, 1), utc(2026, 12, 1), ['iapetus'])
 	expect(maximum).toBeDefined()
 	// Iapetus is about 0.6° north of the projected ring plane at this maximum, so the north offset is not
@@ -210,7 +211,7 @@ test('the Iapetus separation maximum differs from the maximum of its east offset
 })
 
 test('a short window holds no maximum of a slow moon and never reports an edge', () => {
-	const ephemeris = interpolatedSaturnianEphemeris(analyticalSaturnianEphemeris)
+	const ephemeris = interpolatedSaturnianEphemeris(analyticalEphemerisSource)
 	// Iapetus's maximum falls on 2026-11-10; a day-long window before it has none.
 	expect(saturnianSeparationMaxima(ephemeris, utc(2026, 11, 2), utc(2026, 11, 3), ['iapetus'])).toEqual([])
 	// A window ending just after the maximum reports it once; the next window does not repeat it.

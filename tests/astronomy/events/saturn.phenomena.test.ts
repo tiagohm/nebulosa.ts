@@ -1,11 +1,12 @@
 import { expect, test } from 'bun:test'
-import { analyticalSaturnianEphemeris, interpolatedSaturnianEphemeris } from '../../../src/astronomy/ephemeris/saturnian'
+import { interpolatedSaturnianEphemeris, saturnianEphemeris } from '../../../src/astronomy/ephemeris/saturnian'
+import { analyticalEphemerisSource, EphemerisMiss, spkEphemerisSource } from '../../../src/astronomy/ephemeris/source'
 import { saturnianView } from '../../../src/astronomy/events/saturn.geometry'
 import { type SaturnianPhenomenon, saturnianPhenomena } from '../../../src/astronomy/events/saturn.phenomena'
 import { type Time, Timescale, timeShift, timeSubtract, timeYMDHMS } from '../../../src/astronomy/time/time'
 import { DAYSEC } from '../../../src/core/constants'
 
-const EPHEMERIS = interpolatedSaturnianEphemeris(analyticalSaturnianEphemeris)
+const EPHEMERIS = interpolatedSaturnianEphemeris(analyticalEphemerisSource)
 
 function utc(month: number, day: number, hour = 0, minute = 0, year = 2025) {
 	return timeYMDHMS(year, month, day, hour, minute, 0, Timescale.UTC)

@@ -1,14 +1,15 @@
 import { expect, test } from 'bun:test'
 import { SATURN_ROTATION, orientation } from '../../../src/astronomy/bodies/orientation'
 import { SaturnRing } from '../../../src/astronomy/ephemeris/meeus'
-import { analyticalSaturnianEphemeris, interpolatedSaturnianRingEphemeris, type SaturnianBody, type SaturnianEphemeris } from '../../../src/astronomy/ephemeris/saturnian'
+import { interpolatedSaturnianRingEphemeris, type SaturnianBody, type SaturnianEphemeris, saturnianEphemeris } from '../../../src/astronomy/ephemeris/saturnian'
+import { analyticalEphemerisSource, EphemerisMiss, spkEphemerisSource } from '../../../src/astronomy/ephemeris/source'
 import { SATURN_RING_MODEL, saturnRingEvents, saturnRingGeometry, saturnRingIllumination, saturnRingOpenings } from '../../../src/astronomy/events/saturn.rings'
 import { type Time, Timescale, timeShift, timeSubtract, timeYMDHMS, tt } from '../../../src/astronomy/time/time'
 import { AU_KM, DAYSEC, SATURN_EQUATORIAL_RADIUS_KM, SATURN_POLAR_RADIUS_KM, SPEED_OF_LIGHT_AU_DAY } from '../../../src/core/constants'
 import { type Vec3, vecLength, vecMinus, vecMulScalar, vecNormalize, vecCross } from '../../../src/math/linear-algebra/vec3'
 import { deg, toDeg } from '../../../src/math/units/angle'
 
-const RINGS = interpolatedSaturnianRingEphemeris(analyticalSaturnianEphemeris)
+const RINGS = interpolatedSaturnianRingEphemeris(analyticalEphemerisSource)
 
 // Planetocentric latitude from a planetodetic one on Saturn's IAU 1-bar spheroid (radians).
 function centric(detic: number) {
@@ -37,7 +38,7 @@ const HORIZONS = [
 
 test('the Earth opening, pole angle and disk size match JPL Horizons', () => {
 	for (const reference of HORIZONS) {
-		const geometry = saturnRingGeometry(analyticalSaturnianEphemeris, reference.time)
+		const geometry = saturnRingGeometry(saturnianEphemeris(analyticalEphemerisSource), reference.time)
 		// VSOP87E differs from DE441 by well under an arcsecond at Saturn.
 		expect(toDeg(geometry.earthOpening)).toBeCloseTo(toDeg(centric(deg(reference.obsLat))), 3)
 		expect(toDeg(geometry.polePositionAngle)).toBeCloseTo(reference.poleAngle, 2)
@@ -50,7 +51,7 @@ test('the Earth opening, pole angle and disk size match JPL Horizons', () => {
 
 test('the ring geometry agrees with Meeus chapter 45 within the pole-model difference', () => {
 	for (const reference of HORIZONS) {
-		const geometry = saturnRingGeometry(analyticalSaturnianEphemeris, reference.time)
+		const geometry = saturnRingGeometry(saturnianEphemeris(analyticalEphemerisSource), reference.time)
 		const t = tt(reference.time)
 		const [b, b2, , p, a, minor] = SaturnRing.ring(t.day + t.fraction)
 		// Meeus uses the older ring-plane elements of Harper and Taylor and adds aberration and nutation;
@@ -87,7 +88,7 @@ test('the 2025 Earth and solar crossings are distinct events six weeks apart', (
 	expect(toDeg(sun[0].earthOpening)).toBeLessThan(-2)
 
 	// The solar crossing is one Saturn-Sun light time before Horizons' sub-solar zero.
-	const state = saturnRingOpenings(analyticalSaturnianEphemeris, sun[0].time).state
+	const state = saturnRingOpenings(saturnianEphemeris(analyticalEphemerisSource), sun[0].time).state
 	const lightTime = (vecLength(vecMinus(state.sun, state.planet)) / SPEED_OF_LIGHT_AU_DAY) * DAYSEC
 	expect(Math.abs(seconds(HORIZONS_SOLAR_CROSSINGS[0], sun[0].time) - lightTime)).toBeLessThan(120)
 
@@ -136,7 +137,7 @@ test('the ring interpolator stays within 25 km of the source for the ring bodies
 		const time = timeShift(start, i * 1.37)
 
 		for (const body of ['sun', 'earth', 'saturn'] as const) {
-			const exact = analyticalSaturnianEphemeris.position(body, time)
+			const exact = saturnianEphemeris(analyticalEphemerisSource).position(body, time)
 			const interpolated = RINGS.position(body, time)
 			expect(vecLength(vecMinus(exact, interpolated)) * AU_KM).toBeLessThan(25)
 		}

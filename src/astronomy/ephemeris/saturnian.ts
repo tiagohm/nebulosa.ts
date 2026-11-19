@@ -1,24 +1,18 @@
 import { AU_KM } from '../../core/constants'
-import { type Vec3, vecClone, vecPlus } from '../../math/linear-algebra/vec3'
-import type { PositionAndVelocityOverTime } from '../coordinates/astrometry'
-import type { Time } from '../time/time'
 import { Naif } from './kernels/naif'
-import type { SpkKernelSet, SpkMissReason } from './kernels/spk.kernelset'
-import { dione, enceladus, iapetus, mimas, rhea, tethys, titan } from './models/analytical/tass17'
-import { earth, saturn, sun } from './models/analytical/vsop87e'
-import { hasSatelliteTargets, interpolatedSatelliteEphemeris, type SatelliteEphemeris, SatelliteEphemerisMiss, type SatelliteSystem, type SpkSatelliteEphemeris, type SpkSatelliteSource, spkSatelliteEphemeris } from './satellites'
+import { hasSatelliteTargets, interpolatedSatelliteEphemeris, type SatelliteEphemeris, satelliteEphemeris, type SatelliteSystem, type SpkSatelliteSource } from './satellites'
+import type { EphemerisSource } from './source'
 
 // One coherent source of the barycentric positions needed to predict Saturnian geometry and phenomena:
 // the Sun, the Earth, Saturn's centre (NAIF 699, never its system barycenter 6) and its seven major
-// satellites Mimas to Iapetus (Hyperion is omitted). A computation takes every state from one source, so
-// analytical and kernel positions are never mixed. The analytical source adds the TASS 1.7 Saturnicentric
-// offsets (J2000 equatorial axes, the same axes as VSOP87E's ICRF output, so they are not rotated again)
-// to the VSOP87E Saturn at the same instant; the SPK source resolves each body through a prepared kernel
-// set, chaining through barycenter 6 when the kernels do, and throws a SaturnianEphemerisMiss when any
-// state is unavailable. A ring-only computation evaluates SATURNIAN_RING_BODIES alone, so it needs
-// neither a satellite kernel nor the satellite theory. Positions are AU in ICRF/J2000 axes with a
-// barycentric origin; every call returns a freshly allocated vector. Dense searches wrap a source in
-// interpolatedSaturnianEphemeris.
+// satellites Mimas to Iapetus (Hyperion is omitted), all from one EphemerisSource, so analytical and kernel
+// positions are never mixed. With the analytical source the satellites are the TASS 1.7 Saturnicentric offsets
+// (J2000 equatorial axes, the same axes as VSOP87E's ICRF output, so they are not rotated again) added to the
+// VSOP87E Saturn at the same instant; with SPK kernels each body resolves through the prepared kernel set,
+// chaining through barycenter 6 when the kernels do, and a state the source cannot give throws EphemerisMiss. A
+// ring-only computation evaluates SATURNIAN_RING_BODIES alone, so it needs neither a satellite kernel nor the
+// satellite theory. Positions are AU in ICRF/J2000 axes with a barycentric origin; every call returns a freshly
+// allocated vector. Dense searches use interpolatedSaturnianEphemeris.
 
 // A major Saturnian satellite (Hyperion is omitted: its chaotic rotation and tiny disk make it a poor
 // planning target).
@@ -75,15 +69,6 @@ export const SATURNIAN_RADIUS_AU: Readonly<Record<SaturnianMoon, number>> = {
 	iapetus: SATURNIAN_RADIUS_KM.iapetus / AU_KM,
 }
 
-// Thrown by an SPK source when a Saturnian body state cannot be resolved, so the caller can abandon the
-// whole computation instead of mixing sources.
-export class SaturnianEphemerisMiss extends SatelliteEphemerisMiss<SaturnianBody> {
-	constructor(target: SaturnianBody, body: number, reason: SpkMissReason, time: Time) {
-		super(target, body, reason, time)
-		this.name = 'SaturnianEphemerisMiss'
-	}
-}
-
 // Node spacing in days of the interpolated Sun, Earth and Saturn, as for the Jovian system: the Earth's
 // lunar wobble dominates and keeps the six-point error at a few tens of metres.
 const PLANETARY_NODE_STEP = 1
@@ -103,7 +88,6 @@ export const SATURNIAN_SYSTEM: SatelliteSystem<SaturnianBody, SaturnianMoon> = {
 	bodies: SATURNIAN_BODIES,
 	moons: SATURNIAN_MOONS,
 	naif: SATURNIAN_NAIF,
-	miss: (target, body, reason, time) => new SaturnianEphemerisMiss(target, body, reason, time),
 	nodeStep: {
 		sun: PLANETARY_NODE_STEP,
 		earth: PLANETARY_NODE_STEP,
@@ -118,7 +102,7 @@ export const SATURNIAN_SYSTEM: SatelliteSystem<SaturnianBody, SaturnianMoon> = {
 	},
 }
 
-// The analytical theories behind the analytical source.
+// The analytical theories the analytical source uses for the Saturnian system.
 export interface AnalyticalSaturnianSource {
 	readonly kind: 'analytical'
 	// Planetary theory of the Sun, the Earth and Saturn.
@@ -136,51 +120,24 @@ export type SaturnianSource = AnalyticalSaturnianSource | SpkSaturnianSource
 // A coherent source of Saturnian positions. The optional planetocentric offsets are Saturnicentric.
 export type SaturnianEphemeris = SatelliteEphemeris<SaturnianBody, SaturnianMoon, SaturnianSource>
 
-// A Saturnian ephemeris backed by a kernel set, which also records the files that supplied each body.
-export type SpkSaturnianEphemeris = SpkSatelliteEphemeris<SaturnianBody, SaturnianMoon>
-
-// TASS 1.7 Saturnicentric theory of each major satellite (AU, J2000 equatorial).
-const ANALYTICAL_SATELLITES: Readonly<Record<SaturnianMoon, PositionAndVelocityOverTime>> = { mimas, enceladus, tethys, dione, rhea, titan, iapetus }
-
 // Provenance of the analytical source.
 const ANALYTICAL_SOURCE: AnalyticalSaturnianSource = { kind: 'analytical', planetary: 'VSOP87E', satellites: 'TASS1.7' }
 
-// The analytical Saturnian ephemeris: VSOP87E for the Sun, the Earth and Saturn's centre, and the TASS 1.7
-// Saturnicentric offsets added to the VSOP87E Saturn at the same instant for the satellites. Never throws.
-export const analyticalSaturnianEphemeris: SaturnianEphemeris = {
-	source: ANALYTICAL_SOURCE,
-	position: analyticalPosition,
-	planetocentric: (moon, time) => vecClone(ANALYTICAL_SATELLITES[moon](time)[0]),
+// Builds a Saturnian ephemeris over a source: each position is the source's state of the body's NAIF code (699
+// for Saturn, never the barycenter), and a state the source cannot give throws EphemerisMiss. The provenance is
+// the kernel set of an SPK source, else the VSOP87E and TASS 1.7 theories. A kernel-backed source must stay open
+// while the ephemeris is used, so evaluate it synchronously and do not keep it across an asynchronous yield that
+// could close the kernel sources.
+export function saturnianEphemeris(source: EphemerisSource): SaturnianEphemeris {
+	return satelliteEphemeris(SATURNIAN_SYSTEM, source, ANALYTICAL_SOURCE)
 }
 
-// Barycentric position of a Saturnian body from VSOP87E and TASS 1.7 (AU, ICRF), freshly allocated.
-function analyticalPosition(body: SaturnianBody, time: Time): Vec3 {
-	switch (body) {
-		case 'sun':
-			return vecClone(sun(time)[0])
-		case 'earth':
-			return vecClone(earth(time)[0])
-		case 'saturn':
-			return vecClone(saturn(time)[0])
-		default:
-			return vecPlus(saturn(time)[0], ANALYTICAL_SATELLITES[body](time)[0])
-	}
-}
-
-// Builds a Saturnian ephemeris over a prepared kernel set. Each position resolves the body's NAIF code
-// (699 for Saturn, never the barycenter) through the set with its precedence rules; any miss throws a
-// SaturnianEphemerisMiss. The set must stay open while the ephemeris is used, so evaluate it
-// synchronously and do not keep it across an asynchronous yield that could close the kernel sources.
-export function spkSaturnianEphemeris(set: SpkKernelSet): SpkSaturnianEphemeris {
-	return spkSatelliteEphemeris(SATURNIAN_SYSTEM, set)
-}
-
-// Builds a Saturnian ephemeris that interpolates `source` instead of evaluating it at every epoch, for
-// searches that sample thousands of nearby epochs. Nodes are one day apart for the Sun, the Earth and
-// Saturn, 30 minutes apart for Mimas and Enceladus and one hour apart for the other satellites; the error
-// stays below 0.1 km. See interpolatedSatelliteEphemeris for the caching, provenance and miss behavior.
-export function interpolatedSaturnianEphemeris<E extends SaturnianEphemeris>(source: E): SaturnianEphemeris & Pick<E, 'source'> {
-	return interpolatedSatelliteEphemeris(SATURNIAN_SYSTEM, source)
+// Builds a Saturnian ephemeris that interpolates `source` instead of evaluating it at every epoch, for searches
+// that sample thousands of nearby epochs. Nodes are one day apart for the Sun, the Earth and Saturn, 30 minutes
+// apart for Mimas and Enceladus and one hour apart for the other satellites; the error stays below 0.1 km. See
+// interpolatedEphemerisSource for the caching and miss behavior.
+export function interpolatedSaturnianEphemeris(source: EphemerisSource): SaturnianEphemeris {
+	return interpolatedSatelliteEphemeris(SATURNIAN_SYSTEM, source, ANALYTICAL_SOURCE)
 }
 
 // The Saturnian system with coarse interpolation nodes for ring-only computations, which evaluate only the
@@ -196,14 +153,14 @@ const SATURNIAN_RING_SYSTEM: SatelliteSystem<SaturnianBody, SaturnianMoon> = {
 // Builds an interpolating ephemeris for ring-only computations (multi-year ring histories and ring-plane
 // event searches) over `source`, with SATURNIAN_RING_SYSTEM's coarse nodes for the Sun, the Earth and
 // Saturn; positions stay within 25 km of the source. Do not use it for the satellites. See
-// interpolatedSatelliteEphemeris for the caching, provenance and miss behavior.
-export function interpolatedSaturnianRingEphemeris<E extends SaturnianEphemeris>(source: E): SaturnianEphemeris & Pick<E, 'source'> {
-	return interpolatedSatelliteEphemeris(SATURNIAN_RING_SYSTEM, source)
+// interpolatedEphemerisSource for the caching and miss behavior.
+export function interpolatedSaturnianRingEphemeris(source: EphemerisSource): SaturnianEphemeris {
+	return interpolatedSatelliteEphemeris(SATURNIAN_RING_SYSTEM, source, ANALYTICAL_SOURCE)
 }
 
-// Whether a kernel set has a segment for every body of `bodies` (by default every Saturnian body; pass
+// Whether a source has every body of `bodies` (by default every Saturnian body; pass
 // SATURNIAN_RING_BODIES for a ring-only computation). This is a necessary condition only: the centers,
 // coverage and segment support are resolved per epoch by stateAt.
-export function hasSaturnianTargets(set: SpkKernelSet, bodies: readonly SaturnianBody[] = SATURNIAN_BODIES): boolean {
-	return hasSatelliteTargets(SATURNIAN_SYSTEM, set, bodies)
+export function hasSaturnianTargets(source: EphemerisSource, bodies: readonly SaturnianBody[] = SATURNIAN_BODIES): boolean {
+	return hasSatelliteTargets(SATURNIAN_SYSTEM, source, bodies)
 }

@@ -47,7 +47,7 @@ const SATURNIAN_PHENOMENA: SatellitePhenomenaSystem<SaturnianBody, SaturnianMoon
 
 // Finds the classical phenomena of Saturn's major satellites whose conjunction (`maximum`) lies in
 // [start, stop), chronologically by maximum. Every position comes from `ephemeris`; wrap a source in
-// interpolatedSaturnianEphemeris for speed. A kernel-backed ephemeris propagates its SaturnianEphemerisMiss
+// interpolatedSaturnianEphemeris for speed. A kernel-backed ephemeris propagates its EphemerisMiss
 // and the search is abandoned. See satellitePhenomena for the grid, window and tolerance conventions.
 export function saturnianPhenomena(ephemeris: SaturnianEphemeris, start: Time, stop: Time, options: SaturnianPhenomenaOptions = {}): SaturnianPhenomenon[] {
 	return satellitePhenomena(SATURNIAN_PHENOMENA, ephemeris, start, stop, options)

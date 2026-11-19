@@ -38,12 +38,15 @@ import { precessFk5FromJ2000 } from '../src/astronomy/coordinates/fk5'
 import { GALACTIC, SUPERGALACTIC, fk5ToIcrs, frameToFrame, icrsToFk5 } from '../src/astronomy/coordinates/frame'
 import { icrs as icrsVector } from '../src/astronomy/coordinates/icrs'
 import { itrs } from '../src/astronomy/coordinates/itrs'
+import { jovianEphemeris } from '../src/astronomy/ephemeris/jovian'
 import { Naif } from '../src/astronomy/ephemeris/kernels/naif'
 import { Base as Meeus } from '../src/astronomy/ephemeris/meeus'
 import { moon as moonGeocentric } from '../src/astronomy/ephemeris/models/analytical/elpmpp02'
 import { earth, jupiter, mars, mercury, saturn, sun, venus } from '../src/astronomy/ephemeris/models/analytical/vsop87e'
 import { customEphemerisEndpoint, ephemerisPath, naifEphemerisEndpoint, relativeEphemerisPath, SOLAR_SYSTEM_BARYCENTER } from '../src/astronomy/ephemeris/path'
 import { earthObserverEphemerisPath, sgp4EphemerisPath } from '../src/astronomy/ephemeris/path.adapter'
+import { saturnianEphemeris } from '../src/astronomy/ephemeris/saturnian'
+import { analyticalEphemerisSource } from '../src/astronomy/ephemeris/source'
 import { darknessWindows } from '../src/astronomy/events/darkness'
 import { sunMoonPosition } from '../src/astronomy/events/eclipse/eclipse'
 import { computeLocalLunarEclipseCircumstances } from '../src/astronomy/events/eclipse/lunar/local'
@@ -1513,11 +1516,11 @@ function venusTransitCircumstances() {
 // Saturnian moon pairs for mutual occultations and eclipses over a window (here days in the 2026-2027
 // Jupiter and 2025 Saturn mutual-event seasons).
 function mutualSatelliteEvent() {
-	const jovian = galileanMutualEvents(timeYMDHMS(2026, 12, 2, 0, 0, 0, Timescale.UTC), timeYMDHMS(2026, 12, 3, 0, 0, 0, Timescale.UTC))
+	const jovian = galileanMutualEvents(jovianEphemeris(analyticalEphemerisSource), timeYMDHMS(2026, 12, 2, 0, 0, 0, Timescale.UTC), timeYMDHMS(2026, 12, 3, 0, 0, 0, Timescale.UTC))
 	const [first] = jovian
 	console.info('Galilean mutual events in the day:', jovian.length, first ? `(first: ${first.front} ${first.kind === 'occultation' ? 'occults' : 'eclipses'} ${first.back})` : '')
 
-	const saturnian = saturnianMutualEvents(timeYMDHMS(2025, 3, 12, 0, 0, 0, Timescale.UTC), timeYMDHMS(2025, 3, 13, 0, 0, 0, Timescale.UTC))
+	const saturnian = saturnianMutualEvents(saturnianEphemeris(analyticalEphemerisSource), timeYMDHMS(2025, 3, 12, 0, 0, 0, Timescale.UTC), timeYMDHMS(2025, 3, 13, 0, 0, 0, Timescale.UTC))
 	console.info('Saturnian mutual events in the day:', saturnian.length)
 }
 

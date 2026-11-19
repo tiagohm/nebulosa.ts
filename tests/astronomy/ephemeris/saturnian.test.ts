@@ -1,12 +1,12 @@
 import { expect, test } from 'bun:test'
-import { JovianEphemerisMiss } from '../../../src/astronomy/ephemeris/jovian'
 import type { Daf, Summary } from '../../../src/astronomy/ephemeris/kernels/daf'
 import { SPK_FRAME_J2000 } from '../../../src/astronomy/ephemeris/kernels/spk'
 import { inspectSpk } from '../../../src/astronomy/ephemeris/kernels/spk.inspect'
 import { prepareSpkKernelSet, type SpkKernelEntry } from '../../../src/astronomy/ephemeris/kernels/spk.kernelset'
 import { iapetus, mimas, titan } from '../../../src/astronomy/ephemeris/models/analytical/tass17'
 import { earth, saturn, sun } from '../../../src/astronomy/ephemeris/models/analytical/vsop87e'
-import { analyticalSaturnianEphemeris, hasSaturnianTargets, interpolatedSaturnianEphemeris, SATURNIAN_BODIES, SATURNIAN_RADIUS_AU, SATURNIAN_RING_BODIES, SaturnianEphemerisMiss, spkSaturnianEphemeris } from '../../../src/astronomy/ephemeris/saturnian'
+import { hasSaturnianTargets, interpolatedSaturnianEphemeris, SATURNIAN_BODIES, SATURNIAN_RADIUS_AU, SATURNIAN_RING_BODIES, saturnianEphemeris } from '../../../src/astronomy/ephemeris/saturnian'
+import { analyticalEphemerisSource, EphemerisMiss, spkEphemerisSource } from '../../../src/astronomy/ephemeris/source'
 import { findSaturnianMutualEvents, saturnianMutualEvents } from '../../../src/astronomy/events/mutual'
 import { type Time, Timescale, timeShift, timeSubtract, timeYMDHMS } from '../../../src/astronomy/time/time'
 import { AU_KM, DAYSEC, J2000 } from '../../../src/core/constants'
@@ -72,10 +72,10 @@ const SATELLITES: readonly SyntheticSegment[] = [
 
 test('the analytical source adds TASS 1.7 to VSOP87E Saturn', () => {
 	const time = timeYMDHMS(2025, 3, 23, 0, 0, 0, Timescale.UTC)
-	expect(analyticalSaturnianEphemeris.source).toEqual({ kind: 'analytical', planetary: 'VSOP87E', satellites: 'TASS1.7' })
-	expect(analyticalSaturnianEphemeris.position('sun', time)).toEqual([...sun(time)[0]])
-	expect(analyticalSaturnianEphemeris.position('earth', time)).toEqual([...earth(time)[0]])
-	expect(analyticalSaturnianEphemeris.position('saturn', time)).toEqual([...saturn(time)[0]])
+	expect(saturnianEphemeris(analyticalEphemerisSource).source).toEqual({ kind: 'analytical', planetary: 'VSOP87E', satellites: 'TASS1.7' })
+	expect(saturnianEphemeris(analyticalEphemerisSource).position('sun', time)).toEqual([...sun(time)[0]])
+	expect(saturnianEphemeris(analyticalEphemerisSource).position('earth', time)).toEqual([...earth(time)[0]])
+	expect(saturnianEphemeris(analyticalEphemerisSource).position('saturn', time)).toEqual([...saturn(time)[0]])
 
 	const planet = saturn(time)[0]
 
@@ -85,15 +85,15 @@ test('the analytical source adds TASS 1.7 to VSOP87E Saturn', () => {
 		['iapetus', iapetus],
 	] as const) {
 		const offset = theory(time)[0]
-		expect(analyticalSaturnianEphemeris.position(moon, time)).toEqual([planet[0] + offset[0], planet[1] + offset[1], planet[2] + offset[2]])
-		expect(analyticalSaturnianEphemeris.planetocentric!(moon, time)).toEqual([...offset])
+		expect(saturnianEphemeris(analyticalEphemerisSource).position(moon, time)).toEqual([planet[0] + offset[0], planet[1] + offset[1], planet[2] + offset[2]])
+		expect(saturnianEphemeris(analyticalEphemerisSource).planetocentric!(moon, time)).toEqual([...offset])
 	}
 })
 
 test('the analytical source returns fresh vectors', () => {
 	const time = timeYMDHMS(2025, 3, 23, 0, 0, 0, Timescale.UTC)
-	const a = analyticalSaturnianEphemeris.position('titan', time)
-	const b = analyticalSaturnianEphemeris.position('titan', time)
+	const a = saturnianEphemeris(analyticalEphemerisSource).position('titan', time)
+	const b = saturnianEphemeris(analyticalEphemerisSource).position('titan', time)
 	expect(a).not.toBe(b)
 	expect(a).toEqual(b)
 })
@@ -106,9 +106,9 @@ test('the Saturnian radii are the IAU mean values', () => {
 
 test('the SPK source resolves Saturn and its moons through barycenter 6', async () => {
 	const set = await prepareSpkKernelSet([entry('planets', PLANETARY), entry('sat', SATELLITES)])
-	expect(hasSaturnianTargets(set)).toBeTrue()
+	expect(hasSaturnianTargets(spkEphemerisSource(set))).toBeTrue()
 
-	const ephemeris = spkSaturnianEphemeris(set)
+	const ephemeris = saturnianEphemeris(spkEphemerisSource(set))
 	expect(ephemeris.source).toEqual({ kind: 'spk', kernels: ['planets', 'sat'] })
 
 	const time = at(25)
@@ -123,22 +123,21 @@ test('the SPK source resolves Saturn and its moons through barycenter 6', async 
 	expect(titanPosition[1]).toBeCloseTo(km(1221870), 12)
 	expect(titanPosition[2]).toBe(0)
 
-	expect(ephemeris.kernelsByBody.get('titan')).toEqual(new Set(['sat', 'planets']))
-	expect(ephemeris.kernelsByBody.has('mimas')).toBeFalse()
+	expect(ephemeris.kernelsByBody!.get('titan')).toEqual(new Set(['sat', 'planets']))
+	expect(ephemeris.kernelsByBody!.has('mimas')).toBeFalse()
 })
 
-test('the SPK source throws a Saturnian miss with the reason and the failing link', async () => {
+test('the SPK source throws a miss with the reason and the failing link', async () => {
 	const set = await prepareSpkKernelSet([entry('planets', PLANETARY), entry('sat', SATELLITES)])
-	const ephemeris = spkSaturnianEphemeris(set)
+	const ephemeris = saturnianEphemeris(spkEphemerisSource(set))
 
 	try {
 		ephemeris.position('iapetus', at(75))
 		throw new Error('expected a miss')
 	} catch (e) {
-		expect(e).toBeInstanceOf(SaturnianEphemerisMiss)
-		expect(e).not.toBeInstanceOf(JovianEphemerisMiss)
-		const miss = e as SaturnianEphemerisMiss
-		expect(miss.target).toBe('iapetus')
+		expect(e).toBeInstanceOf(EphemerisMiss)
+		const miss = e as EphemerisMiss
+		expect(miss.target).toBe(608)
 		expect(miss.body).toBe(608)
 		expect(miss.reason).toBe('coverage')
 	}
@@ -151,14 +150,14 @@ test('the SPK source throws a Saturnian miss with the reason and the failing lin
 			SATELLITES.filter((s) => s.target !== 601),
 		),
 	])
-	expect(hasSaturnianTargets(withoutMimas)).toBeFalse()
+	expect(hasSaturnianTargets(spkEphemerisSource(withoutMimas))).toBeFalse()
 
 	try {
-		spkSaturnianEphemeris(withoutMimas).position('mimas', at(25))
+		saturnianEphemeris(spkEphemerisSource(withoutMimas)).position('mimas', at(25))
 		throw new Error('expected a miss')
 	} catch (e) {
-		expect((e as SaturnianEphemerisMiss).reason).toBe('missing')
-		expect((e as SaturnianEphemerisMiss).body).toBe(601)
+		expect((e as EphemerisMiss).reason).toBe('missing')
+		expect((e as EphemerisMiss).body).toBe(601)
 	}
 
 	// A missing system barycenter.
@@ -171,22 +170,22 @@ test('the SPK source throws a Saturnian miss with the reason and the failing lin
 	])
 
 	try {
-		spkSaturnianEphemeris(withoutBarycenter).position('saturn', at(25))
+		saturnianEphemeris(spkEphemerisSource(withoutBarycenter)).position('saturn', at(25))
 		throw new Error('expected a miss')
 	} catch (e) {
-		expect((e as SaturnianEphemerisMiss).reason).toBe('missing')
-		expect((e as SaturnianEphemerisMiss).body).toBe(6)
+		expect((e as EphemerisMiss).reason).toBe('missing')
+		expect((e as EphemerisMiss).body).toBe(6)
 	}
 
 	// An unsupported data type selected for Saturn's centre.
 	const unsupported = await prepareSpkKernelSet([entry('planets', PLANETARY), entry('sat', SATELLITES), entry('odd', [{ center: 6, target: 699, start: 0, end: 100, position: [0, 0, 0], frame: 17 }])])
 
 	try {
-		spkSaturnianEphemeris(unsupported).position('saturn', at(25))
+		saturnianEphemeris(spkEphemerisSource(unsupported)).position('saturn', at(25))
 		throw new Error('expected a miss')
 	} catch (e) {
-		expect((e as SaturnianEphemerisMiss).reason).toBe('frame')
-		expect((e as SaturnianEphemerisMiss).body).toBe(699)
+		expect((e as EphemerisMiss).reason).toBe('frame')
+		expect((e as EphemerisMiss).body).toBe(699)
 	}
 })
 
@@ -199,17 +198,17 @@ test('a ring-only kernel resolves the ring bodies without any moon', async () =>
 			SATELLITES.filter((s) => s.target === 699),
 		),
 	])
-	expect(hasSaturnianTargets(set)).toBeFalse()
-	expect(hasSaturnianTargets(set, SATURNIAN_RING_BODIES)).toBeTrue()
+	expect(hasSaturnianTargets(spkEphemerisSource(set))).toBeFalse()
+	expect(hasSaturnianTargets(spkEphemerisSource(set), SATURNIAN_RING_BODIES)).toBeTrue()
 
-	const ephemeris = spkSaturnianEphemeris(set)
+	const ephemeris = saturnianEphemeris(spkEphemerisSource(set))
 	for (const body of SATURNIAN_RING_BODIES) expect(ephemeris.position(body, at(25)).every(Number.isFinite)).toBeTrue()
-	expect(() => ephemeris.position('titan', at(25))).toThrow(SaturnianEphemerisMiss)
+	expect(() => ephemeris.position('titan', at(25))).toThrow(EphemerisMiss)
 })
 
 test('the interpolated source stays within 0.1 km of the analytical one', () => {
-	const ephemeris = interpolatedSaturnianEphemeris(analyticalSaturnianEphemeris)
-	expect(ephemeris.source).toBe(analyticalSaturnianEphemeris.source)
+	const ephemeris = interpolatedSaturnianEphemeris(analyticalEphemerisSource)
+	expect(ephemeris.source).toBe(saturnianEphemeris(analyticalEphemerisSource).source)
 	const start = timeYMDHMS(2025, 3, 1, 0, 0, 0, Timescale.UTC)
 
 	for (let i = 0; i < 120; i++) {
@@ -217,7 +216,7 @@ test('the interpolated source stays within 0.1 km of the analytical one', () => 
 		const time = timeShift(start, i * 0.0371)
 
 		for (const body of SATURNIAN_BODIES) {
-			const exact = analyticalSaturnianEphemeris.position(body, time)
+			const exact = saturnianEphemeris(analyticalEphemerisSource).position(body, time)
 			const interpolated = ephemeris.position(body, time)
 			expect(Math.hypot(exact[0] - interpolated[0], exact[1] - interpolated[1], exact[2] - interpolated[2]) * AU_KM).toBeLessThan(0.1)
 		}
@@ -226,18 +225,18 @@ test('the interpolated source stays within 0.1 km of the analytical one', () => 
 
 test('the interpolated source propagates a kernel miss from its nodes', async () => {
 	const set = await prepareSpkKernelSet([entry('planets', PLANETARY), entry('sat', SATELLITES)])
-	const ephemeris = interpolatedSaturnianEphemeris(spkSaturnianEphemeris(set))
+	const ephemeris = interpolatedSaturnianEphemeris(spkEphemerisSource(set))
 	expect(ephemeris.source).toEqual({ kind: 'spk', kernels: ['planets', 'sat'] })
 	// The synthetic segments cover 100 s around J2000, far less than one interpolation node step.
-	expect(() => ephemeris.position('titan', at(50))).toThrow(SaturnianEphemerisMiss)
+	expect(() => ephemeris.position('titan', at(50))).toThrow(EphemerisMiss)
 })
 
 test('the source-aware Saturnian mutual finder matches the analytical one and propagates a miss', async () => {
 	// The 2025-03-12 Titan-Rhea occultation (impact parameter ~0.245).
 	const start = timeYMDHMS(2025, 3, 12, 10, 0, 0, Timescale.UTC)
 	const stop = timeYMDHMS(2025, 3, 12, 13, 0, 0, Timescale.UTC)
-	const legacy = saturnianMutualEvents(start, stop)
-	const injected = findSaturnianMutualEvents(analyticalSaturnianEphemeris, start, stop)
+	const legacy = saturnianMutualEvents(saturnianEphemeris(analyticalEphemerisSource), start, stop)
+	const injected = findSaturnianMutualEvents(saturnianEphemeris(analyticalEphemerisSource), start, stop)
 	expect(injected.length).toBeGreaterThan(0)
 
 	for (const event of injected) {
@@ -255,5 +254,5 @@ test('the source-aware Saturnian mutual finder matches the analytical one and pr
 			SATELLITES.filter((s) => s.target === 699),
 		),
 	])
-	expect(() => findSaturnianMutualEvents(spkSaturnianEphemeris(set), at(0), at(60))).toThrow(SaturnianEphemerisMiss)
+	expect(() => findSaturnianMutualEvents(saturnianEphemeris(spkEphemerisSource(set)), at(0), at(60))).toThrow(EphemerisMiss)
 })

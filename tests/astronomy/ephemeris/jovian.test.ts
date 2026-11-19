@@ -1,12 +1,13 @@
 import { expect, test } from 'bun:test'
 import fs from 'fs/promises'
-import { analyticalJovianEphemeris, GALILEAN_RADIUS_AU, hasJovianTargets, interpolatedJovianEphemeris, JOVIAN_BODIES, JovianEphemerisMiss, spkJovianEphemeris } from '../../../src/astronomy/ephemeris/jovian'
+import { GALILEAN_RADIUS_AU, hasJovianTargets, interpolatedJovianEphemeris, JOVIAN_BODIES, jovianEphemeris } from '../../../src/astronomy/ephemeris/jovian'
 import { type Daf, readDaf, type Summary } from '../../../src/astronomy/ephemeris/kernels/daf'
 import { SPK_FRAME_J2000 } from '../../../src/astronomy/ephemeris/kernels/spk'
 import { inspectSpk } from '../../../src/astronomy/ephemeris/kernels/spk.inspect'
 import { prepareSpkKernelSet, type SpkKernelEntry } from '../../../src/astronomy/ephemeris/kernels/spk.kernelset'
 import { callisto, io } from '../../../src/astronomy/ephemeris/models/analytical/l12'
 import { earth, jupiter, sun } from '../../../src/astronomy/ephemeris/models/analytical/vsop87e'
+import { analyticalEphemerisSource, EphemerisMiss, spkEphemerisSource } from '../../../src/astronomy/ephemeris/source'
 import { findGalileanMutualEvents, galileanMutualEvents } from '../../../src/astronomy/events/mutual'
 import { type Time, Timescale, timeShift, timeSubtract, timeYMDHMS } from '../../../src/astronomy/time/time'
 import { AU_KM, DAYSEC, J2000 } from '../../../src/core/constants'
@@ -73,23 +74,23 @@ const SATELLITES: readonly SyntheticSegment[] = [
 
 test('the analytical source adds L1.2 to VSOP87E Jupiter', () => {
 	const time = timeYMDHMS(2026, 12, 5, 19, 0, 0, Timescale.UTC)
-	expect(analyticalJovianEphemeris.source).toEqual({ kind: 'analytical', planetary: 'VSOP87E', satellites: 'L1.2' })
-	expect(analyticalJovianEphemeris.position('sun', time)).toEqual([...sun(time)[0]])
-	expect(analyticalJovianEphemeris.position('earth', time)).toEqual([...earth(time)[0]])
-	expect(analyticalJovianEphemeris.position('jupiter', time)).toEqual([...jupiter(time)[0]])
+	expect(jovianEphemeris(analyticalEphemerisSource).source).toEqual({ kind: 'analytical', planetary: 'VSOP87E', satellites: 'L1.2' })
+	expect(jovianEphemeris(analyticalEphemerisSource).position('sun', time)).toEqual([...sun(time)[0]])
+	expect(jovianEphemeris(analyticalEphemerisSource).position('earth', time)).toEqual([...earth(time)[0]])
+	expect(jovianEphemeris(analyticalEphemerisSource).position('jupiter', time)).toEqual([...jupiter(time)[0]])
 
 	const planet = jupiter(time)[0]
 	const offset = io(time)[0]
-	expect(analyticalJovianEphemeris.position('io', time)).toEqual([planet[0] + offset[0], planet[1] + offset[1], planet[2] + offset[2]])
+	expect(jovianEphemeris(analyticalEphemerisSource).position('io', time)).toEqual([planet[0] + offset[0], planet[1] + offset[1], planet[2] + offset[2]])
 
 	const outer = callisto(time)[0]
-	expect(analyticalJovianEphemeris.position('callisto', time)).toEqual([planet[0] + outer[0], planet[1] + outer[1], planet[2] + outer[2]])
+	expect(jovianEphemeris(analyticalEphemerisSource).position('callisto', time)).toEqual([planet[0] + outer[0], planet[1] + outer[1], planet[2] + outer[2]])
 })
 
 test('the analytical source returns fresh vectors', () => {
 	const time = timeYMDHMS(2026, 12, 5, 19, 0, 0, Timescale.UTC)
-	const a = analyticalJovianEphemeris.position('io', time)
-	const b = analyticalJovianEphemeris.position('io', time)
+	const a = jovianEphemeris(analyticalEphemerisSource).position('io', time)
+	const b = jovianEphemeris(analyticalEphemerisSource).position('io', time)
 	expect(a).not.toBe(b)
 	expect(a).toEqual(b)
 })
@@ -101,9 +102,9 @@ test('the Galilean radii are the IAU mean values', () => {
 
 test('the SPK source resolves every body through its center chain', async () => {
 	const set = await prepareSpkKernelSet([entry('planets', PLANETARY), entry('jup', SATELLITES)])
-	expect(hasJovianTargets(set)).toBeTrue()
+	expect(hasJovianTargets(spkEphemerisSource(set))).toBeTrue()
 
-	const ephemeris = spkJovianEphemeris(set)
+	const ephemeris = jovianEphemeris(spkEphemerisSource(set))
 	expect(ephemeris.source).toEqual({ kind: 'spk', kernels: ['planets', 'jup'] })
 
 	const time = at(25)
@@ -127,24 +128,24 @@ test('the SPK source resolves every body through its center chain', async () => 
 	expect(ganymedePosition[0]).toBeCloseTo(km(778000000 - 1070400), 12)
 	expect(ganymedePosition[2]).toBe(0)
 
-	expect(ephemeris.kernelsByBody.get('io')).toEqual(new Set(['jup', 'planets']))
-	expect(ephemeris.kernelsByBody.get('earth')).toEqual(new Set(['planets']))
-	expect(ephemeris.kernelsByBody.has('callisto')).toBeFalse()
+	expect(ephemeris.kernelsByBody!.get('io')).toEqual(new Set(['jup', 'planets']))
+	expect(ephemeris.kernelsByBody!.get('earth')).toEqual(new Set(['planets']))
+	expect(ephemeris.kernelsByBody!.has('callisto')).toBeFalse()
 })
 
 test('the SPK source throws a miss with the reason and the failing link', async () => {
 	const set = await prepareSpkKernelSet([entry('planets', PLANETARY), entry('jup', SATELLITES)])
-	const ephemeris = spkJovianEphemeris(set)
+	const ephemeris = jovianEphemeris(spkEphemerisSource(set))
 
 	// Callisto's segment ends at 50 s: a coverage gap.
-	expect(() => ephemeris.position('callisto', at(75))).toThrow(JovianEphemerisMiss)
+	expect(() => ephemeris.position('callisto', at(75))).toThrow(EphemerisMiss)
 
 	try {
 		ephemeris.position('callisto', at(75))
 	} catch (e) {
-		expect(e).toBeInstanceOf(JovianEphemerisMiss)
-		const miss = e as JovianEphemerisMiss
-		expect(miss.target).toBe('callisto')
+		expect(e).toBeInstanceOf(EphemerisMiss)
+		const miss = e as EphemerisMiss
+		expect(miss.target).toBe(504)
 		expect(miss.body).toBe(504)
 		expect(miss.reason).toBe('coverage')
 	}
@@ -159,15 +160,15 @@ test('the SPK source reports a missing center and an unsupported selected segmen
 		),
 		entry('jup', SATELLITES),
 	])
-	expect(hasJovianTargets(withoutBarycenter)).toBeTrue()
+	expect(hasJovianTargets(spkEphemerisSource(withoutBarycenter))).toBeTrue()
 
 	try {
-		spkJovianEphemeris(withoutBarycenter).position('io', at(25))
+		jovianEphemeris(spkEphemerisSource(withoutBarycenter)).position('io', at(25))
 		throw new Error('expected a miss')
 	} catch (e) {
-		const miss = e as JovianEphemerisMiss
+		const miss = e as EphemerisMiss
 		expect(miss.reason).toBe('missing')
-		expect(miss.target).toBe('io')
+		expect(miss.target).toBe(501)
 		expect(miss.body).toBe(5)
 	}
 
@@ -175,10 +176,10 @@ test('the SPK source reports a missing center and an unsupported selected segmen
 	const ecliptic = await prepareSpkKernelSet([entry('planets', PLANETARY), entry('jup', SATELLITES), entry('ecliptic', [{ center: 5, target: 599, start: 0, end: 100, position: [0, 0, 0], frame: 17 }])])
 
 	try {
-		spkJovianEphemeris(ecliptic).position('jupiter', at(25))
+		jovianEphemeris(spkEphemerisSource(ecliptic)).position('jupiter', at(25))
 		throw new Error('expected a miss')
 	} catch (e) {
-		const miss = e as JovianEphemerisMiss
+		const miss = e as EphemerisMiss
 		expect(miss.reason).toBe('frame')
 		expect(miss.body).toBe(599)
 	}
@@ -193,14 +194,14 @@ test('a planetary kernel alone is not a Jovian source', async () => {
 	const set = await prepareSpkKernelSet([{ id: 'de440s', daf, segments: inspection.segments }])
 	// DE440s carries the Jovian system barycenter (5) but not Jupiter's centre (599) nor its satellites.
 	expect(set.bodies.has(5)).toBeTrue()
-	expect(hasJovianTargets(set)).toBeFalse()
+	expect(hasJovianTargets(spkEphemerisSource(set))).toBeFalse()
 
 	try {
-		spkJovianEphemeris(set).position('jupiter', timeYMDHMS(2026, 12, 5, 0, 0, 0, Timescale.UTC))
+		jovianEphemeris(spkEphemerisSource(set)).position('jupiter', timeYMDHMS(2026, 12, 5, 0, 0, 0, Timescale.UTC))
 		throw new Error('expected a miss')
 	} catch (e) {
-		expect((e as JovianEphemerisMiss).reason).toBe('missing')
-		expect((e as JovianEphemerisMiss).body).toBe(599)
+		expect((e as EphemerisMiss).reason).toBe('missing')
+		expect((e as EphemerisMiss).body).toBe(599)
 	}
 })
 
@@ -210,26 +211,26 @@ test('the source-aware mutual finder keeps contacts and partitions windows by ma
 	const stop = timeYMDHMS(2026, 12, 5, 19, 30, 0, Timescale.UTC)
 
 	// Its maximum lies before this window, so the half-open finder does not report it here...
-	expect(findGalileanMutualEvents(analyticalJovianEphemeris, start, stop).length).toBe(0)
+	expect(findGalileanMutualEvents(jovianEphemeris(analyticalEphemerisSource), start, stop).length).toBe(0)
 
 	// ...but reports it, with both contacts, in the window holding its maximum.
 	const before = timeYMDHMS(2026, 12, 5, 19, 0, 0, Timescale.UTC)
-	const events = findGalileanMutualEvents(analyticalJovianEphemeris, before, start)
+	const events = findGalileanMutualEvents(jovianEphemeris(analyticalEphemerisSource), before, start)
 	expect(events.length).toBe(1)
 	expect(events[0].start).toBeDefined()
 	expect(events[0].end).toBeDefined()
 	expect(timeSubtract(events[0].end!, start)).toBeGreaterThan(0)
 
 	// The legacy wrapper gives the same maximum from the same analytical positions.
-	const legacy = galileanMutualEvents(start, stop)
+	const legacy = galileanMutualEvents(jovianEphemeris(analyticalEphemerisSource), start, stop)
 	expect(legacy.length).toBe(1)
 	expect(timeSubtract(legacy[0].middle, events[0].middle) * DAYSEC).toBeCloseTo(0, 6)
 	expect(timeSubtract(legacy[0].end!, events[0].end!) * DAYSEC).toBeCloseTo(0, 6)
 })
 
 test('the interpolated source stays within 0.1 km of the analytical one', () => {
-	const ephemeris = interpolatedJovianEphemeris(analyticalJovianEphemeris)
-	expect(ephemeris.source).toBe(analyticalJovianEphemeris.source)
+	const ephemeris = interpolatedJovianEphemeris(analyticalEphemerisSource)
+	expect(ephemeris.source).toBe(jovianEphemeris(analyticalEphemerisSource).source)
 	const start = timeYMDHMS(2026, 12, 1, 0, 0, 0, Timescale.UTC)
 
 	for (let i = 0; i < 120; i++) {
@@ -237,7 +238,7 @@ test('the interpolated source stays within 0.1 km of the analytical one', () => 
 		const time = timeShift(start, i * 0.0371)
 
 		for (const body of JOVIAN_BODIES) {
-			const exact = analyticalJovianEphemeris.position(body, time)
+			const exact = jovianEphemeris(analyticalEphemerisSource).position(body, time)
 			const interpolated = ephemeris.position(body, time)
 			expect(Math.hypot(exact[0] - interpolated[0], exact[1] - interpolated[1], exact[2] - interpolated[2]) * AU_KM).toBeLessThan(0.1)
 		}
@@ -246,8 +247,8 @@ test('the interpolated source stays within 0.1 km of the analytical one', () => 
 
 test('the interpolated source propagates a kernel miss from its nodes', async () => {
 	const set = await prepareSpkKernelSet([entry('planets', PLANETARY), entry('jup', SATELLITES)])
-	const ephemeris = interpolatedJovianEphemeris(spkJovianEphemeris(set))
+	const ephemeris = interpolatedJovianEphemeris(spkEphemerisSource(set))
 	expect(ephemeris.source).toEqual({ kind: 'spk', kernels: ['planets', 'jup'] })
 	// The synthetic segments cover 100 s around J2000, far less than one interpolation node step.
-	expect(() => ephemeris.position('io', at(50))).toThrow(JovianEphemerisMiss)
+	expect(() => ephemeris.position('io', at(50))).toThrow(EphemerisMiss)
 })

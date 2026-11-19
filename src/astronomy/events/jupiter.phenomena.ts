@@ -31,7 +31,7 @@ const GALILEAN_PHENOMENA: SatellitePhenomenaSystem<'sun' | 'earth' | 'jupiter' |
 
 // Finds the classical phenomena of the Galilean satellites whose conjunction (`maximum`) lies in
 // [start, stop), chronologically by maximum. Every position comes from `ephemeris`; wrap a source in
-// interpolatedJovianEphemeris for speed. A kernel-backed ephemeris propagates its JovianEphemerisMiss and
+// interpolatedJovianEphemeris for speed. A kernel-backed ephemeris propagates its EphemerisMiss and
 // the search is abandoned. See satellitePhenomena for the grid, window and tolerance conventions.
 export function jovianPhenomena(ephemeris: JovianEphemeris, start: Time, stop: Time, options: JovianPhenomenaOptions = {}): JovianPhenomenon[] {
 	return satellitePhenomena(GALILEAN_PHENOMENA, ephemeris, start, stop, options)

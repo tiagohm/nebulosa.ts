@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
-import { analyticalJovianEphemeris, type GalileanMoon, interpolatedJovianEphemeris } from '../../../src/astronomy/ephemeris/jovian'
+import { type GalileanMoon, interpolatedJovianEphemeris, jovianEphemeris } from '../../../src/astronomy/ephemeris/jovian'
+import { analyticalEphemerisSource, EphemerisMiss, spkEphemerisSource } from '../../../src/astronomy/ephemeris/source'
 import { jovianMoonMargins, jovianShadowPoint, jovianSystemState } from '../../../src/astronomy/events/jupiter.geometry'
 import { type JovianPhenomenon, type JovianPhenomenonKind, jovianPhenomena } from '../../../src/astronomy/events/jupiter.phenomena'
 import { type Time, Timescale, timeShift, timeSubtract, timeYMDHMS } from '../../../src/astronomy/time/time'
@@ -11,7 +12,7 @@ import { type Time, Timescale, timeShift, timeSubtract, timeYMDHMS } from '../..
 // the L1.2 theory adds its own few-second difference from JUP365. Each reference is the midpoint of the
 // 10 s interval in which the Horizons code changes.
 
-const EPHEMERIS = interpolatedJovianEphemeris(analyticalJovianEphemeris)
+const EPHEMERIS = interpolatedJovianEphemeris(analyticalEphemerisSource)
 const START = timeYMDHMS(2026, 12, 1, 0, 0, 0, Timescale.UTC)
 const STOP = timeYMDHMS(2026, 12, 4, 0, 0, 0, Timescale.UTC)
 const PHENOMENA = jovianPhenomena(EPHEMERIS, START, STOP)

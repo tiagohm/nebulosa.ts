@@ -261,7 +261,14 @@ describe('polynomial fit', () => {
 
 		expect(model.rejectedSamples).toBe(1)
 		expect(model.samples[13].accepted).toBe(false)
-		for (const [x, y] of [[0, 0], [63, 0], [0, 47], [63, 47], [31.5, 23.5]]) expect(at.at(x, y)).toBeCloseTo(field(x, y), 9)
+		for (const [x, y] of [
+			[0, 0],
+			[63, 0],
+			[0, 47],
+			[63, 47],
+			[31.5, 23.5],
+		])
+			expect(at.at(x, y)).toBeCloseTo(field(x, y), 9)
 	})
 
 	test('asymmetric rejection is tight above and loose below', () => {

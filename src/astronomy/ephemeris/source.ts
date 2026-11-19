@@ -265,7 +265,8 @@ export function defaultEphemerisNodeStep(naif: number): number {
 // evaluate propagates its error, so a kernel-backed source still throws EphemerisMiss, possibly for a node up
 // to three node steps beyond the epoch. Evaluated nodes are cached for the lifetime of the returned source,
 // so create one per computation; the cache grows with the span evaluated (one node per body per node step).
-export function interpolatedEphemerisSource(source: EphemerisSource, nodeStep: (naif: number) => number = defaultEphemerisNodeStep): EphemerisSource {
+// Every other property of `source` is kept, so an SPK source still lists its kernels and the files it used.
+export function interpolatedEphemerisSource<S extends EphemerisSource>(source: S, nodeStep: (naif: number) => number = defaultEphemerisNodeStep): S {
 	const nodes = new Map<number, Map<number, PositionAndVelocityMut>>()
 	const relative = source.relativeState
 	const centerOf = source.centerOf
@@ -336,10 +337,9 @@ export function interpolatedEphemerisSource(source: EphemerisSource, nodeStep: (
 	}
 
 	return {
-		kind: source.kind,
-		has: source.has,
+		...source,
 		state,
-		...(centerOf && relative && { centerOf, relativeState: (naif: number, time: Time) => (relativeCenter(naif) === undefined ? relative(naif, time) : interpolate(naif, time, relativeCenter(naif))) }),
+		...(centerOf && relative && { relativeState: (naif: number, time: Time) => (relativeCenter(naif) === undefined ? relative(naif, time) : interpolate(naif, time, relativeCenter(naif))) }),
 	}
 }
 

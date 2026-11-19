@@ -1,8 +1,8 @@
 import { SPEED_OF_LIGHT_AU_DAY, SUN_RADIUS_AU } from '../../core/constants'
 import { type Vec3, vecAngle, vecDot, vecLength, vecMinus, vecMulScalar, vecNormalize, vecZero } from '../../math/linear-algebra/vec3'
 import { brentRoot } from '../../math/numerical/optimization'
-import { analyticalJovianEphemeris, GALILEAN_MOONS, GALILEAN_RADIUS_AU, type GalileanMoon, type JovianEphemeris } from '../ephemeris/jovian'
-import { analyticalSaturnianEphemeris, SATURNIAN_MOONS, SATURNIAN_RADIUS_AU, type SaturnianEphemeris, type SaturnianMoon } from '../ephemeris/saturnian'
+import { GALILEAN_MOONS, GALILEAN_RADIUS_AU, type GalileanMoon, type JovianEphemeris } from '../ephemeris/jovian'
+import { SATURNIAN_MOONS, SATURNIAN_RADIUS_AU, type SaturnianEphemeris, type SaturnianMoon } from '../ephemeris/saturnian'
 import { type Time, timeShift, timeSubtract } from '../time/time'
 import { searchExtrema, type TimeSearchOptions } from './search'
 
@@ -291,12 +291,13 @@ function mutualEvents<M extends string>(system: MutualSystem<M>, start: Time, st
 //
 // Both event kinds are screened for all six moon pairs and returned chronologically. All times are the
 // instants the events are seen from Earth (each moon light-time corrected). An event is returned when its
-// contact span overlaps the window, with a contact outside the window blanked as undefined. Positions
-// come from the analytical VSOP87E + L1.2 source. `step` must stay well under the width of a conjunction
-// so consecutive minima bracket cleanly; it defaults to 10 minutes. Mutual events only occur in the
-// seasons around Jupiter's equinox (every ~6 years), so most windows return nothing.
-export function galileanMutualEvents(start: Time, stop: Time, options: TimeSearchOptions = {}): MutualEvent<GalileanMoon>[] {
-	return mutualEvents(jovianSystem(analyticalJovianEphemeris), start, stop, options, clipToWindow)
+// contact span overlaps the window, with a contact outside the window blanked as undefined. Every position
+// (Sun, Earth and moons) comes from one Jovian ephemeris. `step` must stay well under the width of a
+// conjunction so consecutive minima bracket cleanly; it defaults to 10 minutes. Mutual events only occur in
+// the seasons around Jupiter's equinox (every ~6 years), so most windows return nothing. A kernel-backed
+// ephemeris propagates its EphemerisMiss: the search is abandoned, never completed with another source.
+export function galileanMutualEvents(ephemeris: JovianEphemeris, start: Time, stop: Time, options: TimeSearchOptions = {}): MutualEvent<GalileanMoon>[] {
+	return mutualEvents(jovianSystem(ephemeris), start, stop, options, clipToWindow)
 }
 
 // Finds the Galilean mutual occultations and eclipses whose maximum lies in [start, stop), taking every
@@ -307,7 +308,7 @@ export function galileanMutualEvents(start: Time, stop: Time, options: TimeSearc
 // and concatenate them without duplicates, and flag the events that reach beyond its own range. A
 // contact is undefined only when it lies more than six hours from the maximum, which no real event does.
 // Times are the instants seen from Earth, with the same light-time conventions as galileanMutualEvents.
-// A kernel-backed ephemeris propagates its JovianEphemerisMiss: the search is abandoned, never completed
+// A kernel-backed ephemeris propagates its EphemerisMiss: the search is abandoned, never completed
 // with another source.
 export function findGalileanMutualEvents(ephemeris: JovianEphemeris, start: Time, stop: Time, options: TimeSearchOptions = {}): MutualEvent<GalileanMoon>[] {
 	return mutualEvents(jovianSystem(ephemeris), start, stop, options, middleInWindow)
@@ -316,16 +317,16 @@ export function findGalileanMutualEvents(ephemeris: JovianEphemeris, start: Time
 // Finds every mutual occultation and eclipse among Saturn's main moons over a time window.
 //
 // Screens all twenty-one pairs of the seven moons for both event kinds, chronologically, with the same
-// light-time and window conventions as galileanMutualEvents. Positions come from the analytical
-// VSOP87E + TASS 1.7 source. Saturn's mutual-event seasons fall around its equinox (every ~15 years, most
-// recently the 2025 ring-plane crossing), so most windows return nothing.
-export function saturnianMutualEvents(start: Time, stop: Time, options: TimeSearchOptions = {}): MutualEvent<SaturnianMoon>[] {
-	return mutualEvents(saturnianSystem(analyticalSaturnianEphemeris), start, stop, options, clipToWindow)
+// light-time and window conventions as galileanMutualEvents, every position from one Saturnian ephemeris.
+// Saturn's mutual-event seasons fall around its equinox (every ~15 years, most recently the 2025 ring-plane
+// crossing), so most windows return nothing.
+export function saturnianMutualEvents(ephemeris: SaturnianEphemeris, start: Time, stop: Time, options: TimeSearchOptions = {}): MutualEvent<SaturnianMoon>[] {
+	return mutualEvents(saturnianSystem(ephemeris), start, stop, options, clipToWindow)
 }
 
 // Finds the Saturnian mutual occultations and eclipses whose maximum lies in [start, stop), taking every
 // position (Sun, Earth and moons) from one Saturnian ephemeris, with the window and contact conventions of
-// findGalileanMutualEvents. A kernel-backed ephemeris propagates its SaturnianEphemerisMiss: the search is
+// findGalileanMutualEvents. A kernel-backed ephemeris propagates its EphemerisMiss: the search is
 // abandoned, never completed with another source.
 export function findSaturnianMutualEvents(ephemeris: SaturnianEphemeris, start: Time, stop: Time, options: TimeSearchOptions = {}): MutualEvent<SaturnianMoon>[] {
 	return mutualEvents(saturnianSystem(ephemeris), start, stop, options, middleInWindow)

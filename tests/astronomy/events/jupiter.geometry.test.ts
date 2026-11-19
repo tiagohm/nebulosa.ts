@@ -1,7 +1,8 @@
 import { expect, test } from 'bun:test'
 import { JUPITER_ROTATION, orientation, positionAngleOfPole } from '../../../src/astronomy/bodies/orientation'
-import { analyticalJovianEphemeris, type JovianBody, type JovianEphemeris } from '../../../src/astronomy/ephemeris/jovian'
+import { type JovianBody, type JovianEphemeris, jovianEphemeris } from '../../../src/astronomy/ephemeris/jovian'
 import { JupiterMoons } from '../../../src/astronomy/ephemeris/meeus'
+import { analyticalEphemerisSource, EphemerisMiss, spkEphemerisSource } from '../../../src/astronomy/ephemeris/source'
 import { jovianMoonMargins, jovianShadowPoint, jovianSystemState, jovianView, projectJovianSurfacePoint } from '../../../src/astronomy/events/jupiter.geometry'
 import { time, Timescale, timeYMDHMS } from '../../../src/astronomy/time/time'
 import { JUPITER_EQUATORIAL_RADIUS_AU, JUPITER_POLAR_RADIUS_AU, SUN_RADIUS_AU } from '../../../src/core/constants'
@@ -139,7 +140,7 @@ test('satellite positions agree with Meeus E5', () => {
 	// Meeus example 44.b, JDE 2448972.50068. Meeus scales to an older 71398 km equatorial radius, hence a
 	// 0.13% scale difference on top of the L1.2 versus E5 theories.
 	const jde = 2448972.50068
-	const view = jovianView(analyticalJovianEphemeris, time(jde, 0, Timescale.TT))
+	const view = jovianView(jovianEphemeris(analyticalEphemerisSource), time(jde, 0, Timescale.TT))
 	const meeus = JupiterMoons.e5(jde, JupiterMoons.positions(jde))
 	const pa = view.poleAngle
 
@@ -155,7 +156,7 @@ test('satellite positions agree with Meeus E5', () => {
 })
 
 test('the disk orientation and central meridians match the independent references', () => {
-	const view = jovianView(analyticalJovianEphemeris, T)
+	const view = jovianView(jovianEphemeris(analyticalEphemerisSource), T)
 	expect(view.poleAngle).toBeCloseTo(positionAngleOfPole(JUPITER_ROTATION, T, vecMinus(view.earth, view.jupiter)), 9)
 	// PyEphem cmlII and cmlI at T, as in jupiter.test.ts.
 	expect(toDeg(view.centralMeridian.II)).toBeCloseTo(328.2794, 2)
@@ -165,7 +166,7 @@ test('the disk orientation and central meridians match the independent reference
 })
 
 test('a surface point on the central meridian projects onto the disk centre line', () => {
-	const view = jovianView(analyticalJovianEphemeris, T)
+	const view = jovianView(jovianEphemeris(analyticalEphemerisSource), T)
 	const centre = projectJovianSurfacePoint(view, view.centralMeridian.II, view.subEarthLatitude)
 	expect(centre.visible).toBeTrue()
 	expect(Math.hypot(centre.east, centre.north)).toBeLessThan(0.01)
