@@ -8,7 +8,7 @@ import { type Time, timeShift, timeSubtract } from '../time/time'
 import { meteorActivityZhr } from './activity'
 import { meteorRadiantHorizontal } from './radiant'
 import { meteorSolarLongitude, meteorSolarState } from './solar'
-import type { MeteorActivityProfile, MeteorComputationContext, MeteorEphemeris, MeteorHorizontalRadiant, MeteorMagnitudeBin, MeteorObservingConditions, MeteorPopulationIndexOptions, MeteorRadiant, MeteorVisualObservation, MeteorVisualRate } from './types'
+import type { MeteorActivityProfile, MeteorComputationContext, MeteorHorizontalRadiant, MeteorMagnitudeBin, MeteorObservingConditions, MeteorPopulationIndexOptions, MeteorRadiant, MeteorVisualObservation, MeteorVisualRate } from './types'
 
 // Visual meteor observation equations and local circumstances. Counts use the standard ZHR
 // correction with effective exposure in hours; local rates are idealized geometric rates and do not
@@ -137,11 +137,6 @@ export function meteorSunDirection(time: Time): Vec3 {
 export function meteorMoonDirection(time: Time): Vec3 {
 	return moon(time)[0]
 }
-
-// The toolkit's theories as a meteor ephemeris: the VSOP87E Sun and the ELPMPP02 Moon, evaluated at every instant. An
-// ELPMPP02 evaluation costs about 10 ms, so a window search over a night spends most of its time here; a caller with
-// many samples should interpolate these, or SPK positions, between hourly nodes instead.
-export const METEOR_ANALYTICAL_EPHEMERIS: MeteorEphemeris = { sun: meteorSunDirection, moon: meteorMoonDirection }
 
 // Computes the illuminated lunar fraction from geocentric J2000 Sun and Moon vectors.
 export function meteorMoonIllumination(sunVector: Vec3, moonVector: Vec3): number {

@@ -3060,10 +3060,10 @@ HR = ZHR · sin^γ(h) / (F · r^(6.5 − lm))
 
 Most catalog showers have no activity profile, so `meteorGeometricObservingWindows` plans the same constraints without one and returns the windows in chronological order, with a geometric opportunity measure (the integral of the sine of the radiant altitude) that is never a meteor count.
 
-Both planners take the Sun and the Moon of every sample from an ephemeris the caller chooses, which also gives the solar longitude of the activity. `METEOR_ANALYTICAL_EPHEMERIS` is the toolkit's VSOP87E Sun and ELPMPP02 Moon evaluated at every sample; a search evaluates hundreds of samples and an ELPMPP02 evaluation costs about 10 ms, so an application that plans many nights should supply geocentric J2000 vectors from SPK kernels or interpolated between hourly nodes, which changes the windows by well under a second. The conditions at one instant, the altitudes of the Sun, the Moon, and the radiant, the lunar illumination, and the Moon-radiant separation, are available directly, and are what a rate-correction callback receives.
+Both planners take the Sun and the Moon of every sample from an ephemeris the caller chooses, which also gives the solar longitude of the activity. `meteorSunDirection` and `meteorMoonDirection` give the toolkit's VSOP87E Sun and ELPMPP02 Moon; a search evaluates hundreds of samples and an ELPMPP02 evaluation costs about 10 ms, so an application that plans many nights should supply geocentric J2000 vectors from SPK kernels or interpolated between hourly nodes, which changes the windows by well under a second. The conditions at one instant, the altitudes of the Sun, the Moon, and the radiant, the lunar illumination, and the Moon-radiant separation, are available directly, and are what a rate-correction callback receives.
 
 ```ts
-import { METEOR_ANALYTICAL_EPHEMERIS, meteorMoonDirection, meteorMoonIllumination, meteorObservationContext, meteorObservingConditionsAt, meteorSunDirection } from 'nebulosa/src/astronomy/meteors/observation'
+import { meteorMoonDirection, meteorMoonIllumination, meteorObservationContext, meteorObservingConditionsAt, meteorSunDirection } from 'nebulosa/src/astronomy/meteors/observation'
 import { meteorGeometricObservingWindows, meteorObservingWindows } from 'nebulosa/src/astronomy/meteors/planner'
 import type { MeteorActivityProfile, MeteorShowerSolution } from 'nebulosa/src/astronomy/meteors/types'
 import { Ellipsoid, geodeticLocation } from 'nebulosa/src/astronomy/observer/location'
@@ -3079,14 +3079,16 @@ const observer = geodeticLocation(deg(-8), deg(40), meter(100), Ellipsoid.WGS84)
 const start = timeYMDHMS(2024, 1, 3, 12, 0, 0, Timescale.UTC)
 const end = timeYMDHMS(2024, 1, 5, 12, 0, 0, Timescale.UTC)
 
-// Dark-sky windows with their expected counts, most productive first, for a limiting magnitude of 6.0, with the Sun and
-// the Moon of the toolkit's theories.
-const [best] = meteorObservingWindows(solution, profile, observer, start, end, { ephemeris: METEOR_ANALYTICAL_EPHEMERIS, limitingMagnitude: 6, populationIndex: 2.1, minimumDurationHours: 0.5 })
+// The Sun and the Moon of every sample: here the toolkit's theories.
+const ephemeris = { sun: meteorSunDirection, moon: meteorMoonDirection }
+
+// Dark-sky windows with their expected counts, most productive first, for a limiting magnitude of 6.0.
+const [best] = meteorObservingWindows(solution, profile, observer, start, end, { ephemeris, limitingMagnitude: 6, populationIndex: 2.1, minimumDurationHours: 0.5 })
 
 console.log(best.durationHours, best.expectedCount) // 8.001 220.09 — hours, meteors
 
 // Without a profile: chronological windows with the radiant at least 20° high.
-for (const window of meteorGeometricObservingWindows(solution, observer, start, end, { ephemeris: METEOR_ANALYTICAL_EPHEMERIS, minimumRadiantAltitude: deg(20) })) {
+for (const window of meteorGeometricObservingWindows(solution, observer, start, end, { ephemeris, minimumRadiantAltitude: deg(20) })) {
 	console.log(timeToDate(utc(window.start)).slice(0, 5), window.durationHours, window.radiantSineHours) // UTC start, hours, and hours of sine-weighted radiant altitude
 }
 

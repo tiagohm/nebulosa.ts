@@ -1,4 +1,5 @@
-import type { MeteorActivityProfile, MeteorExponentialActivityProfile, MeteorSolarLongitudeInterval, MeteorShowerSolution, MeteorVisualObservation } from '../../../src/astronomy/meteors/types'
+import { meteorMoonDirection, meteorSunDirection } from '../../../src/astronomy/meteors/observation'
+import type { MeteorActivityProfile, MeteorEphemeris, MeteorExponentialActivityProfile, MeteorSolarLongitudeInterval, MeteorShowerSolution, MeteorVisualObservation } from '../../../src/astronomy/meteors/types'
 import { Ellipsoid, geodeticLocation } from '../../../src/astronomy/observer/location'
 import { Timescale, timeYMDHMS } from '../../../src/astronomy/time/time'
 import { deg } from '../../../src/math/units/angle'
@@ -6,6 +7,9 @@ import { kilometer, meter } from '../../../src/math/units/distance'
 import { kilometerPerSecond } from '../../../src/math/units/velocity'
 
 // Shared deterministic epochs, observer, normalized solutions, activity profiles and external-reference tolerances for meteor tests.
+
+// The toolkit's VSOP87E Sun and ELPMPP02 Moon at every sample, the ephemeris of the planner tests.
+export const METEOR_ANALYTICAL_EPHEMERIS: MeteorEphemeris = { sun: meteorSunDirection, moon: meteorMoonDirection }
 
 export const REFERENCE_UTC = timeYMDHMS(2024, 1, 4, 0, 0, 0, Timescale.UTC)
 export const REFERENCE_TDB = timeYMDHMS(2024, 1, 4, 0, 0, 0, Timescale.TDB)

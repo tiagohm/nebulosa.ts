@@ -620,8 +620,9 @@ export interface MeteorObservingWindowOptions extends TimeSearchOptions {
 	readonly altitudeExponent?: number
 	// Optional provider for explicit, time-varying rate corrections.
 	readonly rateCorrection?: (time: Time, conditions: MeteorObservingConditions) => number
-	// Sun and Moon of every sample: METEOR_ANALYTICAL_EPHEMERIS for the toolkit's theories, or the caller's own, such as
-	// SPK positions interpolated between hourly nodes, which a window search evaluates far faster.
+	// Sun and Moon of every sample, such as SPK positions interpolated between hourly nodes. meteorSunDirection and
+	// meteorMoonDirection give the toolkit's theories, but an ELPMPP02 evaluation costs about 10 ms and a window search
+	// evaluates hundreds of samples, so a caller should interpolate them between hourly nodes too.
 	readonly ephemeris: MeteorEphemeris
 }
 
@@ -644,8 +645,9 @@ export interface MeteorGeometricObservingWindowOptions extends TimeSearchOptions
 	readonly maximumMoonAltitude?: Angle
 	// Minimum duration in hours.
 	readonly minimumDurationHours?: number
-	// Sun and Moon of every sample: METEOR_ANALYTICAL_EPHEMERIS for the toolkit's theories, or the caller's own, such as
-	// SPK positions interpolated between hourly nodes, which a window search evaluates far faster.
+	// Sun and Moon of every sample, such as SPK positions interpolated between hourly nodes. meteorSunDirection and
+	// meteorMoonDirection give the toolkit's theories, but an ELPMPP02 evaluation costs about 10 ms and a window search
+	// evaluates hundreds of samples, so a caller should interpolate them between hourly nodes too.
 	readonly ephemeris: MeteorEphemeris
 }
 

@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { METEOR_ANALYTICAL_EPHEMERIS, meteorMoonDirection, meteorSunDirection } from '../../../src/astronomy/meteors/observation'
+import { meteorMoonDirection, meteorSunDirection } from '../../../src/astronomy/meteors/observation'
 import { meteorGeometricObservingWindows, meteorObservingWindows } from '../../../src/astronomy/meteors/planner'
 import { meteorSolarLongitude, timeAtMeteorSolarLongitude } from '../../../src/astronomy/meteors/solar'
 import { meteorShowerComputationContext, meteorShowerState } from '../../../src/astronomy/meteors/state'
@@ -9,7 +9,7 @@ import { type Time, timeShift, timeSubtract, timeToDate, timeToUnixMillis, timeU
 import { vecNegate } from '../../../src/math/linear-algebra/vec3'
 import { deg } from '../../../src/math/units/angle'
 import { meter } from '../../../src/math/units/distance'
-import { BASE_SOLUTION, EXPONENTIAL_PROFILE, OBSERVER, PLANNER_END, PLANNER_MULTI_PROFILE, PLANNER_START, SITE_EPOCH, SITE_EPOCH_END, SOLAR_DRIFT_SOLUTION, TEST_INTERVAL, ZERO_WIDTH_INTERVAL } from './util'
+import { BASE_SOLUTION, EXPONENTIAL_PROFILE, METEOR_ANALYTICAL_EPHEMERIS, OBSERVER, PLANNER_END, PLANNER_MULTI_PROFILE, PLANNER_START, SITE_EPOCH, SITE_EPOCH_END, SOLAR_DRIFT_SOLUTION, TEST_INTERVAL, ZERO_WIDTH_INTERVAL } from './util'
 
 const DAY_OPTIONS = { maximumSolarAltitude: deg(90), minimumRadiantAltitude: 0, step: 1 / 48 } as const
 
@@ -322,7 +322,7 @@ test('geometric and profile windows take the Sun and the Moon of a supplied ephe
 		moon: meteorMoonDirection,
 	}
 
-	// The theories wrapped by the caller give the windows of METEOR_ANALYTICAL_EPHEMERIS, and are the ones evaluated.
+	// The theories wrapped by a counting ephemeris give the same windows, and are the ones evaluated.
 	const geometric = meteorGeometricObservingWindows(BASE_SOLUTION, OBSERVER, nightStart, nightEnd, { ...options, ephemeris: METEOR_ANALYTICAL_EPHEMERIS })
 	const supplied = meteorGeometricObservingWindows(BASE_SOLUTION, OBSERVER, nightStart, nightEnd, { ...options, ephemeris })
 	expect(calls).toBeGreaterThan(0)
