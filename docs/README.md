@@ -5158,6 +5158,50 @@ console.log(toDeg(ellipse.positionAngle)) // 73.5 — degrees, major axis from n
 console.log(toArcsec(ephemerisUncertaintyEllipse(covariance, [2.1, -1.2, -1.0], { sigma: 3 }).semiMajor)) // 19.8 — arcseconds
 ```
 
+### Small-Body N-Body Propagation
+
+An asteroid or comet does not follow a fixed conic: the planets, chiefly Jupiter, perturb it continuously, so a two-body orbit from osculating elements drifts by arcseconds within months of their epoch and by arcminutes within a few years, and a close planetary approach changes the orbit outright (see [Two-Body Kepler Propagation](#two-body-kepler-propagation)). Orbit catalogs such as the MPC Orbit Database and JPL's SBDB publish a state fitted with a numerically integrated force model, and reproducing their ephemerides away from the epoch means integrating the same forces: the Sun, the planets, and the Moon as point masses read from a planetary ephemeris, the most massive asteroids (the SB441-N16 set of JPL), the Sun's post-Newtonian term, which advances the perihelion of a near-Sun object such as (3200) Phaethon by arcseconds within a decade, and the non-gravitational accelerations of the solution: the Yarkovsky transverse drift of a small asteroid, A2·(1 AU / r)², or the outgassing of a comet, A1, A2, A3 along the radial, transverse, and normal directions scaled by the water-sublimation law g(r) of Marsden, Sekanina, and Yeomans (1973).
+
+`SmallBodyPropagator` integrates a massless particle in barycentric ICRF axes (AU, AU/day, TDB) with an adaptive Bulirsch-Stoer method, reading every perturber from an ephemeris source at each force evaluation, so the source (for example a kernel set with DE440s and sb441-n16.bsp) must stay open while it advances. It advances in either direction and can stop after a bounded number of steps, so long integrations can be split into chunks. With the same force model as the catalog, the propagation reproduces its ephemeris to the level of the difference between orbit solutions; it cannot remove the chaos of a deep planetary encounter, after which every solution diverges. Each accepted step can be recorded to tabulate the trajectory, as type 9 SPK segments do (see [SPK State Kernels](#spk-state-kernels)).
+
+```ts
+import fs from 'fs/promises'
+import { readDaf } from 'nebulosa/src/astronomy/ephemeris/kernels/daf'
+import { inspectSpk } from 'nebulosa/src/astronomy/ephemeris/kernels/spk.inspect'
+import { prepareSpkKernelSet } from 'nebulosa/src/astronomy/ephemeris/kernels/spk.kernelset'
+import { spkEphemerisSource } from 'nebulosa/src/astronomy/ephemeris/source'
+import { DE440_PERTURBERS, nonGravitationalDistanceLaw, SB441_N16_PERTURBERS, SmallBodyPropagator } from 'nebulosa/src/astronomy/orbits/propagation/nbody'
+import { Timescale, time, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { AU_KM } from 'nebulosa/src/core/constants'
+import { fileHandleSource } from 'nebulosa/src/io/file'
+
+// The perturbers' states: DE440s (add sb441-n16.bsp to the set to use SB441_N16_PERTURBERS as well).
+await using file = fileHandleSource(await fs.open('data/de440s.bsp'))
+const daf = await readDaf(file)
+const inspection = inspectSpk(daf, (await fs.stat('data/de440s.bsp')).size)
+if (!inspection.ok) throw new Error(inspection.error)
+const source = spkEphemerisSource(await prepareSpkKernelSet([{ id: 'de440s', daf, segments: inspection.segments }]))
+
+// Mars's barycenter as a test particle: every DE440 body but itself, plus the Sun's post-Newtonian term.
+// A small body adds SB441_N16_PERTURBERS and its nonGravitational parameters, such as those of an MPC orbit.
+const model = { perturbers: DE440_PERTURBERS.filter((e) => e.naif !== 4), relativity: true }
+const epoch = timeYMDHMS(2025, 1, 1, 0, 0, 0, Timescale.TDB)
+const [position, velocity] = source.state(4, epoch)
+const propagator = new SmallBodyPropagator(source, model, epoch, position, velocity)
+
+// One year later, in chunks of at most 50 steps; state() is barycentric, AU and AU/day.
+const end = time(epoch.day, epoch.fraction + 365, Timescale.TDB)
+while (!propagator.advance(end, 50)) {}
+const [p] = propagator.state()
+const [mars] = source.state(4, end)
+
+console.log(Math.hypot(p[0] - mars[0], p[1] - mars[1], p[2] - mars[2]) * AU_KM) // 0.08 — km from DE440s, which also integrates 343 asteroids
+
+// The cometary distance law g(r), 1 at 1 AU.
+console.log(nonGravitationalDistanceLaw('comet', 3)) // 0.0017 at 3 AU, where water sublimation has nearly stopped
+console.log(SB441_N16_PERTURBERS.length) // 16 asteroids, NAIF 2000000 + number
+```
+
 ### Solar Disk Geometry and Heliographic Coordinates
 
 Locating a sunspot or a prominence on the Sun, and following it from day to day, needs the orientation of the solar disk as seen by the observer. It is described by three angles: P, the position angle of the solar north pole measured from celestial north toward east; B0, the heliographic latitude of the disk centre; and L0, the Carrington longitude of the disk centre. Heliographic latitude is positive toward solar north. Stonyhurst longitude is measured from the observer's central meridian, positive toward the west limb (the direction of rotation), in `(−π, π]`. Carrington longitude is fixed to a Sun rotating rigidly at 14.1844°/day (the IAU prime meridian), in `[0, 2π)`, so Carrington = Stonyhurst + L0, and L0 decreases by about 13.2°/day. L0 is not the fractional [Carrington Rotation](#carrington-rotation) number.
@@ -5538,13 +5582,16 @@ An SPK (Spacecraft and Planet Kernel) is a NAIF binary file of ephemerides: for 
 
 `readSpk` reads one file and returns the segment between a center and a target, evaluated in TDB and returning AU and AU/day in the segment's own frame, without rotation; J2000 is the frame that matches the library axes. To combine files, `inspectSpk` catalogs the segments of each one, and `prepareSpkKernelSet` merges them in load order, giving precedence to the file loaded last as the NAIF toolkit does, and resolves the barycentric state of any body through its chain of centers. A file can be preferred for a body (`preferences`): where one of its segments for that body covers the epoch it is selected ahead of the load order, and elsewhere the load order applies, so a more accurate file of narrower span never opens a gap. The set also explains its selection: every resolved state lists its `chain` of segments, `candidates` lists the segments of a body in selection order, `coverage` returns the intervals where each segment is the one selected (a segment in none is never used), and `segmentStateAt` evaluates one chosen segment relative to its own center, to compare two sources of the same body. Coverage is never extrapolated, and coefficient records are read on demand, so the sources must stay open while they are used. To use segments with the rest of the library, wrap them with `spkEphemerisPath` (see [Ephemeris Path Adapters](#ephemeris-path-adapters)).
 
+`writeSpk` writes new files of type 9 segments, Lagrange interpolation of a table of states at unequally spaced epochs, laid out as the SPICE toolkit's SPKW09 writes them. It is the natural form of a numerically integrated trajectory, whose accepted steps are densest where the motion bends (see [Small-Body N-Body Propagation](#small-body-n-body-propagation)); the interpolation is only as good as that spacing, so a table must sample the trajectory finely enough for the polynomial degree.
+
 ```ts
 import fs from 'fs/promises'
 import { readDaf } from 'nebulosa/src/astronomy/ephemeris/kernels/daf'
 import { extendedPermanentAsteroidNumber, Naif } from 'nebulosa/src/astronomy/ephemeris/kernels/naif'
-import { readSpk } from 'nebulosa/src/astronomy/ephemeris/kernels/spk'
+import { readSpk, SPK_FRAME_J2000 } from 'nebulosa/src/astronomy/ephemeris/kernels/spk'
 import { inspectSpk } from 'nebulosa/src/astronomy/ephemeris/kernels/spk.inspect'
 import { prepareSpkKernelSet } from 'nebulosa/src/astronomy/ephemeris/kernels/spk.kernelset'
+import { writeSpk } from 'nebulosa/src/astronomy/ephemeris/kernels/spk.write'
 import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
 import { fileHandleSource } from 'nebulosa/src/io/file'
 
@@ -5587,6 +5634,11 @@ const preferring = await prepareSpkKernelSet(entries, { preferences: new Map([[N
 const earth = preferring.stateAt(Naif.EARTH, timeYMDHMS(2025, 1, 15, 9, 20, 50, Timescale.TDB))
 
 if (earth.ok) console.log(earth.chain) // [{ body: 399, center: 3, kernel: 'de440s', segment, preferred: true }, { body: 3, center: 0, kernel: 'de440s', ... }]
+
+// A new file with one type 9 segment of Apophis relative to the Sun, interpolated with degree-11 polynomials.
+// epochs: Float64Array — TDB seconds past J2000, increasing; states: Float64Array — km and km/s, six per epoch.
+const bytes = writeSpk([{ target: 20099942, center: Naif.SUN, frame: SPK_FRAME_J2000, name: 'APOPHIS', degree: 11, epochs, states }])
+await fs.writeFile('apophis.bsp', bytes)
 ```
 
 ### Starlight Deflection

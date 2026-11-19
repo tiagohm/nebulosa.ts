@@ -694,6 +694,16 @@ describe('orbits', () => {
 		expect(propagated[2]).toBeCloseTo(expected[2], 12)
 	})
 
+	test('CAR non-gravitational coefficients become the parameters of the propagator', () => {
+		const state = (names: string[], values: number[]) => orbitCartesianState(solution({ car: { coefficientNames: ['x', 'y', 'z', 'vx', 'vy', 'vz', ...names], coefficients: [2.7, 0.1, 0.2, 0, 0.01, 0, ...values] } }))
+		expect(state([], [])?.nonGravitational).toBeUndefined()
+		// (99942) Apophis publishes its Yarkovsky A2 in 1e-10 AU/day².
+		const apophis = state(['yarkovsky'], [-0.00029487225957247])?.nonGravitational
+		expect(apophis).toMatchObject({ model: 'asteroid', a1: 0, a3: 0 })
+		expect(apophis!.a2).toBeCloseTo(-2.9487225957247e-14, 25)
+		expect(state(['A1', 'A2'], [-2.94129921294788e-12, 6.17847270717484e-12])?.nonGravitational).toEqual({ model: 'comet', a1: -2.94129921294788e-12, a2: 6.17847270717484e-12, a3: 0 })
+	})
+
 	test('natural satellites and malformed CAR names are undefined', () => {
 		expect(orbitToKeplerOrbit(solution({ categorization: { objectTypeInt: 30 } }))).toBeUndefined()
 		expect(

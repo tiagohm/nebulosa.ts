@@ -4,6 +4,7 @@ import { eraJdToCal } from '../../astronomy/coordinates/erfa/erfa'
 import { Ellipsoid, geocentricLocation, type GeographicPosition } from '../../astronomy/observer/location'
 import { KeplerOrbit } from '../../astronomy/orbits/asteroid'
 import type { OrbitFitObservation } from '../../astronomy/orbits/fit'
+import type { NonGravitationalParameters } from '../../astronomy/orbits/propagation/nbody'
 import { type Time, Timescale, time, timeMJD, timeYMD, timeYMDHMS } from '../../astronomy/time/time'
 import { ASEC2RAD, ELLIPSOID_PARAMETERS, GM_SUN_PITJEVA_2005, PIOVERTWO } from '../../core/constants'
 import { BREAK_LINE_PATTERN } from '../../core/patterns'
@@ -135,6 +136,8 @@ const ADES_FIELD_ALIASES: Readonly<Record<string, string>> = {
 }
 
 const CAR_STATE_NAMES = ['x', 'y', 'z', 'vx', 'vy', 'vz'] as const
+// Unit of the CAR `yarkovsky` coefficient of an asteroid: its transverse A2 is published in 1e-10 AU/day².
+const YARKOVSKY_UNIT = 1e-10
 const TWO_LINE_NOTE2 = new Set(['S', 's', 'V', 'v', 'W', 'w', 'R', 'r', 'Q', 'q'])
 const SPACECRAFT_SYS = new Set(['ICRF_KM', 'ICRF_AU'])
 const GEODETIC_SYS = new Set(['WGS84', 'ITRF', 'IAU'])
@@ -703,6 +706,9 @@ export interface MPCOrbitCartesianState {
 	readonly timeSystem: 'TDT' | 'TDB'
 	// Planetary ephemeris identifier, when published.
 	readonly ephemeris?: string
+	// Non-gravitational acceleration of the solution, when CAR publishes it: an asteroid's `yarkovsky` (transverse A2
+	// with the 1/r² law) or a comet's A1, A2, A3 (AU/day², Marsden's g(r)); unpublished coefficients are 0.
+	readonly nonGravitational?: NonGravitationalParameters
 }
 
 // One List API item. Shape varies by list; all fields are optional.
@@ -2520,7 +2526,30 @@ export function orbitCartesianState(orbit: MPCOrbitSolution): MPCOrbitCartesianS
 		referenceFrame: systemData.referenceFrame,
 		timeSystem: epochData.timeSystem,
 		ephemeris: systemData.ephemeris,
+		nonGravitational: carNonGravitational(car),
 	}
+}
+
+// Non-gravitational parameters of the CAR coefficients after the state: `yarkovsky` (in YARKOVSKY_UNIT) of an asteroid,
+// or A1, A2, A3 (AU/day²) of a comet. Undefined when CAR publishes none of them; other coefficients are not forces and
+// are ignored.
+function carNonGravitational(car: MPCOrbitElementSet): NonGravitationalParameters | undefined {
+	const comet = [0, 0, 0]
+	let isComet = false
+	let yarkovsky: number | undefined
+
+	for (let i = 6; i < car.coefficientNames.length; i++) {
+		const name = car.coefficientNames[i]
+		if (name === 'yarkovsky') yarkovsky = car.coefficients[i] * YARKOVSKY_UNIT
+		else if (name === 'A1' || name === 'A2' || name === 'A3') {
+			comet[Number(name[1]) - 1] = car.coefficients[i]
+			isComet = true
+		}
+	}
+
+	if (isComet) return { model: 'comet', a1: comet[0], a2: comet[1], a3: comet[2] }
+	if (yarkovsky !== undefined) return { model: 'asteroid', a1: 0, a2: yarkovsky, a3: 0 }
+	return undefined
 }
 
 // Builds a `KeplerOrbit` from CAR. Ecliptic states use the class default rotation; equatorial states use identity. Satellites return `undefined`.
