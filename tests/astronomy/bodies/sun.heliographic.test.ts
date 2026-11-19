@@ -1,7 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import {
 	ALLEN_DIFFERENTIAL_ROTATION,
-	approximateSolarDiskGeometry,
 	HOWARD_1990_DIFFERENTIAL_ROTATION,
 	heliographicToHelioprojective,
 	heliographicToSolarImage,
@@ -45,7 +44,6 @@ describe('disk geometry', () => {
 		for (const ref of SUNPY) {
 			const [year, month, day, hour] = ref.date
 			const g = geocentric(timeYMDHMS(year, month, day, hour, 0, 0, Timescale.UTC))
-			expect(g.model).toBe('iau')
 			// P residual (< 0.001 deg) is SunPy's mean-equator/frame construction versus this true-of-date one.
 			expect(toDeg(g.p)).toBeCloseTo(ref.p, 2)
 			expect(toDeg(g.pIcrs)).toBeCloseTo(ref.pIcrs, 2)
@@ -53,26 +51,6 @@ describe('disk geometry', () => {
 			expect(toDeg(g.l0)).toBeCloseTo(ref.l0, 4)
 			expect(g.distance).toBeCloseTo(ref.distance, 6)
 			expect(toArcsec(g.semidiameter)).toBeCloseTo(ref.semidiameter, 1)
-		}
-	})
-
-	test('Meeus geometry matches the worked example and stays close to the IAU model', () => {
-		// Meeus, Astronomical Algorithms, example 29.a: 1992 Oct 13 0h UT gives P = 26.27, B0 = 5.99, L0 = 238.63 deg.
-		const meeus = approximateSolarDiskGeometry(timeYMDHMS(1992, 10, 13, 0, 0, 0, Timescale.UTC))
-		expect(meeus.model).toBe('meeus')
-		expect(toDeg(meeus.p)).toBeCloseTo(26.27, 2)
-		expect(toDeg(meeus.b0)).toBeCloseTo(5.99, 2)
-		expect(toDeg(meeus.l0)).toBeCloseTo(238.63, 2)
-
-		for (const ref of SUNPY) {
-			const [year, month, day, hour] = ref.date
-			const g = approximateSolarDiskGeometry(timeYMDHMS(year, month, day, hour, 0, 0, Timescale.UTC))
-			expect(Math.abs(toDeg(g.p) - ref.p)).toBeLessThan(0.005)
-			expect(Math.abs(toDeg(g.pIcrs) - ref.pIcrs)).toBeLessThan(0.005)
-			expect(Math.abs(toDeg(g.b0) - ref.b0)).toBeLessThan(0.005)
-			// Meeus L0 includes aberration (-0.006 deg) and an older rotation phase.
-			expect(Math.abs(toDeg(normalizePI(g.l0 - deg(ref.l0))))).toBeLessThan(0.05)
-			expect(g.distance).toBeCloseTo(ref.distance, 5)
 		}
 	})
 

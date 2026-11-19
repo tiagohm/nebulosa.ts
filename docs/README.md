@@ -5137,27 +5137,27 @@ console.log(toArcsec(ephemerisUncertaintyEllipse(covariance, [2.1, -1.2, -1.0], 
 
 Locating a sunspot or a prominence on the Sun, and following it from day to day, needs the orientation of the solar disk as seen by the observer. It is described by three angles: P, the position angle of the solar north pole measured from celestial north toward east; B0, the heliographic latitude of the disk centre; and L0, the Carrington longitude of the disk centre. Heliographic latitude is positive toward solar north. Stonyhurst longitude is measured from the observer's central meridian, positive toward the west limb (the direction of rotation), in `(−π, π]`. Carrington longitude is fixed to a Sun rotating rigidly at 14.1844°/day (the IAU prime meridian), in `[0, 2π)`, so Carrington = Stonyhurst + L0, and L0 decreases by about 13.2°/day. L0 is not the fractional [Carrington Rotation](#carrington-rotation) number.
 
-`solarDiskGeometry` takes barycentric ICRS states of the observer (the Earth, or a site through `observerState`, see [Barycentric and Heliocentric Light-Time Correction](#barycentric-and-heliocentric-light-time-correction)) and of the Sun. B0 and L0 use the IAU rotation retarded by the light time and exclude aberration, matching SunPy's defaults; the Astronomical Almanac L0 includes aberration and is about 0.006° smaller. P is referred to the true equator and equinox of date, and a second angle to ICRS north, which is what a J2000/ICRS plate solution measures; they differ by precession and nutation, up to about 0.16° in 2026. A geocentric Meeus approximation (chapter 29) gives P and B0 to a few thousandths of a degree but L0 only to a few hundredths.
+`solarDiskGeometry` takes barycentric ICRS states of the observer (the Earth, or a site through `observerState`, see [Barycentric and Heliocentric Light-Time Correction](#barycentric-and-heliocentric-light-time-correction)) and of the Sun. B0 and L0 use the IAU rotation retarded by the light time and exclude aberration, matching SunPy's defaults; the Astronomical Almanac L0 includes aberration and is about 0.006° smaller. P is referred to the true equator and equinox of date, and a second angle to ICRS north, which is what a J2000/ICRS plate solution measures; they differ by precession and nutation, up to about 0.16° in 2026. The states come from an [ephemeris source](#ephemeris-sources), the SPK kernels or the analytical theories.
 
 The mapping functions place a line of sight on the solar sphere seen from that observer at its finite distance, either from helioprojective angles (from the disk centre, toward solar west and solar north) or from pixels of an ideal, distortion-free image centred on the disk (origin upper left, +Y down), and back. `mu`, the cosine of the heliocentric angle, is 1 at the disk centre and 0 at the limb. Features are carried forward by differential rotation, ω = A + B sin²φ + C sin⁴φ (sidereal, Howard 1990 by default, Snodgrass 1983 and Allen available), relative to the rigid Carrington rate; the latitude is kept, so map the new Carrington longitude through the geometry of the later time.
 
 ```ts
-import { approximateSolarDiskGeometry, heliographicToHelioprojective, heliographicToSolarImage, helioprojectiveToHeliographic, rotateCarringtonLongitude, solarDiskGeometry, solarImageScale, solarImageToHeliographic, solarRotationRate } from 'nebulosa/src/astronomy/bodies/sun.heliographic'
-import { earth, sun } from 'nebulosa/src/astronomy/ephemeris/models/analytical/vsop87e'
+import { heliographicToHelioprojective, heliographicToSolarImage, helioprojectiveToHeliographic, rotateCarringtonLongitude, solarDiskGeometry, solarImageScale, solarImageToHeliographic, solarRotationRate } from 'nebulosa/src/astronomy/bodies/sun.heliographic'
+import { analyticalEphemerisSource } from 'nebulosa/src/astronomy/ephemeris/source'
+import type { Time } from 'nebulosa/src/astronomy/time/time'
 import { Timescale, timeShift, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
 import { arcsec, deg, toArcsec, toDeg } from 'nebulosa/src/math/units/angle'
 
 const time = timeYMDHMS(2026, 6, 29, 0, 0, 0, Timescale.UTC)
 
+// Barycentric Earth and Sun states of a source: here the analytical theories.
+const earth = (t: Time) => analyticalEphemerisSource.state(399, t)
+const sun = (t: Time) => analyticalEphemerisSource.state(10, t)
+
 // P, B0 and L0 for a geocentric observer, from barycentric Earth and Sun states.
 const geometry = solarDiskGeometry(time, earth(time), sun(time))
 
 console.log(toDeg(geometry.p), toDeg(geometry.b0), toDeg(geometry.l0)) // -3.6155 2.6155 96.8428 — degrees
-
-// The geocentric Meeus approximation, from the time alone.
-const approximate = approximateSolarDiskGeometry(time)
-
-console.log(toDeg(approximate.p), toDeg(approximate.b0), toDeg(approximate.l0)) // -3.6143 2.6114 96.8846 — degrees
 
 // A line of sight 300″ west and 200″ north of the disk centre, on the solar sphere.
 const point = helioprojectiveToHeliographic(arcsec(300), arcsec(200), geometry)
@@ -9779,6 +9779,7 @@ The model is a rigid rotation in the Earth-fixed frame. A grid of sensor pixels 
 Two poses cannot prove that the motion was pure RA, so a small mixed RA/DEC motion tilts the axis undetected. An axis found several degrees from the pole is the mark of a declination move or a wrong blind solve, never of a large polar error. A changed binning, subframe, rotator or camera position invalidates the calibration. The convergence threshold is a requested target, not a statement of accuracy, which depends on the solutions, the optics and the mechanics. The runner performs the calibration and the refinement with real devices. In manual mode it waits for the operator to turn the RA axis. In automatic mode it turns the mount with timed motions sized only from the fitted rotation of the solves, never from the motion time. It never restores the slew rate it changed, so the caller does that once the mount is free.
 
 ```ts
+import { analyticalEphemerisSource } from 'nebulosa/src/astronomy/ephemeris/source'
 import { geodeticLocation } from 'nebulosa/src/astronomy/observer/location'
 import { deg, toArcsec } from 'nebulosa/src/math/units/angle'
 import { advanceIPolarConvergence, calibrateIPolar, IPOLAR_CONVERGENCE_START, measureIPolar } from 'nebulosa/src/observation/alignment/ipolar'
@@ -9788,12 +9789,13 @@ import { ipolarMountRefusal, runIPolarCalibration, runIPolarRefinement } from 'n
 // The site; refraction: false measures against the geometric pole.
 const observer: IPolarObserver = { location: geodeticLocation(deg(-45), deg(40)), refraction: false }
 
-// first, second: IPolarFrame — mid-exposure time, plate solution and sensor geometry of two frames separated by an RA-only rotation.
-const result = calibrateIPolar(first, second, observer)
+// first, second: IPolarFrame — mid-exposure time, plate solution and sensor geometry of two frames separated by an RA-only rotation,
+// with the Earth of an ephemeris source for the aberration and the light deflection.
+const result = calibrateIPolar(first, second, observer, analyticalEphemerisSource)
 if (!result.accepted) throw new Error(result.reason)
 
 // frame: IPolarFrame — a later frame of the same sensor geometry, taken while the base is adjusted.
-const measurement = measureIPolar(result.calibration, frame)
+const measurement = measureIPolar(result.calibration, frame, analyticalEphemerisSource)
 if (measurement.valid) console.log(toArcsec(measurement.error.azimuth), toArcsec(measurement.error.altitude)) // arcsec: + east of the pole, + above it
 
 // The streak of consecutive measurements within the threshold.

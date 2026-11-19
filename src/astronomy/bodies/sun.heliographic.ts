@@ -6,7 +6,6 @@ import { type Angle, normalizeAngle, normalizePI } from '../../math/units/angle'
 import type { Distance } from '../../math/units/distance'
 import type { PositionAndVelocity } from '../coordinates/astrometry'
 import { annualAberration } from '../coordinates/correction'
-import { Solar, SolarDisk } from '../ephemeris/meeus'
 import { precessionNutationMatrix, type Time, Timescale, timeSubtract, toJulianDay, tt } from '../time/time'
 import { orientation, SUN_ROTATION, subObserverPoint } from './orientation'
 
@@ -28,17 +27,12 @@ import { orientation, SUN_ROTATION, subObserverPoint } from './orientation'
 // Longitude system of a heliographic coordinate.
 export type HeliographicLongitudeSystem = 'stonyhurst' | 'carrington'
 
-// Solar-disk orientation model: the IAU rotation elements with a caller ephemeris, or Meeus ch. 29.
-export type SolarDiskModel = 'iau' | 'meeus'
-
 // Celestial north that an image position angle is measured from: the true equator and equinox of
 // date, or ICRS (a J2000/ICRS plate solution).
 export type SolarImageNorth = 'date' | 'icrs'
 
 // Observed orientation and size of the solar disk at one instant for one observer.
 export interface SolarDiskGeometry {
-	// Model that produced the angles.
-	readonly model: SolarDiskModel
 	// Observation (reception) instant.
 	readonly time: Time
 	// Position angle of the solar north pole at the apparent disk centre, measured from the north of
@@ -191,32 +185,7 @@ export function solarDiskGeometry(time: Time, observer: PositionAndVelocity, sun
 	const p = positionAngle(matMulVec(pnm, pole), matMulVec(pnm, apparent))
 	const pIcrs = positionAngle(pole, apparent)
 
-	return { model: 'iau', time, p, pIcrs, b0: latitude, l0: longitude, distance, semidiameter: Math.asin(SUN_RADIUS_AU / distance) }
-}
-
-// Computes the geocentric solar-disk geometry from Meeus, Astronomical Algorithms ch. 29.
-//
-// A self-contained approximation for a geocentric observer: VSOP87 Sun, the Carrington elements
-// (I = 7.25 deg, 25.38-day sidereal period) and low-order aberration, evaluated at the TT of `time`.
-// Its L0 includes aberration and differs from the IAU model by a few hundredths of a degree in the
-// 21st century; P and B0 agree to a few thousandths of a degree. Use solarDiskGeometry for
-// topocentric observers or IAU/SunPy-consistent Carrington longitudes.
-export function approximateSolarDiskGeometry(time: Time): SolarDiskGeometry {
-	const jde = toJulianDay(tt(time))
-	const [p, b0, l0] = SolarDisk.ephemeris(jde)
-	const [ra, dec, distance] = Solar.apparentEquatorialVSOP87(jde)
-
-	// Rotates the true-of-date disk centre and its local north into ICRS to refer P to ICRS north.
-	const sinRa = Math.sin(ra)
-	const cosRa = Math.cos(ra)
-	const sinDec = Math.sin(dec)
-	const cosDec = Math.cos(dec)
-	const pnm = precessionNutationMatrix(time)
-	const centre = matTransposeMulVec(pnm, [cosDec * cosRa, cosDec * sinRa, sinDec])
-	const north = matTransposeMulVec(pnm, [-sinDec * cosRa, -sinDec * sinRa, cosDec])
-	const pIcrs = normalizePI(p + positionAngle(north, centre))
-
-	return { model: 'meeus', time, p: normalizePI(p), pIcrs, b0, l0, distance, semidiameter: Math.asin(SUN_RADIUS_AU / distance) }
+	return { time, p, pIcrs, b0: latitude, l0: longitude, distance, semidiameter: Math.asin(SUN_RADIUS_AU / distance) }
 }
 
 // Computes the TAN image scale, in radians per pixel, from the measured photospheric disk radius in

@@ -1,5 +1,6 @@
 import type { Parity, PlateSolution } from '../../astrometry/solvers/platesolver'
 import { eraS2c } from '../../astronomy/coordinates/erfa/erfa'
+import type { EphemerisSource } from '../../astronomy/ephemeris/source'
 import { type Time, Timescale, timeSubtract } from '../../astronomy/time/time'
 import { DAYSEC } from '../../core/constants'
 import { matMulVec, matToVec3, matTranspose } from '../../math/linear-algebra/mat3'
@@ -213,16 +214,17 @@ export const IPOLAR_CONVERGENCE_START: IPolarConvergence = { streak: 0, converge
 
 // Calibrates the mechanical RA axis from two frames of one rigid camera separated by an RA rotation
 // of the mount. Returns the calibration, or the first failed gate of `limits` with the diagnostics
-// gathered so far. `observer` is the site and atmosphere of every later measurement.
-export function calibrateIPolar(first: IPolarFrame, second: IPolarFrame, observer: IPolarObserver, limits: Readonly<IPolarLimits> = DEFAULT_IPOLAR_LIMITS): IPolarCalibrationResult {
+// gathered so far. `observer` is the site and atmosphere of every later measurement, and `ephemeris` the source of the
+// Earth of both frames.
+export function calibrateIPolar(first: IPolarFrame, second: IPolarFrame, observer: IPolarObserver, ephemeris: EphemerisSource, limits: Readonly<IPolarLimits> = DEFAULT_IPOLAR_LIMITS): IPolarCalibrationResult {
 	if (!sameSensor(first.sensor, second.sensor) || !matchesSensor(first) || !matchesSensor(second) || first.solution.parity !== second.solution.parity) return rejected('inconsistentSensor', {})
 
 	const interval = secondsBetween(first.time, second.time)
 	if (!(interval > 0 && interval <= limits.maximumCalibrationInterval)) return rejected('badTime', { interval })
 	if (!(first.solution.radius >= limits.minimumFieldRadius && second.solution.radius >= limits.minimumFieldRadius)) return rejected('poorConditioning', { interval })
 
-	const firstContext = ipolarFrameContext(first.time, observer)
-	const secondContext = ipolarFrameContext(second.time, observer)
+	const firstContext = ipolarFrameContext(first.time, observer, ephemeris)
+	const secondContext = ipolarFrameContext(second.time, observer, ephemeris)
 	const reference = ipolarEarthFixedRays(first.solution, firstContext)
 	const rays = ipolarEarthFixedRays(second.solution, secondContext)
 	if (reference === undefined || rays === undefined) return rejected('badWcs', { interval })
@@ -256,13 +258,13 @@ export function calibrateIPolar(first: IPolarFrame, second: IPolarFrame, observe
 // carries the calibrated axis to the frame's instant, compared with the target pole there.
 // `previous` is the latest accepted measurement, against which time order, axis jumps and slews are
 // checked. Returns the measurement or why the frame was rejected.
-export function measureIPolar(calibration: IPolarCalibration, frame: IPolarFrame, previous?: IPolarAcceptedMeasurement, limits: Readonly<IPolarLimits> = DEFAULT_IPOLAR_LIMITS): IPolarMeasurement {
+export function measureIPolar(calibration: IPolarCalibration, frame: IPolarFrame, ephemeris: EphemerisSource, previous?: IPolarAcceptedMeasurement, limits: Readonly<IPolarLimits> = DEFAULT_IPOLAR_LIMITS): IPolarMeasurement {
 	const { time, solution } = frame
 	if (!sameSensor(calibration.sensor, frame.sensor) || !matchesSensor(frame) || solution.parity !== calibration.parity) return { valid: false, time, reason: 'geometryMismatch', invalidatesCalibration: true }
 	if (!(secondsBetween(previous?.time ?? calibration.time, time) > 0)) return refused(time, 'badTime')
 	if (!(solution.radius >= limits.minimumFieldRadius)) return refused(time, 'poorConditioning')
 
-	const context = ipolarFrameContext(time, calibration.observer)
+	const context = ipolarFrameContext(time, calibration.observer, ephemeris)
 	const rays = ipolarEarthFixedRays(solution, context)
 	if (rays === undefined) return refused(time, 'badWcs')
 

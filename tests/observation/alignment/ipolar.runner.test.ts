@@ -4,6 +4,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { plateSolutionFrom } from '../../../src/astrometry/solvers/platesolver'
 import { eraS2c } from '../../../src/astronomy/coordinates/erfa/erfa'
+import { analyticalEphemerisSource } from '../../../src/astronomy/ephemeris/source'
 import { geodeticLocation } from '../../../src/astronomy/observer/location'
 import { timeUnix } from '../../../src/astronomy/time/time'
 import { SIDEREAL_DRIFT_RATE } from '../../../src/core/constants'
@@ -28,9 +29,9 @@ import type { CenteringCaptureOptions } from '../../../src/observation/mount/cen
 const CAPTURE: CenteringCaptureOptions = { exposureTime: 2, exposureTimeUnit: 'second', frameType: 'LIGHT', x: 0, y: 0, width: 640, height: 480, subframe: false, binX: 1, binY: 1, frameFormat: 'MONO', gain: 0, offset: 0, compressed: false }
 const LOCATION = geodeticLocation(deg(-45), deg(40))
 const OBSERVER: IPolarObserver = { location: LOCATION, refraction: false }
-const MANUAL: IPolarCalibrationOptions = { mode: 'manual', capture: CAPTURE, observer: OBSERVER, settle: 1, maximumAttempts: 4, maximumDeclinationChange: deg(0.5), solveTimeout: 60, abortGrace: 5 }
+const MANUAL: IPolarCalibrationOptions = { mode: 'manual', capture: CAPTURE, observer: OBSERVER, ephemeris: analyticalEphemerisSource, settle: 1, maximumAttempts: 4, maximumDeclinationChange: deg(0.5), solveTimeout: 60, abortGrace: 5 }
 const AUTOMATIC: IPolarCalibrationOptions = { ...MANUAL, mode: 'automatic', motion: { direction: 'WEST', slewRate: 'SLOW', targetRotation: deg(25), initialMotion: 2, maximumMotion: 30, maximumTotalMotion: 120 }, maximumAttempts: 8 }
-const REFINEMENT: IPolarRefinementOptions = { capture: CAPTURE, delay: 5, maximumFailures: 1, maximumDeclinationChange: deg(0.5), solveTimeout: 60, abortGrace: 5 }
+const REFINEMENT: IPolarRefinementOptions = { capture: CAPTURE, ephemeris: analyticalEphemerisSource, delay: 5, maximumFailures: 1, maximumDeclinationChange: deg(0.5), solveTimeout: 60, abortGrace: 5 }
 const CAMERA = { name: 'Fake Camera' } as Camera
 const UP: Vec3 = [Math.cos(deg(40)) * Math.cos(deg(-45)), Math.cos(deg(40)) * Math.sin(deg(-45)), Math.sin(deg(40))]
 const EAST: Vec3 = [-Math.sin(deg(-45)), Math.cos(deg(-45)), 0]
@@ -151,7 +152,7 @@ class FakeRig {
 	// Plate solution of the camera at the wall instant `at`, tracking included.
 	solution(at: number) {
 		const time = timeUnix(at / 1000)
-		const context = ipolarFrameContext(time, OBSERVER)
+		const context = ipolarFrameContext(time, OBSERVER, analyticalEphemerisSource)
 		const tracked = this.tracking ? mul(matRodriguesRotation(this.axis, -SIDEREAL_DRIFT_RATE * ((at - this.start) / 1000)), this.attitude) : this.attitude
 		const f = matMulVec(tracked, this.forward)
 		const r = vecNormalize(matMulVec(tracked, vecCross(this.forward, [0, 0, 1])))

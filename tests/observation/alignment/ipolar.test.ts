@@ -4,6 +4,7 @@ import { tanUnproject } from '../../../src/astrometry/wcs/fits.wcs'
 import { cirsToIcrs, DEFAULT_REFRACTION_PARAMETERS, observedToCirs, type RefractionParameters, refractedAltitude } from '../../../src/astronomy/coordinates/astrometry'
 import { eraEpv00 } from '../../../src/astronomy/coordinates/erfa/earth'
 import { eraC2s, eraS2c } from '../../../src/astronomy/coordinates/erfa/erfa'
+import { analyticalEphemerisSource } from '../../../src/astronomy/ephemeris/source'
 import { geodeticLocation, type GeographicPosition } from '../../../src/astronomy/observer/location'
 import { gcrsToItrsRotationMatrix, tdb, type Time, timeShift, timeYMDHMS } from '../../../src/astronomy/time/time'
 import { DAYSEC, PI } from '../../../src/core/constants'
@@ -234,7 +235,7 @@ function mul(a: readonly number[], b: readonly number[]) {
 }
 
 function calibrated(m: ReturnType<typeof mount>, rotation = deg(30), seconds = 60) {
-	const result = calibrateIPolar(m.frame({ rotation: 0 }), m.frame({ rotation, seconds }), m.observer)
+	const result = calibrateIPolar(m.frame({ rotation: 0 }), m.frame({ rotation, seconds }), m.observer, analyticalEphemerisSource)
 	if (!result.accepted) throw new Error(`calibration rejected: ${result.reason}`)
 	return result.calibration
 }
@@ -267,7 +268,7 @@ describe('calibration recovers the injected axis', () => {
 				test(`${site.name}, ${refraction ? 'refracted' : 'geometric'}, ${error.name}`, () => {
 					const m = mount({ ...site, ...error, refraction })
 					const calibration = calibrated(m)
-					const measurement = accepted(measureIPolar(calibration, m.frame({ rotation: deg(30), seconds: 60 })))
+					const measurement = accepted(measureIPolar(calibration, m.frame({ rotation: deg(30), seconds: 60 }), analyticalEphemerisSource))
 					expect(toArcsec(Math.abs(measurement.error.azimuth - error.azimuthError))).toBeLessThan(2)
 					expect(toArcsec(Math.abs(measurement.error.altitude - error.altitudeError))).toBeLessThan(2)
 					expect(toArcsec(vecAngle(measurement.axis, m.axis))).toBeLessThan(2)
@@ -281,7 +282,7 @@ describe('calibration recovers the injected axis', () => {
 	test('with a mirrored sensor, a wide field, a main camera far from the axis and SIP distortion', () => {
 		for (const definition of [{ flipped: true }, { width: 3000, height: 2000, scale: arcsec(30) }, { offset: deg(40) }, { distortion: 6e-9 }, { offset: 0, roll: deg(-70) }]) {
 			const m = mount({ latitude: deg(-30), azimuthError: arcmin(8), altitudeError: arcmin(5), ...definition })
-			const measurement = accepted(measureIPolar(calibrated(m), m.frame({ rotation: deg(25), seconds: 300 })))
+			const measurement = accepted(measureIPolar(calibrated(m), m.frame({ rotation: deg(25), seconds: 300 }), analyticalEphemerisSource))
 			expect(toArcsec(Math.abs(measurement.error.azimuth - arcmin(8)))).toBeLessThan(2)
 			expect(toArcsec(Math.abs(measurement.error.altitude - arcmin(5)))).toBeLessThan(2)
 		}
@@ -292,9 +293,9 @@ describe('calibration recovers the injected axis', () => {
 		const first = m.frame({ rotation: 0 })
 		const second = m.frame({ rotation: deg(40), seconds: 90 })
 		expect(vecAngle(eraS2c(first.solution.rightAscension, first.solution.declination), eraS2c(second.solution.rightAscension, second.solution.declination))).toBeGreaterThan(first.solution.radius * 4)
-		const result = calibrateIPolar(first, second, m.observer)
+		const result = calibrateIPolar(first, second, m.observer, analyticalEphemerisSource)
 		expect(result.accepted).toBeTrue()
-		const measurement = accepted(measureIPolar((result as { calibration: IPolarCalibration }).calibration, second))
+		const measurement = accepted(measureIPolar((result as { calibration: IPolarCalibration }).calibration, second, analyticalEphemerisSource))
 		expect(toArcsec(Math.abs(measurement.error.azimuth - arcmin(-10)))).toBeLessThan(2)
 	})
 })
@@ -312,7 +313,7 @@ describe('time', () => {
 
 	test('tracking between the frames only adds RA rotation', () => {
 		const m = mount({ latitude: deg(-25), azimuthError: arcmin(-6), altitudeError: arcmin(9) })
-		const tracked = calibrateIPolar(m.frame({ rotation: 0 }), m.frame({ rotation: deg(25) + SIDEREAL_RATE * 600, seconds: 600 }), m.observer)
+		const tracked = calibrateIPolar(m.frame({ rotation: 0 }), m.frame({ rotation: deg(25) + SIDEREAL_RATE * 600, seconds: 600 }), m.observer, analyticalEphemerisSource)
 		expect(tracked.accepted).toBeTrue()
 		const calibration = (tracked as { calibration: IPolarCalibration }).calibration
 		expect(toDeg(calibration.quality.rotation)).toBeCloseTo(25 + toDeg(SIDEREAL_RATE * 600), 2)
@@ -332,11 +333,11 @@ describe('time', () => {
 
 	test('rejects frames out of order or too far apart', () => {
 		const m = mount({ latitude: deg(40) })
-		expect(calibrateIPolar(m.frame({ rotation: 0, seconds: 60 }), m.frame({ rotation: deg(30) }), m.observer)).toMatchObject({ accepted: false, reason: 'badTime' })
-		expect(calibrateIPolar(m.frame({ rotation: 0 }), m.frame({ rotation: deg(30), seconds: 7200 }), m.observer)).toMatchObject({ accepted: false, reason: 'badTime' })
+		expect(calibrateIPolar(m.frame({ rotation: 0, seconds: 60 }), m.frame({ rotation: deg(30) }), m.observer, analyticalEphemerisSource)).toMatchObject({ accepted: false, reason: 'badTime' })
+		expect(calibrateIPolar(m.frame({ rotation: 0 }), m.frame({ rotation: deg(30), seconds: 7200 }), m.observer, analyticalEphemerisSource)).toMatchObject({ accepted: false, reason: 'badTime' })
 		const calibration = calibrated(m)
-		const first = accepted(measureIPolar(calibration, m.frame({ rotation: deg(30), seconds: 120 })))
-		expect(measureIPolar(calibration, m.frame({ rotation: deg(30), seconds: 100 }), first)).toMatchObject({ valid: false, reason: 'badTime', invalidatesCalibration: false })
+		const first = accepted(measureIPolar(calibration, m.frame({ rotation: deg(30), seconds: 120 }), analyticalEphemerisSource))
+		expect(measureIPolar(calibration, m.frame({ rotation: deg(30), seconds: 100 }), analyticalEphemerisSource, first)).toMatchObject({ valid: false, reason: 'badTime', invalidatesCalibration: false })
 	})
 })
 
@@ -344,12 +345,12 @@ describe('calibration gates', () => {
 	const m = mount({ latitude: deg(40), azimuthError: arcmin(10) })
 
 	test('measures the rotation and rejects too little or too much', () => {
-		const small = calibrateIPolar(m.frame({ rotation: 0 }), m.frame({ rotation: deg(5), seconds: 30 }), m.observer)
+		const small = calibrateIPolar(m.frame({ rotation: 0 }), m.frame({ rotation: deg(5), seconds: 30 }), m.observer, analyticalEphemerisSource)
 		expect(small).toMatchObject({ accepted: false, reason: 'insufficientRotation' })
 		expect(toDeg(small.accepted ? 0 : small.quality.rotation!)).toBeCloseTo(5, 3)
-		expect(calibrateIPolar(m.frame({ rotation: 0 }), m.frame({ rotation: deg(70), seconds: 30 }), m.observer)).toMatchObject({ accepted: false, reason: 'excessiveRotation' })
-		expect(calibrateIPolar(m.frame({ rotation: 0 }), m.frame({ rotation: deg(-170), seconds: 30 }), m.observer)).toMatchObject({ accepted: false, reason: 'excessiveRotation' })
-		const marginal = calibrateIPolar(m.frame({ rotation: 0 }), m.frame({ rotation: deg(12), seconds: 30 }), m.observer)
+		expect(calibrateIPolar(m.frame({ rotation: 0 }), m.frame({ rotation: deg(70), seconds: 30 }), m.observer, analyticalEphemerisSource)).toMatchObject({ accepted: false, reason: 'excessiveRotation' })
+		expect(calibrateIPolar(m.frame({ rotation: 0 }), m.frame({ rotation: deg(-170), seconds: 30 }), m.observer, analyticalEphemerisSource)).toMatchObject({ accepted: false, reason: 'excessiveRotation' })
+		const marginal = calibrateIPolar(m.frame({ rotation: 0 }), m.frame({ rotation: deg(12), seconds: 30 }), m.observer, analyticalEphemerisSource)
 		expect(marginal).toMatchObject({ accepted: true, calibration: { quality: { preferred: false } } })
 	})
 
@@ -360,8 +361,8 @@ describe('calibration gates', () => {
 	})
 
 	test('rejects a declination motion and a wrong blind solve as a wrong axis', () => {
-		expect(calibrateIPolar(m.frame({ rotation: 0 }), m.frame({ rotation: 0, declination: deg(20), seconds: 30 }), m.observer)).toMatchObject({ accepted: false, reason: 'wrongAxis' })
-		const wrong = calibrateIPolar(m.frame({ rotation: 0 }), m.frame({ rotation: deg(30), seconds: 30, field: vecNormalize([0.3, 0.6, 0.2]) }), m.observer)
+		expect(calibrateIPolar(m.frame({ rotation: 0 }), m.frame({ rotation: 0, declination: deg(20), seconds: 30 }), m.observer, analyticalEphemerisSource)).toMatchObject({ accepted: false, reason: 'wrongAxis' })
+		const wrong = calibrateIPolar(m.frame({ rotation: 0 }), m.frame({ rotation: deg(30), seconds: 30, field: vecNormalize([0.3, 0.6, 0.2]) }), m.observer, analyticalEphemerisSource)
 		expect(wrong.accepted).toBeFalse()
 	})
 
@@ -369,24 +370,24 @@ describe('calibration gates', () => {
 		const random = splitmix32(7)
 		for (let i = 0; i < 40; i++) {
 			const declination = deg(8 + 30 * random())
-			const result = calibrateIPolar(m.frame({ rotation: 0 }), m.frame({ rotation: deg(10 + 30 * random()), declination, seconds: 30 }), m.observer)
+			const result = calibrateIPolar(m.frame({ rotation: 0 }), m.frame({ rotation: deg(10 + 30 * random()), declination, seconds: 30 }), m.observer, analyticalEphemerisSource)
 			if (result.accepted) expect(toDeg(result.calibration.quality.axisOffset)).toBeLessThanOrEqual(5)
 			else expect(['wrongAxis', 'excessiveRotation', 'insufficientRotation']).toContain(result.reason)
 		}
 	})
 
 	test('rejects a different sensor geometry, a parity change and a non-rigid pair', () => {
-		expect(calibrateIPolar(m.frame({ rotation: 0 }), m.frame({ rotation: deg(30), seconds: 30, sensor: { binX: 2 } }), m.observer)).toMatchObject({ accepted: false, reason: 'inconsistentSensor' })
+		expect(calibrateIPolar(m.frame({ rotation: 0 }), m.frame({ rotation: deg(30), seconds: 30, sensor: { binX: 2 } }), m.observer, analyticalEphemerisSource)).toMatchObject({ accepted: false, reason: 'inconsistentSensor' })
 		const mirrored = mount({ latitude: deg(40), azimuthError: arcmin(10), flipped: true })
-		expect(calibrateIPolar(m.frame({ rotation: 0 }), mirrored.frame({ rotation: deg(30), seconds: 30 }), m.observer)).toMatchObject({ accepted: false, reason: 'inconsistentSensor' })
-		expect(calibrateIPolar(m.frame({ rotation: 0 }), m.frame({ rotation: deg(30), seconds: 30, scale: arcsec(6) * 1.01 }), m.observer)).toMatchObject({ accepted: false, reason: 'unstableFit' })
+		expect(calibrateIPolar(m.frame({ rotation: 0 }), mirrored.frame({ rotation: deg(30), seconds: 30 }), m.observer, analyticalEphemerisSource)).toMatchObject({ accepted: false, reason: 'inconsistentSensor' })
+		expect(calibrateIPolar(m.frame({ rotation: 0 }), m.frame({ rotation: deg(30), seconds: 30, scale: arcsec(6) * 1.01 }), m.observer, analyticalEphemerisSource)).toMatchObject({ accepted: false, reason: 'unstableFit' })
 	})
 
 	test('rejects a field too small and a WCS that cannot be unprojected', () => {
 		const narrow = mount({ latitude: deg(40), width: 200, height: 150, scale: arcsec(1) })
-		expect(calibrateIPolar(narrow.frame({ rotation: 0 }), narrow.frame({ rotation: deg(30), seconds: 30 }), narrow.observer)).toMatchObject({ accepted: false, reason: 'poorConditioning' })
+		expect(calibrateIPolar(narrow.frame({ rotation: 0 }), narrow.frame({ rotation: deg(30), seconds: 30 }), narrow.observer, analyticalEphemerisSource)).toMatchObject({ accepted: false, reason: 'poorConditioning' })
 		const second = m.frame({ rotation: deg(30), seconds: 30 })
-		expect(calibrateIPolar(m.frame({ rotation: 0 }), { ...second, solution: { ...second.solution, CTYPE1: 'RA---SIN' } }, m.observer)).toMatchObject({ accepted: false, reason: 'badWcs' })
+		expect(calibrateIPolar(m.frame({ rotation: 0 }), { ...second, solution: { ...second.solution, CTYPE1: 'RA---SIN' } }, m.observer, analyticalEphemerisSource)).toMatchObject({ accepted: false, reason: 'badWcs' })
 	})
 })
 
@@ -402,7 +403,7 @@ describe('refinement', () => {
 				{ azimuth: arcmin(-30), altitude: arcmin(20) },
 				{ azimuth: arcmin(-29.5), altitude: arcmin(20.2) },
 			].entries()) {
-				const measurement = accepted(measureIPolar(calibration, m.frame({ rotation: deg(30) + SIDEREAL_RATE * 120 * (i + 1), seconds: 120 * (i + 1), base }), previous))
+				const measurement = accepted(measureIPolar(calibration, m.frame({ rotation: deg(30) + SIDEREAL_RATE * 120 * (i + 1), seconds: 120 * (i + 1), base }), analyticalEphemerisSource, previous))
 				expect(toArcsec(Math.abs(measurement.error.azimuth - (arcmin(30) + base.azimuth)))).toBeLessThan(2)
 				expect(toArcsec(Math.abs(measurement.error.altitude - (arcmin(-20) + base.altitude)))).toBeLessThan(2)
 				previous = measurement
@@ -414,7 +415,7 @@ describe('refinement', () => {
 	test('places the axis and pole markers on the frame', () => {
 		const m = mount({ latitude: deg(40), azimuthError: arcmin(4), altitudeError: arcmin(3), offset: arcmin(10) })
 		const pose = { rotation: deg(30), seconds: 60 }
-		const measurement = accepted(measureIPolar(calibrated(m), m.frame(pose)))
+		const measurement = accepted(measureIPolar(calibrated(m), m.frame(pose), analyticalEphemerisSource))
 		expect(measurement.axisPoint.kind).toBe('visible')
 		expect(measurement.polePoint.kind).toBe('visible')
 		const axis = m.pixelOf(m.axis, pose)
@@ -426,14 +427,14 @@ describe('refinement', () => {
 
 	test('reports markers off the frame and behind it, never at the center', () => {
 		const far = mount({ latitude: deg(40), azimuthError: arcmin(4), offset: deg(30) })
-		const offscreen = accepted(measureIPolar(calibrated(far), far.frame({ rotation: deg(30), seconds: 60 })))
+		const offscreen = accepted(measureIPolar(calibrated(far), far.frame({ rotation: deg(30), seconds: 60 }), analyticalEphemerisSource))
 		expect(offscreen.polePoint.kind).toBe('offscreen')
 		if (offscreen.polePoint.kind !== 'offscreen') throw new Error('not offscreen')
 		const expected = far.pixelOf(far.target, { rotation: deg(30), seconds: 60 })
 		expect(Math.hypot(offscreen.polePoint.position.x - expected.x, offscreen.polePoint.position.y - expected.y)).toBeLessThan(2)
 		expect(Math.hypot(offscreen.polePoint.direction.x, offscreen.polePoint.direction.y)).toBeCloseTo(1, 12)
 		const behind = mount({ latitude: deg(40), azimuthError: arcmin(4), offset: deg(100) })
-		const unprojectable = accepted(measureIPolar(calibrated(behind), behind.frame({ rotation: deg(30), seconds: 60 })))
+		const unprojectable = accepted(measureIPolar(calibrated(behind), behind.frame({ rotation: deg(30), seconds: 60 }), analyticalEphemerisSource))
 		expect(unprojectable.polePoint).toEqual({ kind: 'unprojectable' })
 		expect(unprojectable.axisPoint).toEqual({ kind: 'unprojectable' })
 	})
@@ -441,22 +442,22 @@ describe('refinement', () => {
 	test('invalidates the calibration after a change of geometry or a slew', () => {
 		const m = mount({ latitude: deg(40), azimuthError: arcmin(10) })
 		const calibration = calibrated(m)
-		const first = accepted(measureIPolar(calibration, m.frame({ rotation: deg(30), seconds: 120 })))
-		expect(measureIPolar(calibration, m.frame({ rotation: deg(30), seconds: 180, sensor: { x: 16 } }), first)).toMatchObject({ valid: false, reason: 'geometryMismatch', invalidatesCalibration: true })
-		expect(measureIPolar(calibration, m.frame({ rotation: deg(30), seconds: 180, declination: deg(4) }), first)).toMatchObject({ valid: false, invalidatesCalibration: true })
-		expect(measureIPolar(calibration, m.frame({ rotation: deg(30), seconds: 180, declination: deg(4) }), first)).toMatchObject({ reason: 'geometryMismatch' })
+		const first = accepted(measureIPolar(calibration, m.frame({ rotation: deg(30), seconds: 120 }), analyticalEphemerisSource))
+		expect(measureIPolar(calibration, m.frame({ rotation: deg(30), seconds: 180, sensor: { x: 16 } }), analyticalEphemerisSource, first)).toMatchObject({ valid: false, reason: 'geometryMismatch', invalidatesCalibration: true })
+		expect(measureIPolar(calibration, m.frame({ rotation: deg(30), seconds: 180, declination: deg(4) }), analyticalEphemerisSource, first)).toMatchObject({ valid: false, invalidatesCalibration: true })
+		expect(measureIPolar(calibration, m.frame({ rotation: deg(30), seconds: 180, declination: deg(4) }), analyticalEphemerisSource, first)).toMatchObject({ reason: 'geometryMismatch' })
 		const slewed = mount({ latitude: deg(40), azimuthError: arcmin(10), offset: deg(30) })
 		const slewedCalibration = calibrated(slewed)
-		const start = accepted(measureIPolar(slewedCalibration, slewed.frame({ rotation: deg(30), seconds: 120 })))
-		expect(measureIPolar(slewedCalibration, slewed.frame({ rotation: deg(50), seconds: 180 }), start)).toMatchObject({ valid: false, reason: 'fieldJump', invalidatesCalibration: true })
-		expect(measureIPolar(calibration, { ...m.frame({ rotation: deg(30), seconds: 180 }), solution: { ...m.frame({ rotation: deg(30), seconds: 180 }).solution, CTYPE1: 'RA---SIN' } }, first)).toMatchObject({ valid: false, reason: 'badWcs', invalidatesCalibration: false })
+		const start = accepted(measureIPolar(slewedCalibration, slewed.frame({ rotation: deg(30), seconds: 120 }), analyticalEphemerisSource))
+		expect(measureIPolar(slewedCalibration, slewed.frame({ rotation: deg(50), seconds: 180 }), analyticalEphemerisSource, start)).toMatchObject({ valid: false, reason: 'fieldJump', invalidatesCalibration: true })
+		expect(measureIPolar(calibration, { ...m.frame({ rotation: deg(30), seconds: 180 }), solution: { ...m.frame({ rotation: deg(30), seconds: 180 }).solution, CTYPE1: 'RA---SIN' } }, analyticalEphemerisSource, first)).toMatchObject({ valid: false, reason: 'badWcs', invalidatesCalibration: false })
 	})
 
 	test('does not mutate the calibration', () => {
 		const m = mount({ latitude: deg(-30), azimuthError: arcmin(5) })
 		const calibration = calibrated(m)
 		const copy = structuredClone(calibration)
-		measureIPolar(calibration, m.frame({ rotation: deg(10), seconds: 200, base: { azimuth: arcmin(1), altitude: 0 } }))
+		measureIPolar(calibration, m.frame({ rotation: deg(10), seconds: 200, base: { azimuth: arcmin(1), altitude: 0 } }), analyticalEphemerisSource)
 		expect(calibration).toEqual(copy)
 	})
 })
@@ -470,7 +471,7 @@ describe('noise', () => {
 		const rotation = deg(30)
 		const errors: number[] = []
 		for (let i = 0; i < 40; i++) {
-			const result = calibrateIPolar(m.frame({ rotation: 0, noise }), m.frame({ rotation, seconds: 60, noise }), m.observer)
+			const result = calibrateIPolar(m.frame({ rotation: 0, noise }), m.frame({ rotation, seconds: 60, noise }), m.observer, analyticalEphemerisSource)
 			if (!result.accepted) throw new Error(result.reason)
 			errors.push(vecAngle(result.calibration.axis, m.axis))
 		}
@@ -484,7 +485,7 @@ describe('noise', () => {
 describe('convergence', () => {
 	const m = mount({ latitude: deg(40), azimuthError: arcsec(10) })
 	const calibration = calibrated(m)
-	const at = (seconds: number, azimuth: number = 0) => measureIPolar(calibration, m.frame({ rotation: deg(30), seconds, base: { azimuth, altitude: 0 } }))
+	const at = (seconds: number, azimuth: number = 0) => measureIPolar(calibration, m.frame({ rotation: deg(30), seconds, base: { azimuth, altitude: 0 } }), analyticalEphemerisSource)
 
 	test('needs consecutive fresh measurements within the threshold and can regress', () => {
 		let state = IPOLAR_CONVERGENCE_START

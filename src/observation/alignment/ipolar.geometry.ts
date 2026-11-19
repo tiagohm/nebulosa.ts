@@ -1,8 +1,8 @@
 import type { PlateSolution } from '../../astrometry/solvers/platesolver'
 import { tanProject, tanUnproject } from '../../astrometry/wcs/fits.wcs'
 import { DEFAULT_REFRACTION_PARAMETERS, type RefractionParameters, refractedAltitude } from '../../astronomy/coordinates/astrometry'
-import { eraEpv00 } from '../../astronomy/coordinates/erfa/earth'
 import { type EraAstrom, eraApco13, eraAtciqz, eraAticq, eraAtioq, eraAtoiq } from '../../astronomy/coordinates/erfa/erfa'
+import { type EphemerisSource, relativeEphemerisState } from '../../astronomy/ephemeris/source'
 import { Ellipsoid, type GeographicPosition } from '../../astronomy/observer/location'
 import { pmAngles, pmMatrix, type Time, tdb, tt, ut1 } from '../../astronomy/time/time'
 import { ELLIPSOID_PARAMETERS, PIOVERTWO } from '../../core/constants'
@@ -79,9 +79,10 @@ export type IPolarProjection =
 	// Behind the tangent plane of the WCS, or not finite: no pixel represents it.
 	| { readonly kind: 'unprojectable' }
 
-// Builds the ERFA context of an exposure at `time` (its mid-exposure instant) for the observer.
-// The Earth ephemeris comes from eraEpv00 at TDB, so the context costs one ephemeris evaluation.
-export function ipolarFrameContext(time: Time, observer: IPolarObserver): IPolarFrameContext {
+// Builds the ERFA context of an exposure at `time` (its mid-exposure instant) for the observer, with the
+// barycentric and heliocentric Earth of `ephemeris` at TDB for the annual aberration and the light deflection,
+// so the context costs one evaluation of the Earth and one of the Sun.
+export function ipolarFrameContext(time: Time, observer: IPolarObserver, ephemeris: EphemerisSource): IPolarFrameContext {
 	const { location, refraction } = observer
 	const a = tt(time)
 	const b = ut1(time)
@@ -92,8 +93,9 @@ export function ipolarFrameContext(time: Time, observer: IPolarObserver): IPolar
 	const temperature = refraction === false ? 0 : (refraction.temperature ?? DEFAULT_REFRACTION_PARAMETERS.temperature)
 	const humidity = refraction === false ? 0 : (refraction.relativeHumidity ?? DEFAULT_REFRACTION_PARAMETERS.relativeHumidity)
 	const wavelength = refraction === false ? 0 : (refraction.wl ?? DEFAULT_REFRACTION_PARAMETERS.wl)
-	const [bary, helio] = eraEpv00(c.day, c.fraction)
-	const astrom = eraApco13(a.day, a.fraction, b.day, b.fraction, location.longitude, location.latitude, location.elevation, xp, yp, sp, pressure, temperature, humidity, wavelength, bary, helio[0], radius, flattening)
+	const bary = ephemeris.state(399, c)
+	const helio = relativeEphemerisState(ephemeris, 399, 10, c)[0]
+	const astrom = eraApco13(a.day, a.fraction, b.day, b.fraction, location.longitude, location.latitude, location.elevation, xp, yp, sp, pressure, temperature, humidity, wavelength, bary, helio, radius, flattening)
 	return { astrom, ...horizonBasis(location) }
 }
 

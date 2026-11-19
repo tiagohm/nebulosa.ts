@@ -1,5 +1,6 @@
 import { unlink } from 'fs/promises'
 import type { PlateSolution } from '../../astrometry/solvers/platesolver'
+import type { EphemerisSource } from '../../astronomy/ephemeris/source'
 import { timeUnix } from '../../astronomy/time/time'
 import type { MountCommander } from '../../devices/commanders/mount'
 import type { Camera, Mount, PierSide } from '../../devices/indi/device'
@@ -73,6 +74,8 @@ export interface IPolarCalibrationOptions {
 	readonly capture: CenteringCaptureOptions
 	// Site and atmosphere of the calibration and every measurement.
 	readonly observer: IPolarObserver
+	// Source of the Earth of every frame, for the annual aberration and the light deflection.
+	readonly ephemeris: EphemerisSource
 	// Automatic rotation; required in automatic mode, ignored in manual mode.
 	readonly motion?: IPolarMotionOptions
 	// Wait after the rotation and before the second exposure; finite ≥ 0.
@@ -95,6 +98,8 @@ export interface IPolarCalibrationOptions {
 export interface IPolarRefinementOptions {
 	// Camera settings of the auxiliary frames; the same sensor geometry as the calibration.
 	readonly capture: CenteringCaptureOptions
+	// Source of the Earth of every frame, for the annual aberration and the light deflection.
+	readonly ephemeris: EphemerisSource
 	// Wait before each refinement exposure; finite ≥ 0.
 	readonly delay: number
 	// Consecutive frames without a solution tolerated before the refinement fails; safe integer ≥ 0.
@@ -386,10 +391,10 @@ async function calibrationLoop(context: OperationContext, camera: Camera, mount:
 		// An unsolved frame leaves the first pose and the rate unchanged.
 		if (second.value === undefined) continue
 
-		const result = calibrateIPolar(first.value.frame, second.value.frame, options.observer, limits)
+		const result = calibrateIPolar(first.value.frame, second.value.frame, options.observer, options.ephemeris, limits)
 
 		if (result.accepted) {
-			const measurement = measureIPolar(result.calibration, second.value.frame, undefined, limits)
+			const measurement = measureIPolar(result.calibration, second.value.frame, options.ephemeris, undefined, limits)
 			listener?.({ type: 'calibrationAccepted', calibration: result.calibration, frame: second.value.runner, measurement, solution: second.value.solution, verified: mount !== undefined })
 			return successfulOperationResult({ calibration: result.calibration, measurement, solution: second.value.solution, mount: reference, captures })
 		}
@@ -441,7 +446,7 @@ async function refinementLoop(context: OperationContext, camera: Camera, mount: 
 		}
 
 		failures = 0
-		const measurement = measureIPolar(calibration, solved.value.frame, previous, limits)
+		const measurement = measureIPolar(calibration, solved.value.frame, options.ephemeris, previous, limits)
 		convergence = advanceIPolarConvergence(convergence, measurement, convergenceOptions)
 		listener?.({ type: 'measurement', frame: solved.value.runner, measurement, convergence, solution: solved.value.solution })
 
