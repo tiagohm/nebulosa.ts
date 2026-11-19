@@ -1,3 +1,4 @@
+import { DAYSPERJY, J2000 } from '../../core/constants'
 import { spline } from '../../math/numerical/spline'
 
 // Delta T (TT - UT1) models in seconds as a function of decimal calendar year. Combines the Espenak-Meeus
@@ -140,4 +141,10 @@ export function deltaT(year: number) {
 	if (year < S15_MIN_YEAR) return parabolaOfStephensonMorrisonHohenkerk2016.compute(year)
 	if (year > S15_MAX_YEAR) return deltaTByEspenakMeeus2006(year)
 	return s15(year).compute(year)
+}
+
+// Best-estimate Delta T (TT - UT1) in seconds at a Julian Date in any scale (see deltaT), its year taken as the Julian
+// epoch 2000 + (JD - J2000) / 365.25; Delta T changes by under a second a year, so the scale does not matter.
+export function deltaTAtJulianDay(julianDay: number) {
+	return deltaT(2000 + (julianDay - J2000) / DAYSPERJY)
 }

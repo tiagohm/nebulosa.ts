@@ -1,5 +1,6 @@
 import { expect, test, describe } from 'bun:test'
 import { Ellipsoid, geodeticLocation } from '../../../src/astronomy/observer/location'
+import { deltaT } from '../../../src/astronomy/time/deltat'
 import {
 	earthRotationAngle,
 	equationOfEquinoxes,
@@ -873,4 +874,39 @@ test('to julian epoch inverts timeJulianYear', () => {
 	expect(toJulianEpoch(timeJulianYear(2000, Timescale.TT))).toBeCloseTo(2000, 9)
 	// J2000.0 is exactly JD 2451545.0 (TT).
 	expect(toJulianEpoch(time(J2000, 0, Timescale.TT))).toBeCloseTo(2000, 12)
+})
+
+describe('before UTC', () => {
+	// Seconds between two instants of any scales.
+	function seconds(a: { day: number; fraction: number }, b: { day: number; fraction: number }) {
+		return (a.day - b.day + (a.fraction - b.fraction)) * DAYSEC
+	}
+
+	test('a UTC instant before 1960 is read as UT and its TT is that reading plus Delta T', () => {
+		for (const year of [500, 1000, 1600, 1800, 1900, 1955]) {
+			const t = timeYMDHMS(year, 7, 2, 0, 0, 0, Timescale.UTC)
+			// Delta T of the Julian epoch of the instant, within the step of half a year to the calendar date.
+			expect(seconds(tt(t), t)).toBeCloseTo(deltaT(year + 0.5), year < 1600 ? 0 : 1)
+			expect(taiMinusUtc(t)).toBeCloseTo(seconds(tai(t), t), 6)
+		}
+
+		// S15 gives about 1650 s in 1000 and -2 s in 1900; ERFA alone gives 32.184 s at both.
+		expect(seconds(tt(timeYMDHMS(1000, 1, 1, 0, 0, 0, Timescale.UTC)), timeYMDHMS(1000, 1, 1, 0, 0, 0, Timescale.UTC))).toBeWithin(1600, 1700)
+		expect(seconds(tt(timeYMDHMS(1900, 1, 1, 0, 0, 0, Timescale.UTC)), timeYMDHMS(1900, 1, 1, 0, 0, 0, Timescale.UTC))).toBeWithin(-4, 0)
+	})
+
+	test('the UTC of a TAI or TT instant before 1960 inverts the reading', () => {
+		for (const year of [500, 1000, 1800, 1959]) {
+			const t = timeYMDHMS(year, 3, 14, 15, 9, 26, Timescale.UTC)
+			expect(seconds(utc({ ...tai(t), cache: undefined }), t)).toBeCloseTo(0, 6)
+			expect(seconds(utc({ ...tt(t), cache: undefined }), t)).toBeCloseTo(0, 6)
+		}
+	})
+
+	test('TAI - UTC meets the table of ERFA on 1960-01-01 within a tenth of a second', () => {
+		const before = timeYMDHMS(1959, 12, 31, 23, 59, 59, Timescale.UTC)
+		const after = timeYMDHMS(1960, 1, 1, 0, 0, 0, Timescale.UTC)
+		expect(taiMinusUtc(after)).toBeCloseTo(0.943482, 6)
+		expect(Math.abs(taiMinusUtc(after) - taiMinusUtc(before))).toBeLessThan(0.1)
+	})
 })

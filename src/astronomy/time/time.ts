@@ -1,4 +1,4 @@
-import { DAYSEC, DAYSPERJC, DAYSPERJY, DAYSPERTY, J2000, MJD0, ONE_SECOND } from '../../core/constants'
+import { DAYSEC, DAYSPERJC, DAYSPERJY, DAYSPERTY, J2000, MJD0, ONE_SECOND, TTMINUSTAI } from '../../core/constants'
 import { type Mat3, matClone, matIdentity, matMinus, matMul, matMulScalar, matMulTranspose, type MutMat3, matRotX, matRotZ } from '../../math/linear-algebra/mat3'
 import type { Vec3 } from '../../math/linear-algebra/vec3'
 import { twoProduct, twoSum, type NumberArray } from '../../math/numerical/math'
@@ -37,6 +37,7 @@ import {
 } from '../coordinates/erfa/erfa'
 import { itrs } from '../coordinates/itrs'
 import type { GeographicPosition } from '../observer/location'
+import { deltaTAtJulianDay } from './deltat'
 import * as iers from './iers'
 
 // Core astronomical time representation and scale conversions. A `Time` is a high-precision instant
@@ -44,6 +45,9 @@ import * as iers from './iers'
 // with results memoized on an attached `cache`. Provides conversions among UT1/UTC/TAI/TT/TCG/TDB/TCB
 // (via ERFA), sidereal time and Earth-rotation angle, precession/nutation and GCRS<->ITRS rotation
 // matrices, polar motion, and the ΔT-style scale offsets, all overridable through pluggable providers.
+// UTC starts on 1960-01-01, where the TAI - UTC table of ERFA does: an earlier UTC instant is read as UT, the civil
+// time of its era, so it shares the Earth rotation of its reading and its TT is that reading plus the best-estimate
+// Delta T of ./deltat.
 
 // The specification for measuring time (reference scale of a Time instant).
 export enum Timescale {
@@ -527,6 +531,35 @@ export function timeConvert(time: Time, scale: Timescale) {
 	return time
 }
 
+// Julian Date of 1960-01-01 0h, where UTC and the TAI - UTC table of ERFA start.
+const UTC_START_JULIAN_DAY = 2436934.5
+
+// Returns TAI - UTC in seconds of a UTC instant before UTC_START_JULIAN_DAY (a Julian Date), whose reading is UT:
+// Delta T - (TT - TAI), so TT - UT1 is the best-estimate Delta T when UT1 - UTC is 0, as it is before the IERS tables.
+// It meets the table of ERFA on 1960-01-01 within 0.06 s.
+function taiMinusUtcBeforeUtc(julianDay: number) {
+	return deltaTAtJulianDay(julianDay) - TTMINUSTAI
+}
+
+// Writes into `out` the TAI [day, fraction] of a UTC [day, fraction]: TAI - UTC of ERFA from 1960, and
+// taiMinusUtcBeforeUtc before.
+function utcToTai(day: number, fraction: number, out: [number, number]) {
+	if (day + fraction >= UTC_START_JULIAN_DAY) return eraUtcTai(day, fraction, out)
+	out[0] = day
+	out[1] = fraction + taiMinusUtcBeforeUtc(day + fraction) / DAYSEC
+	return out
+}
+
+// Writes into `out` the UTC [day, fraction] of a TAI [day, fraction], the inverse of utcToTai. Delta T changes by
+// well under a second a day, so the offset at the first estimate of the UTC instant is the offset at the instant.
+function taiToUtc(day: number, fraction: number, out: [number, number]) {
+	const estimate = day + fraction - taiMinusUtcBeforeUtc(day + fraction) / DAYSEC
+	if (estimate >= UTC_START_JULIAN_DAY) return eraTaiUtc(day, fraction, out)
+	out[0] = day
+	out[1] = fraction - taiMinusUtcBeforeUtc(estimate) / DAYSEC
+	return out
+}
+
 // Reusable [day, fraction] scratch buffer for the ERFA scale-conversion routines (avoids allocation).
 const DAY_FRACTION: [number, number] = [0, 0]
 
@@ -564,10 +597,10 @@ export function utc(time: Time) {
 	if (scale === Timescale.UT1) {
 		eraUt1Utc(day, fraction, dut1(time), DAY_FRACTION)
 	} else if (scale === Timescale.TAI) {
-		eraTaiUtc(day, fraction, DAY_FRACTION)
+		taiToUtc(day, fraction, DAY_FRACTION)
 	} else {
 		const t = tai(time)
-		eraTaiUtc(t.day, t.fraction, DAY_FRACTION)
+		taiToUtc(t.day, t.fraction, DAY_FRACTION)
 	}
 
 	normalizeDayAndFraction(DAY_FRACTION[0], DAY_FRACTION[1], 0, DAY_FRACTION)
@@ -589,7 +622,7 @@ export function tai(time: Time) {
 	if (scale === Timescale.UT1) {
 		eraUt1Tai(day, fraction, (time.providers?.ut1MinusTai ?? TIME_PROVIDERS.ut1MinusTai)(time), DAY_FRACTION)
 	} else if (scale === Timescale.UTC) {
-		eraUtcTai(day, fraction, DAY_FRACTION)
+		utcToTai(day, fraction, DAY_FRACTION)
 	} else if (scale === Timescale.TT) {
 		eraTtTai(day, fraction, DAY_FRACTION)
 	} else {
@@ -959,10 +992,16 @@ export const taiMinusUtc: TimeDelta = (time) => {
 	const cached = time.cache?.taiMinusUtc
 	if (cached !== undefined) return cached
 	const u = time.scale === Timescale.UTC ? time : utc(time)
-	const cal = eraJdToCal(u.day, u.fraction)
-	const dt = eraDat(cal[0], cal[1], cal[2], cal[3])
+	const dt = taiMinusUtcOfUtc(u)
 	cacheKey(cache(time), 'taiMinusUtc', dt)
 	return dt
+}
+
+// TAI - UTC in seconds of a UTC instant: ERFA's table from 1960, and taiMinusUtcBeforeUtc before.
+function taiMinusUtcOfUtc(u: Time) {
+	if (u.day + u.fraction < UTC_START_JULIAN_DAY) return taiMinusUtcBeforeUtc(u.day + u.fraction)
+	const cal = eraJdToCal(u.day, u.fraction)
+	return eraDat(cal[0], cal[1], cal[2], cal[3])
 }
 
 // Computes UT1 - TAI in seconds at time.
@@ -972,8 +1011,7 @@ export const ut1MinusTai: TimeDelta = (time) => {
 	const cached = time.cache?.ut1MinusTai
 	if (cached !== undefined) return cached
 	const u = time.scale === Timescale.UTC ? time : utc(time)
-	const cal = eraJdToCal(u.day, u.fraction)
-	const dat = eraDat(cal[0], cal[1], cal[2], cal[3])
+	const dat = taiMinusUtcOfUtc(u)
 	const ut1MinusUtc = dut1(time)
 	const dt = ut1MinusUtc - dat
 	cacheKey(cache(time), 'ut1MinusTai', dt)

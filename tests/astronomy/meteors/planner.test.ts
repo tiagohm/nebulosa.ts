@@ -305,9 +305,10 @@ test('geometric windows join the pieces two root searches leave around one cross
 	const end = timeUnix(1795013233.575, true)
 	const windows = meteorGeometricObservingWindows(leonids, site, start, end, { ephemeris: METEOR_ANALYTICAL_EPHEMERIS, support: { start: 3.895796659490691, end: 4.3357301355066475 }, maximumSolarAltitude: deg(-18), minimumRadiantAltitude: deg(20) })
 
+	// The IERS B table of the tests ends on 2026-08-23, so UT1 - UTC (-0.141 s) follows Delta T from its last value.
 	expect(windows).toHaveLength(1)
-	expect(timeToUnixMillis(windows[0].start)).toBeCloseTo(Date.UTC(2026, 10, 18, 5, 46, 40), -3)
-	expect(timeToUnixMillis(windows[0].end)).toBeCloseTo(Date.UTC(2026, 10, 18, 6, 47, 27), -3)
+	expect(timeToUnixMillis(windows[0].start)).toBeCloseTo(Date.UTC(2026, 10, 18, 5, 46, 40, 545), -2)
+	expect(timeToUnixMillis(windows[0].end)).toBeCloseTo(Date.UTC(2026, 10, 18, 6, 47, 27, 267), -2)
 })
 
 test('geometric and profile windows take the Sun and the Moon of a supplied ephemeris', () => {

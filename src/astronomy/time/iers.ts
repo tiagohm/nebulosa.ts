@@ -4,6 +4,7 @@ import { readLines } from '../../io/io'
 import type { Source } from '../../io/types'
 import type { NumberArray } from '../../math/numerical/math'
 import { type Angle, arcsec } from '../../math/units/angle'
+import { deltaTAtJulianDay } from './deltat'
 import type { PolarMotion, Time, TimeDelta } from './time'
 
 // Earth Orientation Parameters (EOP) from the IERS: UT1-UTC (dut1) and polar motion (x, y), linearly
@@ -11,8 +12,9 @@ import type { PolarMotion, Time, TimeDelta } from './time'
 // removes the integer-second leap jump so UT1-UTC stays continuous through the leap-second day; polar
 // motion is interpolated as tabulated. Provides loaders for each file format, a combined source (IERS B
 // preferred where it covers the date, falling back to IERS A), and shared module-level instances feeding
-// the time module. Values outside the table clamp to the nearest edge; missing data yields 0. This is a
-// runtime module (reads from an io Source).
+// the time module. After the last row, UT1-UTC follows the best-estimate Delta T from the last value (TAI - UTC no longer
+// changes, as no leap second is announced); before the first row it and polar motion clamp to the nearest edge; missing
+// data yields 0. This is a runtime module (reads from an io Source).
 
 // Reusable empty backing table.
 const EMPTY_TABLE = new Float64Array(0)
@@ -106,11 +108,16 @@ export abstract class IersBase implements Iers {
 
 	// UT1 - UTC in seconds interpolated at `time` (0 when unavailable). Leap-second jumps of ±1 s
 	// between daily 0h UTC samples are unwrapped so DUT1 remains continuous until the leap instant;
-	// the next tabulated 0h sample already includes the jump.
+	// the next tabulated 0h sample already includes the jump. After the last row, TT - UTC stays as it was there and
+	// UT1 follows the best-estimate Delta T (deltaT): the last value minus the growth of Delta T since that row,
+	// continuous at the edge whatever the model's offset from the observed Delta T.
 	dut1(time: Time): number {
 		const bracket = interpolationAt(time, this.mjd)
 		const dut1 = bracket === undefined ? Number.NaN : interpolateColumn(bracket, this.ut1MinusUtc, true)
-		return Number.isFinite(dut1) ? dut1 : 0
+		if (!Number.isFinite(dut1)) return 0
+		const last = this.mjd.at(-1)!
+		const mjd = modifiedJulianDate(time)
+		return mjd > last ? dut1 - (deltaTAtJulianDay(mjd + MJD0) - deltaTAtJulianDay(last + MJD0)) : dut1
 	}
 
 	// Polar motion (x, y) in radians interpolated at `time` ([0, 0] when unavailable).
@@ -268,7 +275,8 @@ export class IersAB implements Iers {
 		return this.#table(time).xy(time)
 	}
 
-	// Checks whether either table covers the UTC-indexed time; false means lookups clamp to an edge or return 0.
+	// Checks whether either table covers the UTC-indexed time; false means lookups clamp to an edge, follow Delta T after
+	// the last row, or return 0.
 	covers(time: Time) {
 		return this.b.covers(time) || this.a.covers(time)
 	}

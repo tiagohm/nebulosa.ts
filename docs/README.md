@@ -424,7 +424,7 @@ console.log(toJulianDay(timeGPS(0))) // 2444244.50022 — TAI
 
 ### Astronomical Time-Scale Conversion
 
-Astronomy uses several time scales. UTC is the civil scale with leap seconds; TAI is atomic time without them; TT is the uniform scale of geocentric ephemerides, `TT = TAI + 32.184 s`; TDB is the barycentric dynamical scale of Solar-System ephemerides, which differs from TT by a periodic term under 2 ms; TCG and TCB are the coordinate scales of relativity, which run faster than TT and TDB; and UT1 follows the Earth's actual rotation. Conversions go through TAI: UTC to TAI adds the leap-second count, and UT1 needs `UT1 − UTC` from the IERS Earth orientation tables.
+Astronomy uses several time scales. UTC is the civil scale with leap seconds; TAI is atomic time without them; TT is the uniform scale of geocentric ephemerides, `TT = TAI + 32.184 s`; TDB is the barycentric dynamical scale of Solar-System ephemerides, which differs from TT by a periodic term under 2 ms; TCG and TCB are the coordinate scales of relativity, which run faster than TT and TDB; and UT1 follows the Earth's actual rotation. Conversions go through TAI: UTC to TAI adds the leap-second count, and UT1 needs `UT1 − UTC` from the IERS Earth orientation tables. UTC began in 1960; an earlier UTC instant is read as UT, the civil time of its era, so its UT1 is its reading and its TT is that reading plus [Delta T](#delta-t).
 
 Each conversion returns a new instant in the target scale. Without loaded IERS tables `UT1 − UTC` is 0, so UT1 silently equals UTC; load them first (see [Earth Orientation Parameters](#earth-orientation-parameters)). TDB − TT is the ERFA model and includes a topocentric term when the instant carries a location. The offsets come from replaceable providers, which an instant can override for itself.
 
@@ -774,17 +774,19 @@ const words = await daf.read(summary.ints[3], summary.ints[3] + 3)
 
 ### Delta T
 
-Delta T is `TT − UT1`: the gap between the uniform Terrestrial Time scale and Earth-rotation time. It changes irregularly because the Earth's rotation does, so past values come from historical records and future values are extrapolations. It is needed whenever dynamical time must be turned into a civil or rotational clock without IERS data, such as for historical eclipses or events decades ahead.
+Delta T is `TT − UT1`: the gap between the uniform Terrestrial Time scale and Earth-rotation time. It changes irregularly because the Earth's rotation does, so past values come from historical records and future values are extrapolations. It is needed whenever dynamical time must be turned into a civil or rotational clock without IERS data, such as for historical eclipses or events decades ahead; the time scales use it before 1960 and after the IERS tables.
 
 One model is used per era: the Stephenson, Morrison and Hohenkerk 2016 parabola before year −720, their S15 cubic spline from there to 2019, and the Espenak and Meeus 2006 expressions after 2019. A step of about 1.8 s exists at 2019, where observations hand over to forward prediction, so values after 2019 are model predictions rather than measurements. The Espenak-Meeus polynomial alone is also available.
 
 ```ts
-import { deltaT, deltaTByEspenakMeeus2006, parabolaOfStephensonMorrisonHohenkerk2016, s15 } from 'nebulosa/src/astronomy/time/deltat'
+import { deltaT, deltaTAtJulianDay, deltaTByEspenakMeeus2006, parabolaOfStephensonMorrisonHohenkerk2016, s15 } from 'nebulosa/src/astronomy/time/deltat'
 
 // year: decimal calendar year, e.g. 2000.5 is mid-2000. Result in seconds.
 console.log(deltaT(2000)) // 63.81 — seconds, from the S15 spline
 console.log(deltaT(1900)) // -1.98 — seconds
 console.log(deltaT(2100)) // 202.74 — seconds, predicted
+// The same at a Julian Date, its year taken as the Julian epoch.
+console.log(deltaTAtJulianDay(2451545)) // 63.81 — seconds, at J2000.0
 
 // Each model alone: the Espenak-Meeus polynomial, the S15 spline segment of a year, and the long-term
 // parabola (parabolaOfStephensonMorrison2004 is the older one).
@@ -934,7 +936,7 @@ console.log(earthOccultation([kilometer(7000), 0, 0], [kilometer(40000), 0, 0], 
 
 The Earth does not rotate uniformly, and its rotation axis wanders slightly inside the crust. The IERS publishes the irregularities as daily Earth orientation parameters: `UT1 − UTC` in seconds and the polar-motion coordinates `x`, `y` in arcseconds. They are needed for UT1, sidereal time, and the GCRS to ITRS rotation, so they are the data behind precise Earth-fixed work and topocentric coordinates.
 
-The library has no built-in tables. You load one of two IERS files into a shared provider, and the time module reads them automatically: the IERS Bulletin A `finals2000A` file (rapid and predicted values extending into the future) or the IERS EOP 14 C04 `eopc04` series (final values); where both cover a date, C04 is preferred. Values are linearly interpolated between daily samples, with the leap-second jump removed from `UT1 − UTC` so it stays continuous, and clamp to the nearest edge outside the table. With nothing loaded they are 0, which silently turns UT1 into UTC, so load a table before computing UT1-dependent results. To use other data for a single instant, replace the providers described in [Astronomical Time-Scale Conversion](#astronomical-time-scale-conversion).
+The library has no built-in tables. You load one of two IERS files into a shared provider, and the time module reads them automatically: the IERS Bulletin A `finals2000A` file (rapid and predicted values extending into the future) or the IERS EOP 14 C04 `eopc04` series (final values); where both cover a date, C04 is preferred. Values are linearly interpolated between daily samples, with the leap-second jump removed from `UT1 − UTC` so it stays continuous. Before a table they clamp to its first row; after it, as no leap second is announced, `UT1 − UTC` follows [Delta T](#delta-t) from the last value and polar motion clamps. With nothing loaded they are 0, which silently turns UT1 into UTC, so load a table before computing UT1-dependent results. To use other data for a single instant, replace the providers described in [Astronomical Time-Scale Conversion](#astronomical-time-scale-conversion).
 
 ```ts
 import { dut1, iersa, iersab, xy } from 'nebulosa/src/astronomy/time/iers'

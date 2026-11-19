@@ -1,6 +1,8 @@
 import { expect, test } from 'bun:test'
+import { deltaTAtJulianDay } from '../../../src/astronomy/time/deltat'
 import { IersA, IersAB, IersB, iersa, iersb } from '../../../src/astronomy/time/iers'
-import { Timescale, timeMJD, timeYMDHMS } from '../../../src/astronomy/time/time'
+import { type Time, Timescale, timeMJD, timeYMDHMS } from '../../../src/astronomy/time/time'
+import { MJD0 } from '../../../src/core/constants'
 import { bufferSource, readableStreamSource } from '../../../src/io/io'
 import { arcsec } from '../../../src/math/units/angle'
 import { downloadPerTag } from '../../download'
@@ -44,6 +46,16 @@ function expectDut1(actual: number, expected: number) {
 	expect(actual).toBeCloseTo(expected, 14)
 }
 
+// DUT1 after the last row of a table: its last value minus the growth of Delta T since that row (MJD).
+function extrapolatedDut1(time: Time, lastMjd: number, lastDut1: number) {
+	return lastDut1 - (deltaTAtJulianDay(time.day + time.fraction) - deltaTAtJulianDay(lastMjd + MJD0))
+}
+
+// MJD of the last row of a table, from the distance of an instant after it.
+function lastRow(table: { distance: (time: Time) => number }, time: Time) {
+	return time.day + time.fraction - MJD0 - table.distance(time)
+}
+
 test('iersA', async () => {
 	await using source = readableStreamSource(Bun.file('data/finals2000A.txt').stream())
 	await iersa.load(source)
@@ -51,8 +63,9 @@ test('iersA', async () => {
 	expectDut1(iersa.dut1(t), -0.17181135242592593)
 	expectXY(iersa.xy(t), arcsec(0.1878143362962963), arcsec(0.3180433324074074))
 
+	// After the last row, -0.1313246 s, UT1 follows Delta T; polar motion clamps.
 	t = timeYMDHMS(2050, 10, 7, 12, 34, 56, Timescale.UTC)
-	expectDut1(iersa.dut1(t), -0.1313246)
+	expectDut1(iersa.dut1(t), extrapolatedDut1(t, lastRow(iersa, t), -0.1313246))
 	expectXY(iersa.xy(t), arcsec(0.235938), arcsec(0.302527))
 
 	t = timeYMDHMS(1900, 10, 7, 12, 34, 56, Timescale.UTC)
@@ -76,8 +89,9 @@ test('iersB', async () => {
 	expectDut1(iersb.dut1(t), -0.17180533112962962)
 	expectXY(iersb.xy(t), arcsec(0.1878133848148148), arcsec(0.3179746625925926))
 
+	// After the last row, 0.0070141 s, UT1 follows Delta T; polar motion clamps.
 	t = timeYMDHMS(2050, 10, 7, 12, 34, 56, Timescale.UTC)
-	expectDut1(iersb.dut1(t), 0.0070141)
+	expectDut1(iersb.dut1(t), extrapolatedDut1(t, lastRow(iersb, t), 0.0070141))
 	expectXY(iersb.xy(t), arcsec(0.216466), arcsec(0.346717))
 
 	t = timeYMDHMS(1900, 10, 7, 12, 34, 56, Timescale.UTC)
@@ -103,11 +117,11 @@ test('iers interpolation boundaries', () => {
 	expectXY(iers.xy(t), arcsec(0.5), arcsec(1))
 
 	t = timeMJD(60002.5, Timescale.UTC)
-	expectDut1(iers.dut1(t), 0.006)
+	expectDut1(iers.dut1(t), extrapolatedDut1(t, 60002, 0.006))
 	expectXY(iers.xy(t), arcsec(2), arcsec(4))
 })
 
-test('iers clamps queries outside the tabulated range to the endpoints', () => {
+test('iers clamps before the first row and follows Delta T after the last', () => {
 	const iers = new IersATest()
 	iers.set([60000, 60002], [0, 2], [0, 4], [0, 0.006])
 
@@ -116,10 +130,13 @@ test('iers clamps queries outside the tabulated range to the endpoints', () => {
 	expectDut1(iers.dut1(t), 0)
 	expectXY(iers.xy(t), 0, 0)
 
-	// After the last row clamps to the last sample.
+	// After the last row, UT1 falls behind as Delta T grows (Espenak and Meeus, about 0.6 s a year in 2023-2025) from
+	// the last sample, with TAI - UTC unchanged; polar motion clamps.
 	t = timeMJD(61000, Timescale.UTC)
-	expectDut1(iers.dut1(t), 0.006)
+	expectDut1(iers.dut1(t), extrapolatedDut1(t, 60002, 0.006))
+	expect(iers.dut1(t)).toBeWithin(-2, -1)
 	expectXY(iers.xy(t), arcsec(2), arcsec(4))
+	expectDut1(iers.dut1(timeMJD(60002, Timescale.UTC)), 0.006)
 })
 
 test('iers dut1 interpolation unwraps the leap-second jump', () => {
