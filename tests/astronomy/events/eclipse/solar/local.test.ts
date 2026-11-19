@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { nearestSolarEclipse } from '../../../../../src/astronomy/bodies/sun'
-import { sunMoonPosition, sunMoonPositionAround } from '../../../../../src/astronomy/events/eclipse/eclipse'
+import { analyticalEphemerisSource, interpolatedEphemerisSource } from '../../../../../src/astronomy/ephemeris/source'
+import { sunMoonPositionOf } from '../../../../../src/astronomy/events/eclipse/eclipse'
 import {
 	computeLocalSolarEclipseViewGeometry,
 	computeLocalViewDiskPair,
@@ -22,6 +23,9 @@ import { timeToDate, timeYMD, timeYMDHMS, Timescale, toJulianDay, type Time } fr
 import { ASEC2RAD, PI, PIOVERFOUR, PIOVERTWO, RAD2DEG, TAU } from '../../../../../src/core/constants'
 import { sphericalSeparation } from '../../../../../src/math/numerical/geometry'
 import { deg, normalizeAngle } from '../../../../../src/math/units/angle'
+
+// The Sun and the Moon of the eclipses: the analytical theories, interpolated for the dense contact searches.
+const sunMoonPosition = sunMoonPositionOf(interpolatedEphemerisSource(analyticalEphemerisSource))
 
 function viewOptions(overrides: Partial<LocalSolarEclipseViewOptions> = {}): LocalSolarEclipseViewOptions {
 	return { width: 450, height: 160, selectedEvent: 'MAX', orientationMode: 'zenith', solarRadiusPx: 34, includeGhostDisks: true, includeHorizon: true, horizonBandPaddingPx: 4, ...overrides }
@@ -738,7 +742,7 @@ describe('listLocalSolarEclipses', () => {
 describe('path width', () => {
 	const greatestWidth = (year: number, month: number, day: number) => {
 		const eclipse = nearestSolarEclipse(timeYMD(year, month, day), true)
-		const provider = sunMoonPositionAround(eclipse.maximalTime)
+		const provider = sunMoonPosition
 		return computeGreatestEclipseCircumstances(computePolynomialBesselianElements(refineSolarEclipse(eclipse, provider).maximalTime, provider))!.pathWidthKm!
 	}
 
@@ -752,7 +756,7 @@ describe('path width', () => {
 
 	test('through a place, it is the distance between the limits, wider than the shadow chord at a low Sun', () => {
 		const eclipse = nearestSolarEclipse(timeYMD(2026, 8, 11), true)
-		const provider = sunMoonPositionAround(eclipse.maximalTime)
+		const provider = sunMoonPosition
 		const pbe = computePolynomialBesselianElements(eclipse.maximalTime, provider)
 		const { details } = computeLocalSolarEclipseCircumstances(pbe, deg(-8.4115), deg(43.3623), { sunMoonPosition: provider, horizonAltitude: 0 })
 		expect(details.shadowPathWidthKm!).toBeLessThan(details.pathWidthKm!)
@@ -769,7 +773,7 @@ describe('path width', () => {
 describe('refineSolarEclipse', () => {
 	test('takes the greatest eclipse of the 2024-04-08 catalog entry from the Besselian elements', () => {
 		const eclipse = nearestSolarEclipse(timeYMD(2024, 4, 8), true)
-		const refined = refineSolarEclipse(eclipse, sunMoonPositionAround(eclipse.maximalTime))
+		const refined = refineSolarEclipse(eclipse, sunMoonPosition)
 		const seconds = (toJulianDay(refined.maximalTime) - toJulianDay(timeYMDHMS(2024, 4, 8, 18, 18, 29, Timescale.TT))) * 86400
 		expect(Math.abs(seconds)).toBeLessThan(10)
 		expect(refined.gamma).toBeCloseTo(0.3431, 3)

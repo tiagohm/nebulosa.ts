@@ -1848,19 +1848,23 @@ Eclipse tables list two special places for each solar eclipse. The greatest ecli
 
 The path width is the one catalogs publish: the distance between the limits of totality or annularity across the central line. It is not the chord of the shadow through a point, which is narrower at a low Sun, where the footprint is a long ellipse.
 
-The instants of the Meeus series and the Moon of the fast analytical provider are approximate: `nearestSolarEclipse` can be about a minute from the published greatest eclipse, and the low-precision Moon up to about 8″ from ELPMPP02. For results to be shown, build the provider with `sunMoonPositionAround`, which corrects the Moon with ELPMPP02 around the eclipse, refine the eclipse with it, and fit the elements to that refined maximum.
+The instants of the Meeus series are approximate: `nearestSolarEclipse` can be about a minute from the published greatest eclipse. For results to be shown, build the Sun/Moon provider from an [ephemeris source](#ephemeris-sources) with `sunMoonPositionOf`, the SPK kernels or the interpolated analytical theories, refine the eclipse with it, and fit the elements to that refined maximum.
 
 ```ts
 import { nearestSolarEclipse } from 'nebulosa/src/astronomy/bodies/sun'
-import { sunMoonPositionAround } from 'nebulosa/src/astronomy/events/eclipse/eclipse'
+import { analyticalEphemerisSource, interpolatedEphemerisSource } from 'nebulosa/src/astronomy/ephemeris/source'
+import { sunMoonPositionOf } from 'nebulosa/src/astronomy/events/eclipse/eclipse'
 import { computeGreatestDurationCircumstances, computeGreatestEclipseCircumstances } from 'nebulosa/src/astronomy/events/eclipse/solar/local'
 import { computePolynomialBesselianElements, refineSolarEclipse } from 'nebulosa/src/astronomy/events/eclipse/solar/map'
 import { Timescale, timeToDate, timeYMDHMS, utc } from 'nebulosa/src/astronomy/time/time'
 import { toDeg } from 'nebulosa/src/math/units/angle'
 
-// The total solar eclipse of 8 April 2024, refined with an ELPMPP02-corrected Sun/Moon provider.
+// The Sun and the Moon of the eclipse: the analytical theories, interpolated for the dense searches.
+const sunMoonPosition = sunMoonPositionOf(interpolatedEphemerisSource(analyticalEphemerisSource))
+
+// The total solar eclipse of 8 April 2024, refined with the Sun and the Moon of the theories.
 const series = nearestSolarEclipse(timeYMDHMS(2024, 4, 1, 0, 0, 0, Timescale.UTC), true)
-const provider = sunMoonPositionAround(series.maximalTime)
+const provider = sunMoonPosition
 const eclipse = refineSolarEclipse(series, provider)
 
 console.log(timeToDate(utc(eclipse.maximalTime)).slice(0, 6).join('-'), eclipse.gamma) // 2024-4-8-18-17-14 0.34315
@@ -2368,10 +2372,14 @@ A lunar eclipse happens on the Moon, so it is the same event for everyone on the
 `listLocalLunarEclipses` walks the eclipses of a time window with the Meeus series of [Lunar Eclipse Search](#lunar-eclipse-search) and keeps those for which the Moon is above the horizon during some part of the penumbral phase, returning each with its [Lunar Eclipse Local Circumstances](#lunar-eclipse-local-circumstances) for the site. The longitude is east-positive and the latitude geodetic, in radians, and a raised horizon can be given as an altitude.
 
 ```ts
-import { sunMoonPosition } from 'nebulosa/src/astronomy/events/eclipse/eclipse'
+import { analyticalEphemerisSource, interpolatedEphemerisSource } from 'nebulosa/src/astronomy/ephemeris/source'
+import { sunMoonPositionOf } from 'nebulosa/src/astronomy/events/eclipse/eclipse'
 import { listLocalLunarEclipses } from 'nebulosa/src/astronomy/events/eclipse/lunar/local'
 import { Timescale, timeToDate, timeYMDHMS, utc } from 'nebulosa/src/astronomy/time/time'
 import { deg } from 'nebulosa/src/math/units/angle'
+
+// The Sun and the Moon of the eclipse: the analytical theories, interpolated for the dense searches.
+const sunMoonPosition = sunMoonPositionOf(interpolatedEphemerisSource(analyticalEphemerisSource))
 
 const start = timeYMDHMS(2025, 1, 1, 0, 0, 0, Timescale.UTC)
 const stop = timeYMDHMS(2028, 1, 1, 0, 0, 0, Timescale.UTC)
@@ -2380,10 +2388,10 @@ const stop = timeYMDHMS(2028, 1, 1, 0, 0, 0, Timescale.UTC)
 for (const { eclipse, circumstances } of listLocalLunarEclipses(deg(-46.6333), deg(-23.55), start, stop, sunMoonPosition)) {
 	console.log(timeToDate(utc(eclipse.maximalTime)).slice(0, 5).join('-'), eclipse.type, circumstances.visibility.kind, circumstances.details.observableDuration)
 }
-// 2025-3-14-6-59 TOTAL totalVisible 18767.62 — UTC, seconds with the Moon up
-// 2026-3-3-11-34 TOTAL penumbralOnlyVisible 598.84
+// 2025-3-14-6-59 TOTAL totalVisible 18767.41 — UTC, seconds with the Moon up
+// 2026-3-3-11-34 TOTAL penumbralOnlyVisible 599.07
 // 2026-8-28-4-13 PARTIAL completelyVisible 20144.43
-// 2027-2-20-23-13 PENUMBRAL penumbralOnlyVisible 12885.95
+// 2027-2-20-23-13 PENUMBRAL penumbralOnlyVisible 12885.88
 // 2027-8-17-7-14 PENUMBRAL completelyVisible 12990.18
 
 // With a 20° horizon, the eclipse of 3 March 2026, seen only near the horizon, disappears.
@@ -2398,10 +2406,14 @@ The local view of a lunar eclipse is the diagram eclipse circulars draw: the Ear
 
 ```ts
 import { nearestLunarEclipse } from 'nebulosa/src/astronomy/bodies/moon'
-import { sunMoonPosition } from 'nebulosa/src/astronomy/events/eclipse/eclipse'
+import { analyticalEphemerisSource, interpolatedEphemerisSource } from 'nebulosa/src/astronomy/ephemeris/source'
+import { sunMoonPositionOf } from 'nebulosa/src/astronomy/events/eclipse/eclipse'
 import { computeLocalLunarEclipseCircumstances, computeLocalLunarEclipseViewGeometry } from 'nebulosa/src/astronomy/events/eclipse/lunar/local'
 import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
 import { deg } from 'nebulosa/src/math/units/angle'
+
+// The Sun and the Moon of the eclipse: the analytical theories, interpolated for the dense searches.
+const sunMoonPosition = sunMoonPositionOf(interpolatedEphemerisSource(analyticalEphemerisSource))
 
 // The total lunar eclipse of 7 September 2025, seen from Perth.
 const eclipse = nearestLunarEclipse(timeYMDHMS(2025, 9, 1, 0, 0, 0, Timescale.UTC), true)
@@ -2427,11 +2439,15 @@ They are computed for a geodetic site (east-positive longitude and latitude, in 
 
 ```ts
 import { nearestSolarEclipse } from 'nebulosa/src/astronomy/bodies/sun'
-import { sunMoonPosition } from 'nebulosa/src/astronomy/events/eclipse/eclipse'
+import { analyticalEphemerisSource, interpolatedEphemerisSource } from 'nebulosa/src/astronomy/ephemeris/source'
+import { sunMoonPositionOf } from 'nebulosa/src/astronomy/events/eclipse/eclipse'
 import { computeLocalSolarEclipseCircumstances } from 'nebulosa/src/astronomy/events/eclipse/solar/local'
 import { computePolynomialBesselianElements } from 'nebulosa/src/astronomy/events/eclipse/solar/map'
 import { Timescale, timeToDate, timeYMDHMS, utc } from 'nebulosa/src/astronomy/time/time'
 import { deg, toDeg } from 'nebulosa/src/math/units/angle'
+
+// The Sun and the Moon of the eclipse: the analytical theories, interpolated for the dense searches.
+const sunMoonPosition = sunMoonPositionOf(interpolatedEphemerisSource(analyticalEphemerisSource))
 
 // The total solar eclipse of 8 April 2024 and its Besselian elements.
 const eclipse = nearestSolarEclipse(timeYMDHMS(2024, 4, 1, 0, 0, 0, Timescale.UTC), true)
@@ -2441,17 +2457,17 @@ const pbe = computePolynomialBesselianElements(eclipse.maximalTime, sunMoonPosit
 const circumstances = computeLocalSolarEclipseCircumstances(pbe, deg(-96.797), deg(32.776), { sunMoonPosition })
 
 console.log(circumstances.visibility.kind) // completelyVisible
-console.log(circumstances.details.maximalMagnitude, circumstances.details.centralPhaseDuration) // 1.0154 234.98 — seconds of totality
+console.log(circumstances.details.maximalMagnitude, circumstances.details.centralPhaseDuration) // 1.0148 231.98 — seconds of totality
 
 // The contacts: UTC time, Sun altitude and position angle of the contact point (degrees), magnitude.
 for (const event of Object.values(circumstances.events)) {
 	console.log(event.kind, timeToDate(utc(event.time)).slice(0, 6).join('-'), toDeg(event.sunAltitude), toDeg(event.positionAngle!), event.magnitude)
 }
-// C1 2024-4-8-17-23-22 60.57 226.2 -0.0000
-// C2 2024-4-8-18-40-44 64.67 20.3 1.0000
-// MAX 2024-4-8-18-42-41 64.62 137.3 1.0154
-// C3 2024-4-8-18-44-39 64.56 254.2 1.0000
-// C4 2024-4-8-20-2-43 56.75 49.2 0.0000
+// C1 2024-4-8-17-23-17 60.57 226.2 0.0000
+// C2 2024-4-8-18-40-41 64.67 18.9 1.0000
+// MAX 2024-4-8-18-42-37 64.62 137.3 1.0148
+// C3 2024-4-8-18-44-33 64.56 255.7 1.0000
+// C4 2024-4-8-20-2-38 56.76 49.2 0.0000
 ```
 
 ### Local Solar Eclipse Search
@@ -2461,10 +2477,14 @@ Unlike a lunar eclipse, a solar eclipse is seen only where the Moon's penumbra t
 `listLocalSolarEclipses` walks the eclipses of a window with the global search of [Solar Eclipse Search and Classification](#solar-eclipse-search-and-classification), fits the Besselian elements of each once, and keeps those whose local magnitude is above zero at some time. The filter is purely geometric: an eclipse is included even when the Sun is below the horizon at the site. Each entry returns its elements, so the full [Local Solar Eclipse Circumstances](#local-solar-eclipse-circumstances) can be computed without refitting them, which is the dominant cost.
 
 ```ts
-import { sunMoonPosition } from 'nebulosa/src/astronomy/events/eclipse/eclipse'
+import { analyticalEphemerisSource, interpolatedEphemerisSource } from 'nebulosa/src/astronomy/ephemeris/source'
+import { sunMoonPositionOf } from 'nebulosa/src/astronomy/events/eclipse/eclipse'
 import { computeLocalSolarEclipseCircumstances, listLocalSolarEclipses } from 'nebulosa/src/astronomy/events/eclipse/solar/local'
 import { Timescale, timeToDate, timeYMDHMS, utc } from 'nebulosa/src/astronomy/time/time'
 import { deg } from 'nebulosa/src/math/units/angle'
+
+// The Sun and the Moon of the eclipse: the analytical theories, interpolated for the dense searches.
+const sunMoonPosition = sunMoonPositionOf(interpolatedEphemerisSource(analyticalEphemerisSource))
 
 const longitude = deg(-96.797)
 const latitude = deg(32.776)
@@ -2478,7 +2498,7 @@ for (const { eclipse, elements } of listLocalSolarEclipses(longitude, latitude, 
 
 	console.log(timeToDate(utc(eclipse.maximalTime)).slice(0, 3).join('-'), eclipse.type, local.visibility.kind, local.details.maximalMagnitude)
 }
-// 2023-10-14 annular completelyVisible 0.862
+// 2023-10-14 annular completelyVisible 0.863
 // 2024-4-8 total completelyVisible 1.015
 // 2025-3-29 partial geometricOnlyBelowHorizon 0.617
 ```
@@ -2491,11 +2511,15 @@ The local view of a solar eclipse is the picture of the Sun with the Moon in fro
 
 ```ts
 import { nearestSolarEclipse } from 'nebulosa/src/astronomy/bodies/sun'
-import { sunMoonPosition } from 'nebulosa/src/astronomy/events/eclipse/eclipse'
+import { analyticalEphemerisSource, interpolatedEphemerisSource } from 'nebulosa/src/astronomy/ephemeris/source'
+import { sunMoonPositionOf } from 'nebulosa/src/astronomy/events/eclipse/eclipse'
 import { computeLocalSolarEclipseCircumstances, computeLocalSolarEclipseViewGeometry } from 'nebulosa/src/astronomy/events/eclipse/solar/local'
 import { computePolynomialBesselianElements } from 'nebulosa/src/astronomy/events/eclipse/solar/map'
 import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
 import { deg } from 'nebulosa/src/math/units/angle'
+
+// The Sun and the Moon of the eclipse: the analytical theories, interpolated for the dense searches.
+const sunMoonPosition = sunMoonPositionOf(interpolatedEphemerisSource(analyticalEphemerisSource))
 
 // The total solar eclipse of 8 April 2024, seen from Dallas.
 const eclipse = nearestSolarEclipse(timeYMDHMS(2024, 4, 1, 0, 0, 0, Timescale.UTC), true)
@@ -2698,10 +2722,14 @@ The local circumstances are computed from a `LunarEclipse` (see [Lunar Eclipse S
 
 ```ts
 import { nearestLunarEclipse } from 'nebulosa/src/astronomy/bodies/moon'
-import { sunMoonPosition } from 'nebulosa/src/astronomy/events/eclipse/eclipse'
+import { analyticalEphemerisSource, interpolatedEphemerisSource } from 'nebulosa/src/astronomy/ephemeris/source'
+import { sunMoonPositionOf } from 'nebulosa/src/astronomy/events/eclipse/eclipse'
 import { computeLocalLunarEclipseCircumstances, moonAltitudeAt } from 'nebulosa/src/astronomy/events/eclipse/lunar/local'
 import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
 import { deg, toDeg } from 'nebulosa/src/math/units/angle'
+
+// The Sun and the Moon of the eclipse: the analytical theories, interpolated for the dense searches.
+const sunMoonPosition = sunMoonPositionOf(interpolatedEphemerisSource(analyticalEphemerisSource))
 
 // The total lunar eclipse of 7 September 2025.
 const eclipse = nearestLunarEclipse(timeYMDHMS(2025, 9, 1, 0, 0, 0, Timescale.UTC), true)
@@ -2715,7 +2743,7 @@ console.log(perth.visibility.kind, perth.details.observableDuration) // complete
 const max = perth.events.MAX!
 
 console.log(toDeg(max.altitude), toDeg(max.azimuth)) // 51.72 307.32
-console.log(toDeg(max.positionAngle), toDeg(max.zenithAngle)) // 330.93 193.62
+console.log(toDeg(max.positionAngle), toDeg(max.zenithAngle)) // 331.14 193.83
 
 // The topocentric Moon altitude (radians) at any instant, such as the last penumbral contact P4.
 console.log(toDeg(moonAltitudeAt(eclipse.lastContactPenumbraTime, deg(115.86), deg(-31.95), sunMoonPosition))) // 20.04 — degrees
@@ -2723,7 +2751,7 @@ console.log(toDeg(moonAltitudeAt(eclipse.lastContactPenumbraTime, deg(115.86), d
 // Greenwich: the Moon rises during the eclipse, so only the last part is seen.
 const greenwich = computeLocalLunarEclipseCircumstances(eclipse, 0, deg(51.48), sunMoonPosition)
 
-console.log(greenwich.visibility.kind, greenwich.details.observableDuration) // totalVisible 8332.34
+console.log(greenwich.visibility.kind, greenwich.details.observableDuration) // totalVisible 8332.46
 ```
 
 ### Lunar Eclipse Map SVG Paths
@@ -2734,10 +2762,14 @@ Each curve is a circle on the globe, and on a cylindrical map it is split at the
 
 ```ts
 import { nearestLunarEclipse } from 'nebulosa/src/astronomy/bodies/moon'
-import { sunMoonPosition } from 'nebulosa/src/astronomy/events/eclipse/eclipse'
+import { analyticalEphemerisSource, interpolatedEphemerisSource } from 'nebulosa/src/astronomy/ephemeris/source'
+import { sunMoonPositionOf } from 'nebulosa/src/astronomy/events/eclipse/eclipse'
 import { computeLunarEclipseMapGeometry, lunarEclipseMapToSvgPaths } from 'nebulosa/src/astronomy/events/eclipse/lunar/map'
 import { PlateCarree } from 'nebulosa/src/astronomy/projections/projection'
 import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+
+// The Sun and the Moon of the eclipse: the analytical theories, interpolated for the dense searches.
+const sunMoonPosition = sunMoonPositionOf(interpolatedEphemerisSource(analyticalEphemerisSource))
 
 // The total lunar eclipse of 7 September 2025, on a map of 100 pixels per radian with SVG axes (y down).
 const eclipse = nearestLunarEclipse(timeYMDHMS(2025, 9, 1, 0, 0, 0, Timescale.UTC), true)
@@ -2747,8 +2779,8 @@ const projection = new PlateCarree(0, { scale: 100, yAxisDirection: 'southUp' })
 // One path string per contact, and the projected sublunar points.
 const paths = lunarEclipseMapToSvgPaths(geometry, projection)
 
-console.log(paths.sublunarPoints.MAX) // { x: 151.17, y: 10.47 } — where the Moon is at the zenith at greatest eclipse
-console.log(paths.moonRiseSet.MAX.slice(0, 59)) // M151.17 -144.88L165.41 -144.76L179.1 -144.39L191.82 -143.81
+console.log(paths.sublunarPoints.MAX) // { x: 151.16, y: 10.47 } — where the Moon is at the zenith at greatest eclipse
+console.log(paths.moonRiseSet.MAX.slice(0, 59)) // M151.16 -144.88L165.41 -144.76L179.1 -144.39L191.82 -143.81
 
 // Closed polygons of the region where the Moon is below the horizon, for shading with fill-rule="evenodd".
 const filled = lunarEclipseMapToSvgPaths(geometry, projection, { fill: true })
@@ -2764,9 +2796,13 @@ A lunar eclipse happens when the Moon passes through the Earth's shadow at full 
 
 ```ts
 import { nearestLunarEclipse } from 'nebulosa/src/astronomy/bodies/moon'
-import { sunMoonPositionAround } from 'nebulosa/src/astronomy/events/eclipse/eclipse'
+import { analyticalEphemerisSource, interpolatedEphemerisSource } from 'nebulosa/src/astronomy/ephemeris/source'
+import { sunMoonPositionOf } from 'nebulosa/src/astronomy/events/eclipse/eclipse'
 import { refineLunarEclipse } from 'nebulosa/src/astronomy/events/eclipse/lunar/map'
 import { Timescale, timeToDate, timeYMDHMS, utc } from 'nebulosa/src/astronomy/time/time'
+
+// The Sun and the Moon of the eclipse: the analytical theories, interpolated for the dense searches.
+const sunMoonPosition = sunMoonPositionOf(interpolatedEphemerisSource(analyticalEphemerisSource))
 
 // The first lunar eclipse after 1 September 2025 (pass false for the last one at or before the time).
 const eclipse = nearestLunarEclipse(timeYMDHMS(2025, 9, 1, 0, 0, 0, Timescale.UTC), true)
@@ -2777,7 +2813,7 @@ console.log(eclipse.sdTotal * 1440) // 40.7 — minutes, half the duration of to
 
 // Refined with the Moon and the Earth's shadow geometry: 2015-04-04 becomes total.
 const series = nearestLunarEclipse(timeYMDHMS(2015, 4, 3, 0, 0, 0), true)
-const refined = refineLunarEclipse(series, sunMoonPositionAround(series.maximalTime))!
+const refined = refineLunarEclipse(series, sunMoonPosition)!
 
 console.log(series.type, refined.type, refined.magnitude.toFixed(4)) // PARTIAL TOTAL 1.0008
 ```
@@ -2796,10 +2832,14 @@ with `h0` the horizon altitude and `d` the Moon's distance in Earth radii. The o
 
 ```ts
 import { nearestLunarEclipse } from 'nebulosa/src/astronomy/bodies/moon'
-import { sunMoonPosition } from 'nebulosa/src/astronomy/events/eclipse/eclipse'
+import { analyticalEphemerisSource, interpolatedEphemerisSource } from 'nebulosa/src/astronomy/ephemeris/source'
+import { sunMoonPositionOf } from 'nebulosa/src/astronomy/events/eclipse/eclipse'
 import { computeLunarEclipseMapGeometry, lunarEclipseEvents } from 'nebulosa/src/astronomy/events/eclipse/lunar/map'
 import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
 import { toDeg } from 'nebulosa/src/math/units/angle'
+
+// The Sun and the Moon of the eclipse: the analytical theories, interpolated for the dense searches.
+const sunMoonPosition = sunMoonPositionOf(interpolatedEphemerisSource(analyticalEphemerisSource))
 
 // The total lunar eclipse of 7 September 2025.
 const eclipse = nearestLunarEclipse(timeYMDHMS(2025, 9, 1, 0, 0, 0, Timescale.UTC), true)
@@ -5141,10 +5181,14 @@ Because the elements vary smoothly, they are published (and computed here) as cu
 import { nearestSolarEclipse } from 'nebulosa/src/astronomy/bodies/sun'
 import { moon } from 'nebulosa/src/astronomy/ephemeris/models/analytical/elpmpp02'
 import { earth, sun } from 'nebulosa/src/astronomy/ephemeris/models/analytical/vsop87e'
-import { computeSunMoonPositionAt, sunMoonPosition } from 'nebulosa/src/astronomy/events/eclipse/eclipse'
+import { analyticalEphemerisSource, interpolatedEphemerisSource } from 'nebulosa/src/astronomy/ephemeris/source'
+import { computeSunMoonPositionAt, sunMoonPositionOf } from 'nebulosa/src/astronomy/events/eclipse/eclipse'
 import { computePolynomialBesselianElements, evaluateBesselian, instantBesselianFromSunMoon } from 'nebulosa/src/astronomy/events/eclipse/solar/map'
 import { type Time, Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
 import { toDeg } from 'nebulosa/src/math/units/angle'
+
+// The Sun and the Moon of the eclipse: the analytical theories, interpolated for the dense searches.
+const sunMoonPosition = sunMoonPositionOf(interpolatedEphemerisSource(analyticalEphemerisSource))
 
 // The total solar eclipse of 8 April 2024.
 const eclipse = nearestSolarEclipse(timeYMDHMS(2024, 4, 1, 0, 0, 0, Timescale.UTC), true)
@@ -5152,23 +5196,24 @@ const eclipse = nearestSolarEclipse(timeYMDHMS(2024, 4, 1, 0, 0, 0, Timescale.UT
 // Cubic polynomials of x, y, l1, l2, d and mu in hours from time0.
 const pbe = computePolynomialBesselianElements(eclipse.maximalTime, sunMoonPosition)
 
-console.log(pbe.x) // [-0.3188609437, 0.5117079966, 3.2949e-5, -8.4194e-6] — Earth radii, increasing powers of t
+console.log(pbe.x) // [-0.3182734527, 0.5117122777, 3.3134e-5, -8.4175e-6] — Earth radii, increasing powers of t
 
 // The elements at greatest eclipse: the axis passes 0.343 Earth radii from the centre, and l2 < 0 (total).
 const maximum = evaluateBesselian(pbe, eclipse.maximalTime)
 
-console.log(maximum.x, maximum.y, maximum.l2) // -0.157500055 0.305084134 -0.01036006 — Earth radii
-console.log(toDeg(maximum.d), toDeg(maximum.mu)) // 7.59086 94.01317 — degrees
+console.log(maximum.x, maximum.y, maximum.l2) // -0.156911196 0.305197768 -0.01036175 — Earth radii
+console.log(toDeg(maximum.d), toDeg(maximum.mu)) // 7.59087 94.01317 — degrees
 
 // The same instant straight from the Sun and Moon positions, without the polynomial.
 const exact = instantBesselianFromSunMoon(eclipse.maximalTime, sunMoonPosition(eclipse.maximalTime))
 
-console.log(exact.x, exact.y) // -0.1575000315 0.3050841577
+console.log(exact.x, exact.y) // -0.1569111704 0.3051977925
 
-// A Sun/Moon provider from other ephemerides: barycentric Sun and Earth and geocentric Moon states (AU, AU/day, ICRF).
+// A Sun/Moon provider from any states: barycentric Sun and Earth and geocentric Moon (AU, AU/day, ICRF), here the theories
+// themselves at every instant, without the interpolation.
 const elpmpp02 = (time: Time) => computeSunMoonPositionAt(time, sun, earth, moon)
 
-console.log(evaluateBesselian(computePolynomialBesselianElements(eclipse.maximalTime, elpmpp02), eclipse.maximalTime).x) // -0.15691 — Earth radii, with the ELPMPP02 Moon
+console.log(evaluateBesselian(computePolynomialBesselianElements(eclipse.maximalTime, elpmpp02), eclipse.maximalTime).x) // -0.15691 — Earth radii, as with the interpolated source
 ```
 
 ### Solar Eclipse Ground-Track Geometry
@@ -5179,10 +5224,14 @@ The ground track of a solar eclipse is the familiar eclipse map: the central lin
 
 ```ts
 import { nearestSolarEclipse } from 'nebulosa/src/astronomy/bodies/sun'
-import { sunMoonPosition } from 'nebulosa/src/astronomy/events/eclipse/eclipse'
+import { analyticalEphemerisSource, interpolatedEphemerisSource } from 'nebulosa/src/astronomy/ephemeris/source'
+import { sunMoonPositionOf } from 'nebulosa/src/astronomy/events/eclipse/eclipse'
 import { computePolynomialBesselianElements, computeSolarEclipseMapGeometry, splitCentralLineByKind } from 'nebulosa/src/astronomy/events/eclipse/solar/map'
 import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
 import { deg, toDeg } from 'nebulosa/src/math/units/angle'
+
+// The Sun and the Moon of the eclipse: the analytical theories, interpolated for the dense searches.
+const sunMoonPosition = sunMoonPositionOf(interpolatedEphemerisSource(analyticalEphemerisSource))
 
 // The total solar eclipse of 8 April 2024 and its Besselian elements.
 const eclipse = nearestSolarEclipse(timeYMDHMS(2024, 4, 1, 0, 0, 0, Timescale.UTC), true)
@@ -5192,8 +5241,8 @@ const pbe = computePolynomialBesselianElements(eclipse.maximalTime, sunMoonPosit
 const geometry = computeSolarEclipseMapGeometry(eclipse, pbe, { longitudeStep: deg(5), maxAngularStep: deg(2) })
 
 // Greatest eclipse and the first point of the central line, where the axis first touches the Earth.
-console.log(toDeg(geometry.points.MAX!.x), toDeg(geometry.points.MAX!.y)) // -104.05 25.40 — degrees
-console.log(toDeg(geometry.lines.centerLine[0].x), toDeg(geometry.lines.centerLine[0].y)) // -158.53 -7.81 — degrees
+console.log(toDeg(geometry.points.MAX!.x), toDeg(geometry.points.MAX!.y)) // -104.01 25.41 — degrees
+console.log(toDeg(geometry.lines.centerLine[0].x), toDeg(geometry.lines.centerLine[0].y)) // -158.52 -7.82 — degrees
 
 // Total and annular runs of the central line: one total run here, both for a hybrid eclipse.
 const kinds = splitCentralLineByKind(geometry.lines.centerLine, pbe)
@@ -5209,11 +5258,15 @@ The coordinates are those of the projection: with a plate carrée, `x` is the lo
 
 ```ts
 import { nearestSolarEclipse } from 'nebulosa/src/astronomy/bodies/sun'
-import { sunMoonPosition } from 'nebulosa/src/astronomy/events/eclipse/eclipse'
+import { analyticalEphemerisSource, interpolatedEphemerisSource } from 'nebulosa/src/astronomy/ephemeris/source'
+import { sunMoonPositionOf } from 'nebulosa/src/astronomy/events/eclipse/eclipse'
 import { computePolynomialBesselianElements, computeSolarEclipseMapGeometry, solarEclipseMapToSvgPaths } from 'nebulosa/src/astronomy/events/eclipse/solar/map'
 import { PlateCarree } from 'nebulosa/src/astronomy/projections/projection'
 import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
 import { deg } from 'nebulosa/src/math/units/angle'
+
+// The Sun and the Moon of the eclipse: the analytical theories, interpolated for the dense searches.
+const sunMoonPosition = sunMoonPositionOf(interpolatedEphemerisSource(analyticalEphemerisSource))
 
 // The total solar eclipse of 8 April 2024, as a preview-quality geometry.
 const eclipse = nearestSolarEclipse(timeYMDHMS(2024, 4, 1, 0, 0, 0, Timescale.UTC), true)
@@ -5223,8 +5276,8 @@ const geometry = computeSolarEclipseMapGeometry(eclipse, pbe, { longitudeStep: d
 // A map 100 units per radian, with SVG axes (y down).
 const paths = solarEclipseMapToSvgPaths(geometry, new PlateCarree(0, { scale: 100, yAxisDirection: 'southUp' }))
 
-console.log(paths.points.MAX) // { x: -181.5986, y: -44.3387 } — greatest eclipse
-console.log(paths.centerLine.slice(0, 60)) // M-276.69 13.63L-273.61 13.2L-270.53 12.7L-268.34 12.31L-266. — SVG path data
+console.log(paths.points.MAX) // { x: -181.5336, y: -44.3522 } — greatest eclipse
+console.log(paths.centerLine.slice(0, 60)) // M-276.67 13.65L-273.59 13.21L-270.53 12.72L-268.34 12.33L-26 — SVG path data
 
 // The northern partial limit crosses the antimeridian, so it has two subpaths.
 console.log((paths.penumbraNorth.match(/M/g) ?? []).length) // 2

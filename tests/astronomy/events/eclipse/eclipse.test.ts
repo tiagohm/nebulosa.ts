@@ -1,6 +1,7 @@
 import { expect, test, describe } from 'bun:test'
 import * as elpmpp02 from '../../../../src/astronomy/ephemeris/models/analytical/elpmpp02'
 import * as vsop from '../../../../src/astronomy/ephemeris/models/analytical/vsop87e'
+import { analyticalEphemerisSource, interpolatedEphemerisSource } from '../../../../src/astronomy/ephemeris/source'
 import {
 	computeSunMoonPositionAt,
 	derivativeEarthLimbOmega,
@@ -16,8 +17,7 @@ import {
 	splitPolygonAtAntimeridian,
 	splitPolylineAtAntimeridian,
 	type EclipseGeoBranch,
-	sunMoonPosition,
-	sunMoonPositionAround,
+	sunMoonPositionOf,
 } from '../../../../src/astronomy/events/eclipse/eclipse'
 import type { Projection } from '../../../../src/astronomy/projections/projection'
 import { type Time, timeShift, timeYMDHMS, Timescale } from '../../../../src/astronomy/time/time'
@@ -314,18 +314,19 @@ test('projected path serialization breaks at projection gaps', () => {
 	expect(path).toBe('')
 })
 
-test('sunMoonPositionAround follows ELPMPP02, unlike the series, over the hours of an eclipse', () => {
+test('the Sun and the Moon of an interpolated source follow ELPMPP02 over the hours of an eclipse', () => {
 	const center = timeYMDHMS(2030, 11, 25, 6, 51, 0, Timescale.TT)
-	const provider = sunMoonPositionAround(center)
+	const provider = sunMoonPositionOf(interpolatedEphemerisSource(analyticalEphemerisSource))
+	const direct = sunMoonPositionOf(analyticalEphemerisSource)
 
-	// The Moon reduced from ELPMPP02 itself at every instant, as the correction only samples it three times.
+	// The Moon reduced from ELPMPP02 itself at every instant.
 	const exact = (time: Time) => computeSunMoonPositionAt(time, vsop.sun, vsop.earth, elpmpp02.moon).moon
 	const arcsecondsBetween = (a: { rightAscension: number; declination: number }, b: { rightAscension: number; declination: number }) => sphericalSeparation(a.rightAscension, a.declination, b.rightAscension, b.declination) * RAD2DEG * 3600
 
 	for (const hours of [-5, -2.5, 1, 4]) {
 		const time = timeShift(center, hours / 24)
-		expect(arcsecondsBetween(provider(time).moon, exact(time))).toBeLessThan(0.1)
+		expect(arcsecondsBetween(direct(time).moon, exact(time))).toBeLessThan(1e-6)
+		expect(arcsecondsBetween(provider(time).moon, exact(time))).toBeLessThan(0.01)
+		expect(arcsecondsBetween(provider(time).sun, direct(time).sun)).toBeLessThan(0.01)
 	}
-
-	expect(arcsecondsBetween(sunMoonPosition(center).moon, provider(center).moon)).toBeGreaterThan(5)
 })

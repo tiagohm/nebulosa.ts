@@ -1,6 +1,7 @@
 import { parseArgs } from 'node:util'
 import { nearestSolarEclipse, type SolarEclipse } from '../src/astronomy/bodies/sun'
-import { sunMoonPosition } from '../src/astronomy/events/eclipse/eclipse'
+import { analyticalEphemerisSource, interpolatedEphemerisSource } from '../src/astronomy/ephemeris/source'
+import { sunMoonPositionOf } from '../src/astronomy/events/eclipse/eclipse'
 import {
 	BRANCH_MAX_DRAWABLE_GAP,
 	type SolarEclipseGeoPoint,
@@ -22,6 +23,9 @@ import { PI, PIOVERTWO, TAU } from '../src/core/constants'
 import { sphericalSeparation, type Point } from '../src/math/numerical/geometry'
 import { deg, type Angle } from '../src/math/units/angle'
 import { catalogBranchRetraces, endpointRetraces, hasContinuousCurveBetween, limitTangencyResidual, longestProjectedSegment } from '../tests/astronomy/events/eclipse/util'
+
+// The Sun and the Moon of the eclipses: the analytical theories, interpolated for the dense contact searches.
+const sunMoonPosition = sunMoonPositionOf(interpolatedEphemerisSource(analyticalEphemerisSource))
 
 const CATALOG_STEP = deg(0.5)
 const CATALOG_MAX_DRAWABLE_GAP = Math.max(BRANCH_MAX_DRAWABLE_GAP, CATALOG_STEP * 4)

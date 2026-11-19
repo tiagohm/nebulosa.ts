@@ -1,19 +1,17 @@
 import { AU_KM, DAYSEC, DEG2RAD, EARTH_RADIUS_KM, LIGHT_TIME_AU, PI, SPEED_OF_LIGHT_AU_DAY, TAU, WGS84_FLATTENING } from '../../../core/constants'
 import { matMulVec } from '../../../math/linear-algebra/mat3'
-import { vecDivScalar, vecDot, vecMinus, vecLength, vecMulScalar, vecClone } from '../../../math/linear-algebra/vec3'
+import { vecDivScalar, vecDot, vecMinus, vecLength, vecMulScalar } from '../../../math/linear-algebra/vec3'
 import type { Point } from '../../../math/numerical/geometry'
 import { clamp } from '../../../math/numerical/math'
 import { type RootFindingOptions, bisection, brentRoot } from '../../../math/numerical/optimization'
 import { normalizeAngle, normalizePI, type Angle } from '../../../math/units/angle'
-import { zeroPositionAndVelocity, type PositionAndVelocityMut, type PositionAndVelocityOverTime } from '../../coordinates/astrometry'
+import type { PositionAndVelocityOverTime } from '../../coordinates/astrometry'
 import type { EquatorialCoordinate } from '../../coordinates/coordinate'
-import { eraEpv00 } from '../../coordinates/erfa/earth'
 import { eraAb, eraP2s, eraEpj } from '../../coordinates/erfa/erfa'
-import { eraMoon98 } from '../../coordinates/erfa/moon'
-import { moon as elpmpp02Moon } from '../../ephemeris/models/analytical/elpmpp02'
+import { type EphemerisSource, relativeEphemerisState } from '../../ephemeris/source'
 import type { CylindricalProjection, ProjectionOptions, RaAxisDirection } from '../../projections/projection'
 import { deltaT } from '../../time/deltat'
-import { precessionNutationMatrix, timeShift, toJulianDay, tt, type Time } from '../../time/time'
+import { precessionNutationMatrix, timeShift, type Time } from '../../time/time'
 
 // Shared geometry foundation for solar/lunar eclipse computation and mapping. Provides the apparent
 // geocentric Sun/Moon position sampler (light-time + aberration + precession/nutation), the oblate
@@ -176,64 +174,16 @@ export function computeSunMoonPositionAt(time: Time, sun: PositionAndVelocityOve
 	}
 }
 
-const EARTH_BH_SCRATCH: [PositionAndVelocityMut, PositionAndVelocityMut] = [zeroPositionAndVelocity(), zeroPositionAndVelocity()]
-
-// Barycentric Earth position and velocity (AU, AU/day) from the VSOP-based eraEpv00 at TT.
-function earth(time: Time): PositionAndVelocityMut {
-	const { day, fraction } = tt(time)
-	const [p, v] = eraEpv00(day, fraction, EARTH_BH_SCRATCH)[0]
-	return [vecClone(p), vecClone(v)]
-}
-
-// Barycentric Sun position and velocity (AU, AU/day): Earth barycentric minus heliocentric, at TT.
-function sun(time: Time): PositionAndVelocityMut {
-	const { day, fraction } = tt(time)
-	const [pvb, pvh] = eraEpv00(day, fraction, EARTH_BH_SCRATCH)
-	return [vecMinus(pvb[0], pvh[0]), vecMinus(pvb[1], pvh[1])]
-}
-
-// Geocentric Moon position and velocity (AU, AU/day) from the ERFA Meeus theory eraMoon98.
-function moon(time: Time) {
-	return eraMoon98(time.day, time.fraction)
-}
-
-// Apparent Sun/Moon position provider from the analytical ERFA/Meeus ephemerides (significantly faster). eraMoon98 is
-// up to about 8 arcsec from ELPMPP02, which is about 15 s on a contact; use sunMoonPositionAround for one eclipse.
-export function sunMoonPosition(time: Time) {
-	return computeSunMoonPositionAt(time, sun, earth, moon)
-}
-
-// Half-width, in days, of the interval sunMoonPositionAround corrects: 8 h, more than an eclipse lasts on either side.
-const ECLIPSE_MOON_HALF_SPAN = 8 / 24
-
-// Difference between ELPMPP02 and eraMoon98 at an instant, in AU.
-function moonCorrection(time: Time) {
-	return vecMinus(elpmpp02Moon(time)[0], moon(tt(time))[0])
-}
-
-// Apparent Sun/Moon position provider of one eclipse, as accurate as ELPMPP02 and about as fast as sunMoonPosition,
-// since a single ELPMPP02 evaluation costs milliseconds and a contact search needs hundreds. The difference from
-// eraMoon98 varies slowly, so it is evaluated once at each end and at the center of ECLIPSE_MOON_HALF_SPAN around the
-// instant, and interpolated in between with a parabola. Creating the provider costs the three evaluations.
-//   center: instant the eclipse is centered on, in any scale.
-//   returns: provider for instants within ECLIPSE_MOON_HALF_SPAN of center.
-export function sunMoonPositionAround(center: Time): SunMoonProvider {
-	const before = moonCorrection(timeShift(center, -ECLIPSE_MOON_HALF_SPAN))
-	const middle = moonCorrection(center)
-	const after = moonCorrection(timeShift(center, ECLIPSE_MOON_HALF_SPAN))
-	const centerJulianDay = toJulianDay(tt(center))
-
-	const corrected = (time: Time): PositionAndVelocityMut => {
-		const [position, velocity] = moon(time)
-		const s = (toJulianDay(tt(time)) - centerJulianDay) / ECLIPSE_MOON_HALF_SPAN
-		const a = 0.5 * s * (s - 1)
-		const b = 1 - s * s
-		const c = 0.5 * s * (s + 1)
-		for (let i = 0; i < 3; i++) position[i] += a * before[i] + b * middle[i] + c * after[i]
-		return [position, velocity]
-	}
-
-	return (time) => computeSunMoonPositionAt(time, sun, earth, corrected)
+// Apparent Sun/Moon position provider over an ephemeris source: its Sun (10), its Earth (399), and its geocentric Moon
+// (301 relative to 399), reduced by computeSunMoonPositionAt, so every state of an eclipse comes from that one source.
+// A contact or map search samples hundreds of instants, so pass an interpolated source (interpolatedEphemerisSource)
+// over the analytical theories, where an ELPMPP02 evaluation costs about 10 ms; a source that cannot give a state
+// throws EphemerisMiss, letting the caller rerun the whole eclipse on another source.
+export function sunMoonPositionOf(source: EphemerisSource): SunMoonProvider {
+	const sun = (time: Time) => source.state(10, time)
+	const earth = (time: Time) => source.state(399, time)
+	const moon = (time: Time) => relativeEphemerisState(source, 301, 399, time)
+	return (time) => computeSunMoonPositionAt(time, sun, earth, moon)
 }
 
 // Root-finding tolerance shared by the bisection and Brent helpers.

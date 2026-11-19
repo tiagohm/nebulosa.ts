@@ -1,6 +1,7 @@
 import { parseArgs } from 'node:util'
 import { nearestLunarEclipse } from '../src/astronomy/bodies/moon'
-import { sunMoonPosition, type EclipseGeoCurve, type EclipseGeoPoint } from '../src/astronomy/events/eclipse/eclipse'
+import { analyticalEphemerisSource, interpolatedEphemerisSource } from '../src/astronomy/ephemeris/source'
+import { type EclipseGeoCurve, type EclipseGeoPoint, sunMoonPositionOf } from '../src/astronomy/events/eclipse/eclipse'
 import { computeLunarEclipseMapGeometry, lunarEclipseMapToSvgPaths, type LunarEclipseContactKind, type LunarEclipseMapGeometry, type LunarEclipseMapGeometryOptions, type LunarEclipseMapSvgPaths } from '../src/astronomy/events/eclipse/lunar/map'
 import { PlateCarree } from '../src/astronomy/projections/projection'
 import { timeYMD, toJulianDay, timeToDate } from '../src/astronomy/time/time'
@@ -8,6 +9,9 @@ import { PI, PIOVERTWO, TAU } from '../src/core/constants'
 import { sphericalSeparation, type Point } from '../src/math/numerical/geometry'
 import { deg } from '../src/math/units/angle'
 import { longestProjectedSegment } from '../tests/astronomy/events/eclipse/util'
+
+// The Sun and the Moon of the eclipses: the analytical theories, interpolated for the dense contact searches.
+const sunMoonPosition = sunMoonPositionOf(interpolatedEphemerisSource(analyticalEphemerisSource))
 
 const CATALOG_STEP = deg(0.5)
 const LUNAR_ECLIPSE_MAP_GEOMETRY_OPTIONS: LunarEclipseMapGeometryOptions = { maxAngularStep: CATALOG_STEP }

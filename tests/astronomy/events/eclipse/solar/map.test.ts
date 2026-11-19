@@ -1,7 +1,8 @@
 import { expect, test, describe } from 'bun:test'
 import { nearestSolarEclipse, type SolarEclipse, type SolarEclipseType } from '../../../../../src/astronomy/bodies/sun'
 import { eraGst06a } from '../../../../../src/astronomy/coordinates/erfa/erfa'
-import { DELTA_T_LONGITUDE_FACTOR, EARTH_E2, earthLimbExtremes, earthLimbOmega, sunMoonPosition, type SunMoonPosition } from '../../../../../src/astronomy/events/eclipse/eclipse'
+import { analyticalEphemerisSource, interpolatedEphemerisSource } from '../../../../../src/astronomy/ephemeris/source'
+import { DELTA_T_LONGITUDE_FACTOR, EARTH_E2, earthLimbExtremes, earthLimbOmega, type SunMoonPosition, sunMoonPositionOf } from '../../../../../src/astronomy/events/eclipse/eclipse'
 import {
 	BRANCH_MAX_DRAWABLE_GAP,
 	centralAxisIntersectsEarth,
@@ -34,6 +35,9 @@ import { DEG2RAD, PI, PIOVERTWO, TAU } from '../../../../../src/core/constants'
 import { sphericalSeparation } from '../../../../../src/math/numerical/geometry'
 import { deg, parseAngle, type Angle } from '../../../../../src/math/units/angle'
 import { catalogBranchRetraces, countKinks, endpointRetraces, geometryFor, interpolateAtJulianDay, limitTangencyResidual, longestProjectedSegment, maxBranchSegment } from '../util'
+
+// The Sun and the Moon of the eclipses: the analytical theories, interpolated for the dense contact searches.
+const sunMoonPosition = sunMoonPositionOf(interpolatedEphemerisSource(analyticalEphemerisSource))
 
 const JD0 = 2460409.25
 const TIME0 = time(JD0)

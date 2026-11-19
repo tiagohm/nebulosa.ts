@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { nearestLunarEclipse } from '../../../../../src/astronomy/bodies/moon'
-import { sunMoonPosition, sunMoonPositionAround } from '../../../../../src/astronomy/events/eclipse/eclipse'
+import { analyticalEphemerisSource, interpolatedEphemerisSource } from '../../../../../src/astronomy/ephemeris/source'
+import { sunMoonPositionOf } from '../../../../../src/astronomy/events/eclipse/eclipse'
 import { moonAltitudeAt } from '../../../../../src/astronomy/events/eclipse/lunar/local'
 import { computeLunarEclipseMapGeometry, lunarEclipseEvents, lunarEclipseMapToSvgPaths, MOON_RADIUS_EARTH_RADII, refineLunarEclipse, type LunarEclipseContactKind } from '../../../../../src/astronomy/events/eclipse/lunar/map'
 import { PlateCarree } from '../../../../../src/astronomy/projections/projection'
@@ -8,6 +9,9 @@ import { greenwichApparentSiderealTime, type Time, timeYMDHMS, Timescale, toJuli
 import { PI, PIOVERTWO, TAU } from '../../../../../src/core/constants'
 import { deg, type Angle } from '../../../../../src/math/units/angle'
 import { longestProjectedSegment } from '../util'
+
+// The Sun and the Moon of the eclipses: the analytical theories, interpolated for the dense contact searches.
+const sunMoonPosition = sunMoonPositionOf(interpolatedEphemerisSource(analyticalEphemerisSource))
 
 // Cheap deterministic position provider for tests that exercise local-circumstance plumbing rather than the
 // analytical VSOP87/ELP ephemerides. The Moon stays high for FAST_LONGITUDE/FAST_LATITUDE, keeping visibility
@@ -507,7 +511,7 @@ describe('fill region polygons', () => {
 describe('refineLunarEclipse', () => {
 	const refined = (year: number, month: number, day: number, margin = 0) => {
 		const eclipse = nearestLunarEclipse(timeYMDHMS(year, month, day, 0, 0, 0), true, margin)
-		return refineLunarEclipse(eclipse, sunMoonPositionAround(eclipse.maximalTime))
+		return refineLunarEclipse(eclipse, sunMoonPosition)
 	}
 
 	const seconds = (a: Time, b: Time) => (toJulianDay(a) - toJulianDay(b)) * 86400

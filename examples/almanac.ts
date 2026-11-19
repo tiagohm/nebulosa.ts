@@ -46,9 +46,9 @@ import { earth, jupiter, mars, mercury, saturn, sun, venus } from '../src/astron
 import { customEphemerisEndpoint, ephemerisPath, naifEphemerisEndpoint, relativeEphemerisPath, SOLAR_SYSTEM_BARYCENTER } from '../src/astronomy/ephemeris/path'
 import { earthObserverEphemerisPath, sgp4EphemerisPath } from '../src/astronomy/ephemeris/path.adapter'
 import { saturnianEphemeris } from '../src/astronomy/ephemeris/saturnian'
-import { analyticalEphemerisSource } from '../src/astronomy/ephemeris/source'
+import { analyticalEphemerisSource, interpolatedEphemerisSource } from '../src/astronomy/ephemeris/source'
 import { darknessWindows } from '../src/astronomy/events/darkness'
-import { sunMoonPosition } from '../src/astronomy/events/eclipse/eclipse'
+import { sunMoonPositionOf } from '../src/astronomy/events/eclipse/eclipse'
 import { computeLocalLunarEclipseCircumstances } from '../src/astronomy/events/eclipse/lunar/local'
 import { computeGreatestEclipseCircumstances, computeLocalSolarEclipseCircumstances } from '../src/astronomy/events/eclipse/solar/local'
 import { computePolynomialBesselianElements } from '../src/astronomy/events/eclipse/solar/map'
@@ -128,6 +128,9 @@ import { sphericalDestination, sphericalInterpolate, sphericalPolygonArea, spher
 import { type Angle, arcsec, deg, formatAZ, formatHMS, formatSignedDMS, hms, hour, normalizeAngle, normalizePI, toArcsec, toDeg, toHour } from '../src/math/units/angle'
 import { kilometer, toKilometer } from '../src/math/units/distance'
 import { toKilometerPerSecond } from '../src/math/units/velocity'
+
+// The Sun and the Moon of the eclipses: the analytical theories, interpolated for the dense contact searches.
+const sunMoonPosition = sunMoonPositionOf(interpolatedEphemerisSource(analyticalEphemerisSource))
 
 await fs.access('data/eopc04.1962-now.txt')
 const handle = await fs.open('data/eopc04.1962-now.txt')
