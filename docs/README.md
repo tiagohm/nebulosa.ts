@@ -1139,6 +1139,43 @@ console.log(reverseEphemerisPath(earthPath).stateAt(time)[0]) // [-0.12079, 0.93
 console.log(sameEphemerisEndpoint(earthPath.target, naifEphemerisEndpoint(Naif.EARTH, 'Terra'))) // true
 ```
 
+### Ephemeris Sources
+
+Every computation that needs the positions of solar-system bodies, an eclipse, a satellite phenomenon, the darkness of a meteor night, takes them from one ephemeris source: an interface answering the barycentric state of any body by its NAIF code, in AU and AU/day on ICRF axes. The source decides where the states come from. The JPL SPK kernels of a prepared kernel set are the most accurate when they cover the body and the epoch; the analytical theories (VSOP87E for the Sun, the planets, and the Earth, ELP/MPP02 for the Moon, the Meeus Pluto theory, and the satellite theories MARSSAT, L1.2, TASS 1.7, and GUST86 added to their planet) always answer within their own accuracy, about 1″ for the planets.
+
+A source that cannot give a state throws a miss naming the body, the link of its chain that failed, and why (no segment, out of coverage, no theory). A computation is then run whole on the next source rather than mixing two, since a mixed result would combine the errors of both theories in one geometry. For searches that sample thousands of nearby epochs, an interpolated source evaluates the underlying one only at nodes of a fixed TDB grid and interpolates them with a six-point Lagrange polynomial, keeping the error below about 0.1 km; a body a theory computes relative to its planet or to the Earth is interpolated as that offset, so a satellite node costs no planetary evaluation.
+
+```ts
+import fs from 'fs/promises'
+import { readDaf } from 'nebulosa/src/astronomy/ephemeris/kernels/daf'
+import { inspectSpk } from 'nebulosa/src/astronomy/ephemeris/kernels/spk.inspect'
+import { prepareSpkKernelSet } from 'nebulosa/src/astronomy/ephemeris/kernels/spk.kernelset'
+import { analyticalEphemerisSource, computeOnEphemerisSources, interpolatedEphemerisSource, relativeEphemerisState, spkEphemerisSource } from 'nebulosa/src/astronomy/ephemeris/source'
+import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { fileHandleSource } from 'nebulosa/src/io/file'
+import { toKilometer } from 'nebulosa/src/math/units/distance'
+
+const time = timeYMDHMS(2026, 6, 29, 0, 0, 0, Timescale.TDB)
+
+// The SPK kernels of a prepared kernel set as a source (keep the file open while it is used).
+await using file = fileHandleSource(await fs.open('data/de440s.bsp'))
+const daf = await readDaf(file)
+const inspection = inspectSpk(daf, (await fs.stat('data/de440s.bsp')).size)
+const kernels = spkEphemerisSource(await prepareSpkKernelSet([{ id: 'de440s', daf, segments: inspection.ok ? inspection.segments : [] }]))
+
+// The geocentric Moon from DE440 and from ELP/MPP02, as one body relative to another.
+console.log(relativeEphemerisState(kernels, 301, 399, time)[0].map(toKilometer)) // [-28237, -357530, -190479] — km
+console.log(relativeEphemerisState(analyticalEphemerisSource, 301, 399, time)[0].map(toKilometer)) // [-28237, -357530, -190479] — km
+
+// A computation on the first source that has every body it needs: de440s has no Io, so the theories answer.
+const { source, misses } = computeOnEphemerisSources([kernels, analyticalEphemerisSource], (s) => relativeEphemerisState(s, 501, 599, time))
+console.log(source.kind, misses.map((miss) => miss.reason)) // analytical ['missing']
+
+// Interpolated nodes for a dense search, within 0.1 km of the theories.
+const dense = interpolatedEphemerisSource(analyticalEphemerisSource)
+console.log(relativeEphemerisState(dense, 301, 399, time)[0].map(toKilometer)) // [-28237, -357530, -190479] — km
+```
+
 ### Equation of Time
 
 The equation of time is the difference between apparent solar time (a sundial) and mean solar time (a clock). Here it is the hour-angle difference, apparent Sun minus mean Sun, and it stays within roughly ±16 minutes over a year, positive when the sundial is ahead of the clock. It comes from the eccentricity of the Earth's orbit and the obliquity of the ecliptic.
