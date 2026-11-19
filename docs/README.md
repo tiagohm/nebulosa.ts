@@ -1143,16 +1143,18 @@ console.log(sameEphemerisEndpoint(earthPath.target, naifEphemerisEndpoint(Naif.E
 
 Every computation that needs the positions of solar-system bodies, an eclipse, a satellite phenomenon, the darkness of a meteor night, takes them from one ephemeris source: an interface answering the barycentric state of any body by its NAIF code, in AU and AU/day on ICRF axes. The source decides where the states come from. The JPL SPK kernels of a prepared kernel set are the most accurate when they cover the body and the epoch; the analytical theories (VSOP87E for the Sun, the planets, and the Earth, ELP/MPP02 for the Moon, the Meeus Pluto theory, and the satellite theories MARSSAT, L1.2, TASS 1.7, and GUST86 added to their planet) always answer within their own accuracy, about 1″ for the planets.
 
-A source that cannot give a state throws a miss naming the body, the link of its chain that failed, and why (no segment, out of coverage, no theory). A computation is then run whole on the next source rather than mixing two, since a mixed result would combine the errors of both theories in one geometry. For searches that sample thousands of nearby epochs, an interpolated source evaluates the underlying one only at nodes of a fixed TDB grid and interpolates them with a six-point Lagrange polynomial, keeping the error below about 0.1 km; a body a theory computes relative to its planet or to the Earth is interpolated as that offset, so a satellite node costs no planetary evaluation.
+A source that cannot give a state throws a miss naming the body, the link of its chain that failed, and why (no segment, out of coverage, no theory). A computation is then run whole on the next source rather than mixing two, since a mixed result would combine the errors of both theories in one geometry. For searches that sample thousands of nearby epochs, an interpolated source evaluates the underlying one only at nodes of a fixed TDB grid and interpolates them with a six-point Lagrange polynomial, keeping the error below about 0.1 km; a body a theory computes relative to its planet or to the Earth is interpolated as that offset, so a satellite node costs no planetary evaluation. The apparent geocentric position of a body, where it is seen from the geocenter after light time and annual aberration (about 20″ for the Sun), is what an almanac condition such as a lunar phase or an equinox is defined on.
 
 ```ts
 import fs from 'fs/promises'
 import { readDaf } from 'nebulosa/src/astronomy/ephemeris/kernels/daf'
 import { inspectSpk } from 'nebulosa/src/astronomy/ephemeris/kernels/spk.inspect'
 import { prepareSpkKernelSet } from 'nebulosa/src/astronomy/ephemeris/kernels/spk.kernelset'
-import { analyticalEphemerisSource, computeOnEphemerisSources, interpolatedEphemerisSource, relativeEphemerisState, spkEphemerisSource } from 'nebulosa/src/astronomy/ephemeris/source'
+import { analyticalEphemerisSource, apparentGeocentricPosition, computeOnEphemerisSources, interpolatedEphemerisSource, relativeEphemerisState, spkEphemerisSource } from 'nebulosa/src/astronomy/ephemeris/source'
 import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
 import { fileHandleSource } from 'nebulosa/src/io/file'
+import { vecAngle } from 'nebulosa/src/math/linear-algebra/vec3'
+import { toArcsec } from 'nebulosa/src/math/units/angle'
 import { toKilometer } from 'nebulosa/src/math/units/distance'
 
 const time = timeYMDHMS(2026, 6, 29, 0, 0, 0, Timescale.TDB)
@@ -1177,6 +1179,9 @@ console.log(
 // Interpolated nodes for a dense search, within 0.1 km of the theories.
 const dense = interpolatedEphemerisSource(analyticalEphemerisSource)
 console.log(relativeEphemerisState(dense, 301, 399, time)[0].map(toKilometer)) // [-28237, -357530, -190479] — km
+
+// The apparent geocentric Sun (light time and aberration) against the geometric one.
+console.log(toArcsec(vecAngle(apparentGeocentricPosition(kernels, 10, time), relativeEphemerisState(kernels, 10, 399, time)[0]))) // 20.1 — arcseconds
 ```
 
 ### Equation of Time
@@ -1293,10 +1298,12 @@ console.log(toArcsec(polar.polarAzimuthError), toArcsec(polar.polarAltitudeError
 
 The astronomical seasons begin at the two equinoxes and two solstices, the instants when the Sun's apparent ecliptic longitude is 0°, 90°, 180°, and 270°. Here `spring`, `summer`, `autumn`, and `winter` name the starts of the northern-hemisphere seasons: the March equinox, June solstice, September equinox, and December solstice.
 
-`season` uses Meeus' method and is valid for years 1000 to 3000. The instant comes back in dynamical time: the returned `Time` is tagged TT, so convert it with `utc` for a civil clock time, which moves it earlier by [Delta T](#delta-t) (about a minute in the 2020s).
+`season` uses Meeus' method and is valid for years 1000 to 3000, within about 40 s of DE440 in this century. `seasonOf` refines that instant on an [ephemeris source](#ephemeris-sources), finding when the apparent longitude of date of the source's Sun reaches the quadrant, so the season is that of the kernels or theories the rest of a computation uses: under a second from DE440 on the analytical theories. The instant comes back in dynamical time: the returned `Time` is tagged TT, so convert it with `utc` for a civil clock time, which moves it earlier by [Delta T](#delta-t) (about a minute in the 2020s).
 
 ```ts
 import { season } from 'nebulosa/src/astronomy/bodies/sun'
+import { analyticalEphemerisSource } from 'nebulosa/src/astronomy/ephemeris/source'
+import { seasonOf } from 'nebulosa/src/astronomy/events/almanac'
 import { timeToDate, utc } from 'nebulosa/src/astronomy/time/time'
 
 // year: calendar year. name: 'spring' | 'summer' | 'autumn' | 'winter'. The instant is TT.
@@ -1304,6 +1311,9 @@ const june = season(2026, 'summer')
 
 console.log(timeToDate(utc(june)).slice(0, 6)) // [2026, 6, 21, 8, 24, 55] — civil UTC
 console.log(timeToDate(utc(season(2026, 'winter'))).slice(0, 6)) // [2026, 12, 21, 20, 50, 13]
+
+// The same solstice refined on the Sun of an ephemeris source, here the analytical theories.
+console.log(timeToDate(utc(seasonOf(analyticalEphemerisSource, 2026, 'summer'))).slice(0, 6)) // [2026, 6, 21, 8, 24, 29]
 ```
 
 ### ERFA / SOFA Algorithms
@@ -2662,10 +2672,12 @@ console.log(Math.hypot(...position) * AU_KM) // 401787.8 — km, geocentric dist
 
 The Moon's orbit is an ellipse of mean eccentricity 0.055, so its distance from the Earth changes each month between perigee, the closest point, and apogee, the farthest. Solar perturbations make both vary from month to month, with perigee distances from about 356,400 km to 370,400 km and apogee from 404,000 km to 406,700 km; the extreme perigees occur near full or new moon. A full moon near perigee is the popular supermoon, and the distance sets the Moon's apparent size, its parallax, and the tidal range.
 
-The search uses the series of Meeus's chapter 50, with the periodic corrections for the true apsis; the mean apsis, without them, can differ from the true one by up to about a day. Results are accurate to a few minutes near the modern epoch. Each apsis is returned with the geocentric distance in AU and the Moon's apparent angular diameter in radians, and its time is TT: convert with `utc` for a civil clock time. The distance converts to a parallax with `moonParallax` (see [Lunar Parallax and Semidiameter](#lunar-parallax-and-semidiameter)).
+The search uses the series of Meeus's chapter 50, with the periodic corrections for the true apsis; the mean apsis, without them, can differ from the true one by up to about a day. The series is accurate to a few minutes for the apogee but up to half an hour for the perigee, so `nearestLunarApsisOf` refines it on an [ephemeris source](#ephemeris-sources), as the extremum of the source's geometric Earth–Moon distance: under a second from DE440 on the analytical theories. Each apsis is returned with the geocentric distance in AU and the Moon's apparent angular diameter in radians, and its time is TT: convert with `utc` for a civil clock time. The distance converts to a parallax with `moonParallax` (see [Lunar Parallax and Semidiameter](#lunar-parallax-and-semidiameter)).
 
 ```ts
 import { nearestLunarApsis, nearestMeanLunarApsis } from 'nebulosa/src/astronomy/bodies/moon'
+import { analyticalEphemerisSource } from 'nebulosa/src/astronomy/ephemeris/source'
+import { nearestLunarApsisOf } from 'nebulosa/src/astronomy/events/almanac'
 import { Timescale, timeToDate, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
 import { toArcsec } from 'nebulosa/src/math/units/angle'
 import { toKilometer } from 'nebulosa/src/math/units/distance'
@@ -2685,6 +2697,11 @@ console.log(timeToDate(apogee).slice(0, 5), toKilometer(apogeeDistance)) // [202
 
 // The mean apogee, without the periodic corrections: a TT instant only, here about 10 hours after the true one.
 console.log(timeToDate(nearestMeanLunarApsis(start, 'APOGEE', true)).slice(0, 5)) // [2026, 1, 14, 6, 24]
+
+// The perigee refined on an ephemeris source, here the analytical theories: TT, distance, and diameter as above.
+const [refined, refinedDistance] = nearestLunarApsisOf(analyticalEphemerisSource, start, 'PERIGEE', true)
+
+console.log(timeToDate(refined).slice(0, 6), toKilometer(refinedDistance)) // [2026, 1, 1, 21, 45, 34] 360348
 ```
 
 ### Lunar Declination Extrema and Standstills
@@ -2943,10 +2960,12 @@ console.log(toArcsec(crescentWidth(moonSemidiameter(distance), 0.1))) // 186.51 
 
 The Moon cycles through its phases every synodic month, 29.53 days on average: new, first quarter, full, and last quarter, the instants when the Moon's geocentric ecliptic longitude exceeds the Sun's by 0°, 90°, 180°, and 270°. The synodic month varies by more than half a day because of the eccentricities of the lunar and terrestrial orbits, so the phases need a series, not a fixed period. A lunation is one such cycle, numbered consecutively from a conventional starting point, and different calendars and almanacs use different starting points.
 
-The phases come from the series of Meeus's chapter 49 with its periodic terms, as TT instants; convert them with `utc` for a civil time. Lunation numbers follow the Brown numbering by default; the Meeus index is 0 for the new moon of 6 January 2000, and the Goldstine, Hebrew, Islamic, and Thai conventions are also available, each a constant offset from it. For the illuminated fraction at an instant see [Meeus Algorithms](#meeus-algorithms).
+The phases come from the series of Meeus's chapter 49 with its periodic terms, as TT instants, within about 20 s of DE440; convert them with `utc` for a civil time. `nearestLunarPhaseOf` refines a phase on an [ephemeris source](#ephemeris-sources), as the instant the apparent ecliptic longitudes of date of its Moon and Sun differ by the phase angle: under a second from DE440 on the analytical theories. A lunation number counts mean lunations, so take it at the new moon that starts the lunation rather than at an arbitrary instant. Lunation numbers follow the Brown numbering by default; the Meeus index is 0 for the new moon of 6 January 2000, and the Goldstine, Hebrew, Islamic, and Thai conventions are also available, each a constant offset from it. For the illuminated fraction at an instant see [Meeus Algorithms](#meeus-algorithms).
 
 ```ts
 import { lunation, nearestLunarPhase } from 'nebulosa/src/astronomy/bodies/moon'
+import { analyticalEphemerisSource } from 'nebulosa/src/astronomy/ephemeris/source'
+import { nearestLunarPhaseOf } from 'nebulosa/src/astronomy/events/almanac'
 import { Timescale, timeToDate, timeYMDHMS, utc } from 'nebulosa/src/astronomy/time/time'
 
 const time = timeYMDHMS(2025, 9, 28, 0, 0, 0, Timescale.UTC)
@@ -2955,8 +2974,12 @@ const time = timeYMDHMS(2025, 9, 28, 0, 0, 0, Timescale.UTC)
 console.log(timeToDate(utc(nearestLunarPhase(time, 'FULL', true))).slice(0, 5)) // [2025, 10, 7, 3, 47] — UTC
 console.log(timeToDate(utc(nearestLunarPhase(time, 'NEW', true))).slice(0, 5)) // [2025, 10, 21, 12, 25] — UTC
 
-// Lunation numbers: Brown (default) and Meeus.
-console.log(lunation(time), lunation(time, 'MEEUS')) // 1271 318
+// The full moon refined on an ephemeris source, here the analytical theories.
+console.log(timeToDate(utc(nearestLunarPhaseOf(analyticalEphemerisSource, time, 'FULL', true))).slice(0, 6)) // [2025, 10, 7, 3, 47, 37] — UTC
+
+// Lunation numbers of the new moon that started the current lunation: Brown (default) and Meeus.
+const newMoon = nearestLunarPhaseOf(analyticalEphemerisSource, time, 'NEW', false)
+console.log(lunation(newMoon), lunation(newMoon, 'MEEUS')) // 1271 318
 ```
 
 ### Martian Satellite Theory (MARSSAT)

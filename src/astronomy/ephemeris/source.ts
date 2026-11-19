@@ -1,6 +1,7 @@
-import { J2000 } from '../../core/constants'
-import { vecPlus, vecZero } from '../../math/linear-algebra/vec3'
+import { DAYSEC, J2000, LIGHT_TIME_AU, SPEED_OF_LIGHT_AU_DAY } from '../../core/constants'
+import { type MutVec3, vecDivScalar, vecDot, vecLength, vecMinus, vecMulScalar, vecPlus, vecZero } from '../../math/linear-algebra/vec3'
 import type { PositionAndVelocity, PositionAndVelocityMut } from '../coordinates/astrometry'
+import { eraAb } from '../coordinates/erfa/erfa'
 import { type Time, Timescale, tdb, timeShift } from '../time/time'
 import type { SpkKernelSet, SpkMissReason } from './kernels/spk.kernelset'
 import * as elpmpp02 from './models/analytical/elpmpp02'
@@ -380,4 +381,33 @@ export function relativeEphemerisState(source: EphemerisSource, target: number, 
 		[a[0][0] - b[0][0], a[0][1] - b[0][1], a[0][2] - b[0][2]],
 		[a[1][0] - b[1][0], a[1][1] - b[1][1], a[1][2] - b[1][2]],
 	]
+}
+
+// Light travel time per AU, in days.
+const LIGHT_TIME_DAYS_PER_AU = LIGHT_TIME_AU / DAYSEC
+
+// Light-time iterations of an apparent geocentric position: the second leaves under a microsecond for the Sun and the
+// Moon, whose light times change by about 1e-8 day per day.
+const APPARENT_LIGHT_TIME_ITERATIONS = 2
+
+// Apparent geocentric position of a body from one source at an instant: the body where its light left it (light time
+// iterated against the barycentric Earth of the instant), seen with the annual aberration of the geocenter, without
+// light deflection. Returns a freshly allocated ICRF-oriented vector in AU whose length is the light-time corrected
+// distance; rotate it to the equator or ecliptic of date for an almanac quantity. Throws EphemerisMiss when the source
+// cannot give the body, the Earth, or the Sun.
+export function apparentGeocentricPosition(source: EphemerisSource, naif: number, time: Time): MutVec3 {
+	const [earth, earthVelocity] = source.state(399, time)
+	let geometric = vecMinus(source.state(naif, time)[0], earth)
+
+	for (let i = 0; i < APPARENT_LIGHT_TIME_ITERATIONS; i++) {
+		const tau = vecLength(geometric) * LIGHT_TIME_DAYS_PER_AU
+		geometric = vecMinus(source.state(naif, timeShift(time, -tau))[0], earth)
+	}
+
+	const distance = vecLength(geometric)
+	const sunDistance = naif === 10 ? distance : vecLength(vecMinus(source.state(10, time)[0], earth))
+	const velocity = vecDivScalar(earthVelocity, SPEED_OF_LIGHT_AU_DAY)
+	const direction = vecDivScalar(geometric, distance)
+	eraAb(direction, velocity, sunDistance, Math.sqrt(1 - vecDot(velocity, velocity)), direction)
+	return vecMulScalar(direction, distance, direction)
 }
