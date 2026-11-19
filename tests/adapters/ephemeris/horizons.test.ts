@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, spyOn, test } from 'bun:test'
 import { elements, type ObserverWithOsculatingElements, type ObserverWithTLE, observer, Quantity, spkFile, vector } from '../../../src/adapters/ephemeris/horizons'
 import { readDaf } from '../../../src/astronomy/ephemeris/kernels/daf'
 import { extendedPermanentAsteroidNumber } from '../../../src/astronomy/ephemeris/kernels/naif'
@@ -249,6 +249,54 @@ test.skipIf(SKIP)('spkFile', async () => {
 	expect(vx).toBeCloseTo(-5.373889588848743e-3, 10)
 	expect(vy).toBeCloseTo(-8.634062784008313e-3, 10)
 	expect(vz).toBeCloseTo(-3.234414083822303e-3, 10)
+})
+
+test.skipIf(SKIP)('spkFile of a periodic comet with several apparitions', async () => {
+	// 161P/Hartley-IRAS has the 2004 and 2021 apparition records under the same SPK-ID.
+	const file = await spkFile(1000042, START_TIME, END_TIME)
+
+	expect(file.spk).not.toBeEmpty()
+
+	const s = readSpk(await readDaf(bufferSource(Buffer.from(file.spk!, 'base64'))))
+	expect(s.segment(10, 1000042)).toBeDefined()
+})
+
+test('spkFile asks again for the closest apparition when Horizons lists several records', async () => {
+	const matches = `*******************************************************************************
+JPL/DASTCOM            Small-body Index Search Results     2026-Nov-19 07:18:08
+
+ Comet AND asteroid index search:
+
+    DES = 1000042;
+
+ Matching small-bodies:
+
+    Record #  Epoch-yr  >MATCH DESIG<  Primary Desig  Name
+    --------  --------  -------------  -------------  -------------------------
+    90001107    2004    1000042        161P            Hartley-IRAS
+    90001108    2021    1000042        161P            Hartley-IRAS
+
+ (2 matches. To SELECT, enter record # (integer), followed by semi-colon.)
+*******************************************************************************
+`
+	const fetch = spyOn(globalThis, 'fetch')
+
+	try {
+		fetch.mockResolvedValueOnce(Response.json({ result: matches })).mockResolvedValueOnce(Response.json({ spk: 'AAAA', result: 'Rec #:90001108' }))
+		const file = await spkFile(1000042, START_TIME, END_TIME)
+
+		expect(file.spk).toBe('AAAA')
+		expect(fetch).toHaveBeenCalledTimes(2)
+		const input = fetch.mock.calls[1][0]
+		const command = new URL(input instanceof Request ? input.url : input).searchParams.get('COMMAND')
+		expect(command).toMatch(/^'DES=1000042;CAP<\d+\.\d;'$/)
+
+		fetch.mockResolvedValueOnce(Response.json({ error: 'Cannot find object' }))
+		expect(await spkFile(1, START_TIME, END_TIME)).toEqual({ error: 'Cannot find object' })
+		expect(fetch).toHaveBeenCalledTimes(3)
+	} finally {
+		fetch.mockRestore()
+	}
 })
 
 function expectCsvRow(row: CsvRow, expected: readonly (string | number | null)[]) {

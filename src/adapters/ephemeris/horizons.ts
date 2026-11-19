@@ -264,6 +264,8 @@ export interface HorizonsTLEParameters extends HorizonsCommonParameters {
 export interface SpkFile {
 	readonly spk?: string
 	readonly error?: string
+	// Text Horizons answered with, such as the target summary or, when no SPK was generated, its small-body search results.
+	readonly result?: string
 }
 
 // Observer-table output quantity codes (the QUANTITIES parameter); each selects one column group.
@@ -394,12 +396,38 @@ export async function elements(input: string | ObserverWithOsculatingElements | 
 
 // Requests an SPK binary kernel for the small body designation `id` over [startTime, endTime].
 // `options.headers` are sent with the request, such as the User-Agent JPL asks of automated clients.
+// A designation that matches several records, such as the apparitions of a periodic comet or a comet and
+// its fragments, generates no kernel: Horizons lists the records instead. The request is then sent once
+// more for the apparition closest before startTime and without fragments, as observer, vector, and
+// elements requests do; the answer of that second request is returned whatever it is.
 export async function spkFile(id: number, startTime: Temporal | Time, endTime: Temporal | Time, signal?: AbortSignal, options: Pick<ObserverVectorElementsOptions, 'headers'> = {}) {
 	const parameters = structuredClone(DEFAULT_SPK_PARAMETERS) as HorizonsQueryParameters
-	parameters.COMMAND = `DES=${id};`
+	const command = `DES=${id};`
+	parameters.COMMAND = command
 	makeParametersFromStartAndStopTime(parameters, startTime, endTime)
-	const response = await makeRequestAndGetResponse(parameters, 'json', signal, options.headers)
+	const file = await requestSpkFile(parameters, signal, options.headers)
+	if (file.spk || !file.result) return file
+
+	const identification = identifyTable(file.result)
+	const retryPlan = identification?.kind === 'smallBodyMatch' ? analyzeSmallBodyMatches(identification.matches) : undefined
+	if (retryPlan === undefined) return file
+
+	parameters.COMMAND = retryCommand(command, retryPlan, startTime)
+	return await requestSpkFile(parameters, signal, options.headers)
+}
+
+// Sends an SPK-file request and reads its JSON answer.
+async function requestSpkFile(parameters: HorizonsQueryParameters, signal?: AbortSignal, headers?: HeadersInit) {
+	const response = await makeRequestAndGetResponse(parameters, 'json', signal, headers)
 	return (await response.json()) as SpkFile
+}
+
+// Returns a small-body COMMAND narrowed by a retry plan: NOFRAG to leave out fragments and CAP<JD to take the
+// apparition closest before a time, each appended once.
+function retryCommand(input: string, retryPlan: HorizonsRetryPlan, time: Temporal | Time) {
+	if (retryPlan.useNoFrag && !input.includes(';NOFRAG')) input += 'NOFRAG;'
+	if (retryPlan.useCap && !input.includes(';CAP')) input += `CAP<${(typeof time === 'number' ? toJulianDay(timeUnix(time / 1000)) : toJulianDay(time)).toFixed(1)};`
+	return input
 }
 
 async function makeRequestAndGetResponseWithRetry(input: string | ObserverWithOsculatingElements | ObserverWithTLE, time: Temporal | Time, parameters: HorizonsQueryParameters, options: ObserverVectorElementsOptions, signal?: AbortSignal) {
@@ -411,12 +439,7 @@ async function makeRequestAndGetResponseWithRetry(input: string | ObserverWithOs
 		const retryPlan = analyzeSmallBodyMatches(identification.matches)
 
 		if (retryPlan !== undefined) {
-			if (retryPlan.useNoFrag && !input.includes(';NOFRAG')) input += 'NOFRAG;'
-			if (retryPlan.useCap && !input.includes(';CAP')) {
-				if (typeof time === 'number') input += `CAP<${toJulianDay(timeUnix(time / 1000)).toFixed(1)};`
-				else input += `CAP<${toJulianDay(time).toFixed(1)};`
-			}
-			makeParametersFromInput(parameters, input)
+			makeParametersFromInput(parameters, retryCommand(input, retryPlan, time))
 			const response = await makeRequestAndGetResponse(parameters, 'text', signal, options.headers)
 			const identification = identifyTable(await response.text())
 			if (identification?.kind === 'ephemeris') return parseEphemerisTable(identification, options)
