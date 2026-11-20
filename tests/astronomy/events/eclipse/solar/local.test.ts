@@ -18,9 +18,9 @@ import {
 	type LocalSolarEclipseViewOptions,
 	type LocalSolarEclipseCircumstances,
 } from '../../../../../src/astronomy/events/eclipse/solar/local'
-import { computePolynomialBesselianElements, refineSolarEclipse, type PolynomialBesselianElements } from '../../../../../src/astronomy/events/eclipse/solar/map'
+import { besselianSampleAtJulianDay, computePolynomialBesselianElements, projectFundamentalPoint, refineSolarEclipse, type PolynomialBesselianElements } from '../../../../../src/astronomy/events/eclipse/solar/map'
 import { timeToDate, timeYMD, timeYMDHMS, Timescale, toJulianDay, type Time } from '../../../../../src/astronomy/time/time'
-import { ASEC2RAD, PI, PIOVERFOUR, PIOVERTWO, RAD2DEG, TAU } from '../../../../../src/core/constants'
+import { ASEC2RAD, EARTH_RADIUS_KM, PI, PIOVERFOUR, PIOVERTWO, RAD2DEG, TAU } from '../../../../../src/core/constants'
 import { sphericalSeparation } from '../../../../../src/math/numerical/geometry'
 import { deg, normalizeAngle, normalizePI } from '../../../../../src/math/units/angle'
 
@@ -801,6 +801,66 @@ describe('path width', () => {
 	test('is absent outside the path', () => {
 		const { details } = computeLocalSolarEclipseCircumstances(total2024.pbe, deg(-74.006), deg(40.7128), { sunMoonPosition, horizonAltitude: 0 })
 		expect(details.pathWidthKm).toBeUndefined()
+	})
+})
+
+describe('distance from the central line', () => {
+	// Brute force: the ground distance (km) to the shadow axis every second of the 2 h either side of jd, and the
+	// compass side of the nearest point, independent of the coarse grid and refinement under test.
+	function bruteForce(pbe: PolynomialBesselianElements, lon: number, lat: number, jd: number) {
+		let best = Infinity
+		let nearest = { x: 0, y: 0 }
+
+		for (let t = jd - 2 / 24; t <= jd + 2 / 24; t += 1 / 86400) {
+			const sample = besselianSampleAtJulianDay(pbe, t)
+			const point = projectFundamentalPoint(sample, sample.x, sample.y)
+			if (!point) continue
+			const separation = sphericalSeparation(deg(lon), deg(lat), point.x, point.y)
+
+			if (separation < best) {
+				best = separation
+				nearest = point
+			}
+		}
+
+		const dLongitude = deg(lon) - nearest.x
+		const bearing = normalizeAngle(Math.atan2(Math.sin(dLongitude) * Math.cos(deg(lat)), Math.cos(nearest.y) * Math.sin(deg(lat)) - Math.sin(nearest.y) * Math.cos(deg(lat)) * Math.cos(dLongitude)))
+		return { distanceKm: best * EARTH_RADIUS_KM, side: (['north', 'northeast', 'east', 'southeast', 'south', 'southwest', 'west', 'northwest'] as const)[Math.round(bearing / PIOVERFOUR) % 8] }
+	}
+
+	test('is zero on the central line, where the place has no side', () => {
+		const ge = computeGreatestEclipseCircumstances(total2024.pbe)!
+		const distance = computeLocalSolarEclipseCircumstances(total2024.pbe, ge.longitude, ge.latitude, { sunMoonPosition }).details.centralLineDistance!
+		expect(distance.distanceKm).toBeLessThan(1)
+		expect(distance.side).toBeUndefined()
+	})
+
+	test.each([
+		['Dallas', -96.8, 32.78],
+		['New York', -74.006, 40.7128],
+		['Honolulu', -157.86, 21.3],
+	])('matches a one-second search of the shadow axis from %s', (_, lon, lat) => {
+		const c = localCircumstances(total2024.pbe, lon, lat)
+		const distance = c.details.centralLineDistance!
+		const reference = bruteForce(total2024.pbe, lon, lat, c.events.MAX!.jd)
+		expect(Math.abs(distance.distanceKm - reference.distanceKm)).toBeLessThan(0.1)
+		expect(distance.side).toBe(reference.side)
+	})
+
+	test('lies within half the path width inside the path and beyond it outside', () => {
+		const dallas = localCircumstances(total2024.pbe, -96.8, 32.78).details
+		expect(dallas.centralLineDistance!.distanceKm).toBeGreaterThan(1)
+		expect(dallas.centralLineDistance!.distanceKm).toBeLessThan(dallas.pathWidthKm! / 2)
+		// The 2024 path ran north-east across Texas: Dallas lay north-west of the central line, Austin south-east.
+		expect(dallas.centralLineDistance!.side).toBe('northwest')
+		expect(localCircumstances(total2024.pbe, -97.74, 30.27).details.centralLineDistance!.side).toBe('southeast')
+		const newYork = localCircumstances(total2024.pbe, -74.006, 40.7128).details
+		expect(newYork.pathWidthKm).toBeUndefined()
+		expect(newYork.centralLineDistance!.distanceKm).toBeGreaterThan(100)
+	})
+
+	test('is absent for an eclipse without a central line', () => {
+		expect(localCircumstances(partial2025.pbe, 174.78, -41.29).details.centralLineDistance).toBeUndefined()
 	})
 })
 

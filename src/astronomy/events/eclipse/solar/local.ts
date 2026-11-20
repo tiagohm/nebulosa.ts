@@ -1,7 +1,7 @@
 import { ASEC2RAD, DAYSEC, EARTH_RADIUS_KM, PI } from '../../../../core/constants'
 import type { Writable } from '../../../../core/types'
 import { NumberComparator } from '../../../../core/util'
-import type { Point } from '../../../../math/numerical/geometry'
+import { type Point, sphericalSeparation } from '../../../../math/numerical/geometry'
 import { clamp } from '../../../../math/numerical/math'
 import { bisection, brentMinimize, type RootFindingOptions } from '../../../../math/numerical/optimization'
 import { type Angle, normalizeAngle, normalizePI } from '../../../../math/units/angle'
@@ -166,6 +166,10 @@ export interface LocalSolarEclipseCircumstances {
 		// Width of the path through the place, in km: the distance between the limits of the central phase, across the
 		// central line (computeCentralPathWidthKm); undefined outside the central phase.
 		readonly pathWidthKm?: number
+		// Ground distance from the place to the central line and the side of it the place is on
+		// (computeCentralLineDistance), inside the path or outside it; undefined for an eclipse without a central
+		// line, or a place without a local maximum.
+		readonly centralLineDistance?: CentralLineDistance
 	}
 	readonly events: {
 		readonly C1?: LocalSolarEclipseEvent
@@ -1421,8 +1425,84 @@ export function computeCentralPathWidthKm(pbe: PolynomialBesselianElements, long
 	return left === undefined || right === undefined ? undefined : left + right
 }
 
-// Computes the local detail summary (magnitude, ratios and durations) from the resolved events.
-function computeLocalDetails(events: LocalSolarEclipseCircumstances['events'], shadowPathWidthKm: number | undefined, pathWidthKm: number | undefined): LocalSolarEclipseCircumstances['details'] {
+// Side of the central line a place is on: the point of the eight-point compass nearest the bearing from the closest
+// point of the central line to the place, which is across the line, so a path running north-east has its sides
+// north-west and south-east.
+export type CentralLineSide = 'north' | 'northeast' | 'east' | 'southeast' | 'south' | 'southwest' | 'west' | 'northwest'
+
+// Distance from a place to the central line of an eclipse, and the side of the line it is on.
+export interface CentralLineDistance {
+	// Ground distance (km, on a sphere of radius EARTH_RADIUS_KM) from the place to the nearest point of the
+	// central line, ≥ 0.
+	readonly distanceKm: number
+	// Side of the line the place is on; undefined within CENTRAL_LINE_SIDE_MIN_KM of the line.
+	readonly side?: CentralLineSide
+}
+
+// Distance (km) under which a place counts as on the central line and has no side: about the accuracy of a
+// central line drawn from the polynomial Besselian elements.
+const CENTRAL_LINE_SIDE_MIN_KM = 1
+
+// Step (days) of the coarse search for the shadow axis's closest passage over a place: 1 minute, over which the
+// axis moves some tens to a few hundred km on the ground, so the nearest sample brackets the closest point
+// between its neighbors.
+const CENTRAL_LINE_SEARCH_STEP = 1 / 1440
+
+// Sides by eighth of a turn of bearing, from north through east.
+const CENTRAL_LINE_SIDES: readonly CentralLineSide[] = ['north', 'northeast', 'east', 'southeast', 'south', 'southwest', 'west', 'northwest']
+
+// Distance from a place to the central line of an eclipse: the least ground distance from the place (east-positive
+// longitude and geodetic latitude, radians) to the point where the shadow axis meets the Earth, over the passage
+// window of CENTRAL_PATH_PASSAGE_HALF_SPAN on either side of jd. It is found on a CENTRAL_LINE_SEARCH_STEP grid
+// and refined with Brent's method between the neighbors of the nearest sample, so it holds inside the path and
+// outside it; beyond an end of the central line the nearest point is that end. The side is the compass point
+// nearest the bearing from that point to the place. Returns undefined when the axis misses the Earth throughout the
+// window. Each of its about 270 probes allocates one projected point.
+//   jd: Julian Day of the place's local maximum, near which the axis passes closest.
+function computeCentralLineDistance(pbe: PolynomialBesselianElements, longitude: Angle, latitude: Angle, jd: number): CentralLineDistance | undefined {
+	// The separation (radians) from the place to the axis on the ground at an instant; PI, more than any separation,
+	// while the axis misses the Earth, so the minimizer stays on the central line.
+	const separationAt = (instant: number) => {
+		const sample = besselianSampleAtJulianDay(pbe, instant)
+		const point = projectFundamentalPoint(sample, sample.x, sample.y)
+		return point ? sphericalSeparation(longitude, latitude, point.x, point.y) : PI
+	}
+
+	const start = jd - CENTRAL_PATH_PASSAGE_HALF_SPAN
+	const count = Math.round((2 * CENTRAL_PATH_PASSAGE_HALF_SPAN) / CENTRAL_LINE_SEARCH_STEP)
+	let nearest = -1
+	let nearestSeparation = PI
+
+	for (let i = 0; i <= count; i++) {
+		const separation = separationAt(start + i * CENTRAL_LINE_SEARCH_STEP)
+
+		if (separation < nearestSeparation) {
+			nearest = i
+			nearestSeparation = separation
+		}
+	}
+
+	if (nearest < 0) return undefined
+
+	const lo = start + Math.max(0, nearest - 1) * CENTRAL_LINE_SEARCH_STEP
+	const hi = start + Math.min(count, nearest + 1) * CENTRAL_LINE_SEARCH_STEP
+	const { minimum, value } = brentMinimize(separationAt, lo, hi)
+	const instant = value <= nearestSeparation ? minimum : start + nearest * CENTRAL_LINE_SEARCH_STEP
+	const sample = besselianSampleAtJulianDay(pbe, instant)
+	const point = projectFundamentalPoint(sample, sample.x, sample.y)
+	if (!point) return undefined
+
+	const distanceKm = sphericalSeparation(longitude, latitude, point.x, point.y) * EARTH_RADIUS_KM
+	if (distanceKm < CENTRAL_LINE_SIDE_MIN_KM) return { distanceKm }
+
+	const dLongitude = longitude - point.x
+	const bearing = normalizeAngle(Math.atan2(Math.sin(dLongitude) * Math.cos(latitude), Math.cos(point.y) * Math.sin(latitude) - Math.sin(point.y) * Math.cos(latitude) * Math.cos(dLongitude)))
+	return { distanceKm, side: CENTRAL_LINE_SIDES[Math.round(bearing / (PI / 4)) % 8] }
+}
+
+// Computes the local detail summary (magnitude, ratios, durations, widths, and the distance to the central line)
+// from the resolved events.
+function computeLocalDetails(events: LocalSolarEclipseCircumstances['events'], shadowPathWidthKm: number | undefined, pathWidthKm: number | undefined, centralLineDistance: CentralLineDistance | undefined): LocalSolarEclipseCircumstances['details'] {
 	const { C1, C2, MAX, C3, C4 } = events
 
 	return {
@@ -1432,6 +1512,7 @@ function computeLocalDetails(events: LocalSolarEclipseCircumstances['events'], s
 		centralPhaseDuration: C2 !== undefined && C3 !== undefined ? (C3.jd - C2.jd) * DAYSEC : undefined,
 		shadowPathWidthKm,
 		pathWidthKm,
+		centralLineDistance,
 	}
 }
 
@@ -1614,7 +1695,8 @@ export function computeLocalSolarEclipseCircumstances(pbe: PolynomialBesselianEl
 	const visibility = computeLocalVisibility(events, pbe, longitude, latitude, options)
 	const shadowPathWidthKm = events.MAX !== undefined && events.MAX.centralPhaseKind !== 'none' ? computeLocalShadowPathWidthKm(pbe, longitude, latitude, events.MAX.jd) : undefined
 	const pathWidthKm = events.MAX !== undefined && events.MAX.centralPhaseKind !== 'none' ? computeCentralPathWidthKm(pbe, longitude, latitude, events.MAX.jd) : undefined
-	const details = computeLocalDetails(events, shadowPathWidthKm, pathWidthKm)
+	const centralLineDistance = events.MAX !== undefined && centralAxisIntersectsEarth(pbe) ? computeCentralLineDistance(pbe, longitude, latitude, events.MAX.jd) : undefined
+	const details = computeLocalDetails(events, shadowPathWidthKm, pathWidthKm, centralLineDistance)
 	const result: LocalSolarEclipseCircumstances = { location: { longitude, latitude }, visibility, details, events }
 	return result
 }
