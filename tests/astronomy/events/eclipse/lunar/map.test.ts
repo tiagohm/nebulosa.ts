@@ -3,9 +3,9 @@ import { nearestLunarEclipse } from '../../../../../src/astronomy/bodies/moon'
 import { analyticalEphemerisSource, interpolatedEphemerisSource } from '../../../../../src/astronomy/ephemeris/source'
 import { sunMoonPositionOf } from '../../../../../src/astronomy/events/eclipse/eclipse'
 import { moonAltitudeAt } from '../../../../../src/astronomy/events/eclipse/lunar/local'
-import { computeLunarEclipseMapGeometry, lunarEclipseEvents, lunarEclipseMapToSvgPaths, MOON_RADIUS_EARTH_RADII, refineLunarEclipse, type LunarEclipseContactKind } from '../../../../../src/astronomy/events/eclipse/lunar/map'
+import { computeLunarEclipseMapGeometry, computeLunarEclipseMapInstant, lunarEclipseEvents, lunarEclipseMapInstantToSvgPaths, lunarEclipseMapToSvgPaths, MOON_RADIUS_EARTH_RADII, refineLunarEclipse, type LunarEclipseContactKind } from '../../../../../src/astronomy/events/eclipse/lunar/map'
 import { PlateCarree } from '../../../../../src/astronomy/projections/projection'
-import { greenwichApparentSiderealTime, type Time, timeYMDHMS, Timescale, toJulianDay } from '../../../../../src/astronomy/time/time'
+import { greenwichApparentSiderealTime, type Time, timeShift, timeYMDHMS, Timescale, toJulianDay } from '../../../../../src/astronomy/time/time'
 import { PI, PIOVERTWO, TAU } from '../../../../../src/core/constants'
 import { deg, type Angle } from '../../../../../src/math/units/angle'
 import { longestProjectedSegment } from '../util'
@@ -504,6 +504,52 @@ describe('fill region polygons', () => {
 		expect(pointInPath(sub.x, sub.y, above)).toBe(true)
 		expect(pointInPath(anti.x, anti.y, above)).toBe(false)
 		expect(pointInPath(enclosedPole.x, enclosedPole.y, above)).toBe(true)
+	})
+})
+
+describe('map at an instant', () => {
+	const geometry = computeLunarEclipseMapGeometry(TOTAL, sunMoonPosition)
+	const projection = equirectangular(720, 360)
+	const max = geometry.events.find((event) => event.kind === 'MAX')!
+
+	test('reproduces a contact at its instant', () => {
+		const instant = computeLunarEclipseMapInstant(max.time, sunMoonPosition)
+		expect(instant.jd).toBe(max.jd)
+		expect(instant.sublunar.x).toBe(max.sublunar.x)
+		expect(instant.sublunar.y).toBe(max.sublunar.y)
+		expect(instant.horizonAltitude).toBe(max.horizonAltitude)
+
+		const contact = lunarEclipseMapToSvgPaths(geometry, projection)
+		const drawn = lunarEclipseMapInstantToSvgPaths(instant, projection)
+		expect(drawn.moonRiseSet).toBe(contact.moonRiseSet.MAX)
+		expect(drawn.sublunarPoint).toEqual(contact.sublunarPoints.MAX)
+
+		const filled = lunarEclipseMapToSvgPaths(geometry, projection, { fill: true, fillRegion: 'aboveHorizon' })
+		expect(lunarEclipseMapInstantToSvgPaths(instant, projection, { fill: true, fillRegion: 'aboveHorizon' }).moonRiseSet).toBe(filled.moonRiseSet.MAX)
+	})
+
+	test('moves the sublunar point west between two contacts, by the Earth rotation less the Moon motion', () => {
+		const u2 = geometry.events.find((event) => event.kind === 'U2')!
+		const half = (max.jd - u2.jd) / 2
+		const middle = computeLunarEclipseMapInstant(timeShift(u2.time, half), sunMoonPosition)
+		const westward = (a: Angle, b: Angle) => ((((a - b + PI) % TAU) + TAU) % TAU) - PI
+
+		// About 14.5 degrees per hour of longitude westward; the instant halfway between U2 and MAX is halfway between them.
+		expect(westward(u2.sublunar.x, middle.sublunar.x)).toBeGreaterThan(0)
+		expect(westward(middle.sublunar.x, max.sublunar.x)).toBeCloseTo(westward(u2.sublunar.x, middle.sublunar.x), 3)
+	})
+
+	test('every point of the curve has the Moon on the horizon, and its region holds the sublunar point', () => {
+		const time = timeShift(max.time, 0.03)
+		const instant = computeLunarEclipseMapInstant(time, sunMoonPosition)
+
+		for (const point of instant.curve[0].filter((_, i) => i % 30 === 0)) {
+			expect(moonAltitudeAt(time, point.x, point.y, sunMoonPosition)).toBeCloseTo(0, 3)
+		}
+
+		const { moonRiseSet, sublunarPoint } = lunarEclipseMapInstantToSvgPaths(instant, projection, { fill: true, fillRegion: 'aboveHorizon' })
+		expect(moonRiseSet.endsWith('Z')).toBe(true)
+		expect(pointInPath(sublunarPoint!.x, sublunarPoint!.y, moonRiseSet)).toBe(true)
 	})
 })
 

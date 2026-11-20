@@ -107,6 +107,12 @@ export interface LunarEclipseMapEvent extends LunarEclipseContact {
 	readonly sublunar: EclipseGeoPoint
 }
 
+// The Moon's place over the map at one instant, with its moon rise/set curve (see computeLunarEclipseMapInstant).
+export interface LunarEclipseMapInstant extends Omit<LunarEclipseMapEvent, 'kind'> {
+	// Moon rise/set (horizon) curve at the instant: one closed, unsplit branch, like a contact's curve.
+	readonly curve: EclipseGeoCurve
+}
+
 // Per-contact moon rise/set (horizon) curves. Each curve is the small circle where the observer's topocentric
 // Moon altitude equals the contact's visibility horizon; it is kept unsplit (one closed branch) and
 // projection-agnostic, the antimeridian split happening only at serialization time.
@@ -457,14 +463,32 @@ function horizonCircle(sublunarLat: Angle, sublunarLon: Angle, h0: Angle, distan
 	return points
 }
 
-// Builds one map event from a contact: computes the apparent Moon position, GAST, the effective horizon and
-// the sublunar point. For 'upperLimb' the base horizon is lowered by this event's actual apparent semidiameter
-// (from the Moon distance), not a mean, so a near-perigee eclipse marks the upper limb on the right boundary.
-//   baseHorizon: distance-independent horizon altitude (configured horizon minus refraction).
-//   limbVisibility: 'center' marks the Moon center on the horizon; 'upperLimb' marks the upper limb.
-function buildMapEvent(contact: LunarEclipseContact, sunMoonPosition: SunMoonProvider, baseHorizon: Angle, limbVisibility: LunarLimbVisibility): LunarEclipseMapEvent {
-	const position = sunMoonPosition(contact.time)
-	const gast = contactGast(contact.time, position.deltaT ?? 0)
+// Map options resolved for drawing: the curve spacing, the distance-independent base horizon, and the limb criterion.
+interface ResolvedMapOptions {
+	// Geodesic spacing (radians) between neighboring horizon-curve points, finite and positive.
+	readonly maxAngularStep: Angle
+	// Distance-independent visibility-horizon altitude (radians): the configured horizon minus refraction when on.
+	readonly baseHorizon: Angle
+	// Whether the curve marks the Moon's center or its upper limb on the horizon.
+	readonly limbVisibility: LunarLimbVisibility
+}
+
+// Resolves the map geometry options, falling back to the defaults for an absent or non-finite value (and a
+// non-positive step), so a contact curve and an instant curve are always drawn alike.
+function resolveMapOptions(options: LunarEclipseMapGeometryOptions): ResolvedMapOptions {
+	const maxAngularStep = options.maxAngularStep !== undefined && Number.isFinite(options.maxAngularStep) && options.maxAngularStep > 0 ? options.maxAngularStep : DEFAULT_MAX_ANGULAR_STEP
+	const horizonAltitude = options.horizonAltitude !== undefined && Number.isFinite(options.horizonAltitude) ? options.horizonAltitude : 0
+	return { maxAngularStep, baseHorizon: baseHorizonAltitude(horizonAltitude, options.refraction ?? false), limbVisibility: options.limbVisibility ?? 'center' }
+}
+
+// Builds the Moon's place over the map at one instant: the apparent Moon position, GAST, the effective horizon
+// and the sublunar point. For 'upperLimb' the base horizon is lowered by the actual apparent semidiameter at the
+// instant (from the Moon distance), not a mean, so a near-perigee eclipse marks the upper limb on the right boundary.
+//   time: instant in a dynamical scale (TT/TDB); jd: its Julian Day, stamped on the sublunar point.
+//   options: resolved map options (see resolveMapOptions).
+function buildMapState(time: Time, jd: number, sunMoonPosition: SunMoonProvider, { baseHorizon, limbVisibility }: ResolvedMapOptions): Omit<LunarEclipseMapEvent, 'kind'> {
+	const position = sunMoonPosition(time)
+	const gast = contactGast(time, position.deltaT ?? 0)
 	const rightAscension = position.moon.rightAscension
 	const declination = position.moon.declination
 	const distance = position.moon.distance
@@ -472,13 +496,14 @@ function buildMapEvent(contact: LunarEclipseContact, sunMoonPosition: SunMoonPro
 	const h0 = limbVisibility === 'upperLimb' ? baseHorizon - moonSemidiameter(distance) : baseHorizon
 
 	return {
-		...contact,
+		time,
+		jd,
 		rightAscension,
 		declination,
 		gast,
 		distance,
 		horizonAltitude: h0,
-		sublunar: { x: sublunarLon, y: declination, jd: contact.jd },
+		sublunar: { x: sublunarLon, y: declination, jd },
 	}
 }
 
@@ -488,22 +513,31 @@ function buildMapEvent(contact: LunarEclipseContact, sunMoonPosition: SunMoonPro
 //   sunMoonPosition: apparent Sun/Moon position provider at a dynamical time (see computeSunMoonPositionAt).
 //   options: curve sampling and visibility-horizon options.
 export function computeLunarEclipseMapGeometry(eclipse: LunarEclipse, sunMoonPosition: SunMoonProvider, options: LunarEclipseMapGeometryOptions = {}): LunarEclipseMapGeometry {
-	const maxAngularStep = options.maxAngularStep !== undefined && Number.isFinite(options.maxAngularStep) && options.maxAngularStep > 0 ? options.maxAngularStep : DEFAULT_MAX_ANGULAR_STEP
-	const horizonAltitude = options.horizonAltitude !== undefined && Number.isFinite(options.horizonAltitude) ? options.horizonAltitude : 0
-	const baseHorizon = baseHorizonAltitude(horizonAltitude, options.refraction ?? false)
-	const limbVisibility = options.limbVisibility ?? 'center'
-
+	const resolved = resolveMapOptions(options)
 	const contacts = lunarEclipseEvents(eclipse)
 	const events = new Array<LunarEclipseMapEvent>(contacts.length)
 	const moonRiseSet: Writable<LunarEclipseContactCurves> = {}
 
 	for (let i = 0; i < contacts.length; i++) {
-		const event = buildMapEvent(contacts[i], sunMoonPosition, baseHorizon, limbVisibility)
+		const contact = contacts[i]
+		const event: LunarEclipseMapEvent = { ...buildMapState(contact.time, contact.jd, sunMoonPosition, resolved), kind: contact.kind }
 		events[i] = event
-		moonRiseSet[event.kind] = [horizonCircle(event.declination, event.sublunar.x, event.horizonAltitude, event.distance, event.jd, maxAngularStep)]
+		moonRiseSet[event.kind] = [horizonCircle(event.declination, event.sublunar.x, event.horizonAltitude, event.distance, event.jd, resolved.maxAngularStep)]
 	}
 
 	return { eclipse, events, lines: { moonRiseSet } }
+}
+
+// Computes the map geometry at one instant, such as between two contacts: the Moon's place over the Earth and its
+// moon rise/set curve, drawn exactly as a contact's (same horizon, parallax reduction, limb criterion, and spacing),
+// so an instant at a contact's time reproduces that contact. Any instant is accepted; the eclipse is not needed.
+//   time: instant in a dynamical scale (TT/TDB).
+//   sunMoonPosition: apparent Sun/Moon position provider at a dynamical time (see computeSunMoonPositionAt).
+//   options: curve sampling and visibility-horizon options, as for computeLunarEclipseMapGeometry.
+export function computeLunarEclipseMapInstant(time: Time, sunMoonPosition: SunMoonProvider, options: LunarEclipseMapGeometryOptions = {}): LunarEclipseMapInstant {
+	const resolved = resolveMapOptions(options)
+	const state = buildMapState(time, toJulianDay(time), sunMoonPosition, resolved)
+	return { ...state, curve: [horizonCircle(state.declination, state.sublunar.x, state.horizonAltitude, state.distance, state.jd, resolved.maxAngularStep)] }
 }
 
 // Serializes one optional contact curve into SVG path data, splitting at the antimeridian during projection.
@@ -695,7 +729,16 @@ const POLAR_CAP_FILL_PROJECTION_OPTIONS: ProjectionOptions = { centralMeridian: 
 //   centralMeridian: effective central meridian (radians) the open curves and sublunar points are projected with
 //   (call-time options.projectionOptions first, then the projection's own options); recenters the ring into it.
 //   direction: effective longitude axis ('east'/'west'), resolved the same way, so the fill follows the curves.
-function contactFillPath(event: LunarEclipseMapEvent | undefined, curve: EclipseGeoCurve | undefined, projection: CylindricalProjection, region: LunarEclipseFillRegion, precision: number, projectionOptions: ProjectionOptions, centralMeridian: Angle, direction: RaAxisDirection) {
+function contactFillPath(
+	event: Pick<LunarEclipseMapEvent, 'declination' | 'horizonAltitude' | 'distance'> | undefined,
+	curve: EclipseGeoCurve | undefined,
+	projection: CylindricalProjection,
+	region: LunarEclipseFillRegion,
+	precision: number,
+	projectionOptions: ProjectionOptions,
+	centralMeridian: Angle,
+	direction: RaAxisDirection,
+) {
 	if (!curve || curve.length === 0) return ''
 
 	const ring = curve[0]
@@ -709,6 +752,58 @@ function contactFillPath(event: LunarEclipseMapEvent | undefined, curve: Eclipse
 
 	const capExceedsHemisphere = event ? capRadius(event.horizonAltitude, event.distance) > PIOVERTWO : false
 	return nonPolarCapFillPath(wrappedRing, projection, region, capExceedsHemisphere, precision, projectionOptions)
+}
+
+// Frame in which the fill polygons are closed, resolved once per serialization.
+interface FillFrame {
+	// Which side of the horizon curve is filled.
+	readonly region: LunarEclipseFillRegion
+	// SVG coordinate precision (decimal places).
+	readonly precision: number
+	// Projection options with the ring's central-meridian-neutral frame applied (see POLAR_CAP_FILL_PROJECTION_OPTIONS).
+	readonly projectionOptions: ProjectionOptions
+	// Effective central meridian (radians) the open curves and sublunar points are projected with.
+	readonly centralMeridian: Angle
+	// Effective longitude axis direction.
+	readonly direction: RaAxisDirection
+}
+
+// Resolves the fill frame of a serialization. The effective central meridian and longitude axis take the call-time
+// projection options first, then the projection's own options, then the defaults - the same resolution project()
+// uses for the open curves and sublunar points, so the recentered fill follows them (reading only
+// projection.options here left the fill at the projection's central meridian while the curves shifted with
+// options.projectionOptions).
+function fillFrame(projection: CylindricalProjection, options: LunarEclipseMapSvgOptions): FillFrame {
+	return {
+		region: options.fillRegion ?? 'belowHorizon',
+		precision: options.precision ?? 2,
+		projectionOptions: { ...options.projectionOptions, ...POLAR_CAP_FILL_PROJECTION_OPTIONS },
+		centralMeridian: options.projectionOptions?.centralMeridian ?? projection.options?.centralMeridian ?? 0,
+		direction: options.projectionOptions?.raAxisDirection ?? projection.options?.raAxisDirection ?? 'east',
+	}
+}
+
+// SVG path data of the map at one instant, plus its projected sublunar point.
+export interface LunarEclipseMapInstantSvgPaths {
+	// When fill=false, the open horizon-curve path data, split at the antimeridian; when fill=true, the closed region
+	// polygon of the requested side, rendered with fill-rule "evenodd". Empty when the curve cannot be drawn.
+	readonly moonRiseSet: string
+	// Projected sublunar point, absent when the projection cannot place it.
+	readonly sublunarPoint?: Point
+}
+
+// Projects the map geometry at one instant (see computeLunarEclipseMapInstant) and serializes its horizon curve, or
+// with options.fill its region polygon, exactly as lunarEclipseMapToSvgPaths serializes a contact's, so an instant
+// drawn between the contacts lines up with them on the same map.
+export function lunarEclipseMapInstantToSvgPaths(instant: LunarEclipseMapInstant, projection: CylindricalProjection, options: LunarEclipseMapSvgOptions = DEFAULT_LUNAR_ECLIPSE_MAP_SVG_OPTIONS): LunarEclipseMapInstantSvgPaths {
+	const sublunarPoint = projection.project(instant.sublunar.x, instant.sublunar.y, undefined, options.projectionOptions)
+
+	if (options.fill) {
+		const { region, precision, projectionOptions, centralMeridian, direction } = fillFrame(projection, options)
+		return { moonRiseSet: contactFillPath(instant, instant.curve, projection, region, precision, projectionOptions, centralMeridian, direction), sublunarPoint }
+	}
+
+	return { moonRiseSet: curveToSvgPath(instant.curve, projection, options), sublunarPoint }
 }
 
 // Projects the lunar eclipse map geometry and serializes each contact's horizon curve into an SVG path data
@@ -725,16 +820,7 @@ export function lunarEclipseMapToSvgPaths(geometry: LunarEclipseMapGeometry, pro
 	}
 
 	if (options.fill) {
-		const region = options.fillRegion ?? 'belowHorizon'
-		const precision = options.precision ?? 2
-		const projectionOptions: ProjectionOptions = { ...options.projectionOptions, ...POLAR_CAP_FILL_PROJECTION_OPTIONS }
-
-		// Effective central meridian and longitude axis: call-time projection options first, then the projection's
-		// own options, then the defaults - the same resolution project() uses for the open curves and sublunar
-		// points, so the recentered fill follows them (reading only projection.options here left the fill at the
-		// projection's central meridian while the curves shifted with options.projectionOptions).
-		const centralMeridian = options.projectionOptions?.centralMeridian ?? projection.options?.centralMeridian ?? 0
-		const direction: RaAxisDirection = options.projectionOptions?.raAxisDirection ?? projection.options?.raAxisDirection ?? 'east'
+		const { region, precision, projectionOptions, centralMeridian, direction } = fillFrame(projection, options)
 
 		// The event per contact drives the fill topology (declination for the enclosed pole, horizon and distance
 		// for the cap radius). Absent contacts have no event and no curve, so contactFillPath returns ''.

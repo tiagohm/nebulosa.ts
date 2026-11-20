@@ -2791,13 +2791,15 @@ The visibility map of a lunar eclipse is drawn as one moonrise/moonset curve per
 
 Each curve is a circle on the globe, and on a cylindrical map it is split at the antimeridian into separate subpaths instead of a line across the whole map. The coordinates are those of the projection: with `PlateCarree`, `x` is the longitude and `y` the latitude, multiplied by the projection scale, with north up; since SVG `y` grows downward, the projection can be set to SVG axes. For shading, the curves can be returned as closed region polygons on the side where the Moon is down or up; they must be rendered with `fill-rule="evenodd"`, and they assume a projection over the full longitude range.
 
+The same curve can be drawn at any instant, such as between two contacts, to follow the eclipse as the Earth turns under the Moon: the sublunar point drifts west by about 14.5° of longitude an hour, the Earth's rotation less the Moon's own motion. `computeLunarEclipseMapInstant` and `lunarEclipseMapInstantToSvgPaths` draw it with the rules of the contacts, so an instant at a contact's time gives that contact's curve.
+
 ```ts
 import { nearestLunarEclipse } from 'nebulosa/src/astronomy/bodies/moon'
 import { analyticalEphemerisSource, interpolatedEphemerisSource } from 'nebulosa/src/astronomy/ephemeris/source'
 import { sunMoonPositionOf } from 'nebulosa/src/astronomy/events/eclipse/eclipse'
-import { computeLunarEclipseMapGeometry, lunarEclipseMapToSvgPaths } from 'nebulosa/src/astronomy/events/eclipse/lunar/map'
+import { computeLunarEclipseMapGeometry, computeLunarEclipseMapInstant, lunarEclipseMapInstantToSvgPaths, lunarEclipseMapToSvgPaths } from 'nebulosa/src/astronomy/events/eclipse/lunar/map'
 import { PlateCarree } from 'nebulosa/src/astronomy/projections/projection'
-import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { Timescale, timeShift, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
 
 // The Sun and the Moon of the eclipse: the analytical theories, interpolated for the dense searches.
 const sunMoonPosition = sunMoonPositionOf(interpolatedEphemerisSource(analyticalEphemerisSource))
@@ -2817,6 +2819,11 @@ console.log(paths.moonRiseSet.MAX.slice(0, 59)) // M151.16 -144.88L165.41 -144.7
 const filled = lunarEclipseMapToSvgPaths(geometry, projection, { fill: true })
 
 console.log(filled.moonRiseSet.MAX.endsWith('Z')) // true — a closed path
+
+// The curve and the sublunar point one hour after greatest eclipse, between two contacts.
+const instant = computeLunarEclipseMapInstant(timeShift(eclipse.maximalTime, 1 / 24), sunMoonPosition)
+
+console.log(lunarEclipseMapInstantToSvgPaths(instant, projection).sublunarPoint) // { x: 125.83, y: 9.99 } — 14.5° west of the MAX one
 ```
 
 ### Lunar Eclipse Search
