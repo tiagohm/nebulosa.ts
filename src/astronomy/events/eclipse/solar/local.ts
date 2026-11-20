@@ -207,6 +207,9 @@ export interface LocalSolarEclipseEvent {
 	// Solar altitude at the event in radians.
 	// Uses apparent Sun center altitude if sunMoonPosition is available, otherwise a Besselian approximation.
 	readonly sunAltitude: Angle
+	// Solar azimuth at the event in radians, from North through East, normalized to [0, TAU), computed like
+	// sunAltitude (apparent Sun center, or the Besselian approximation); 0 with the Sun at the zenith.
+	readonly sunAzimuth: Angle
 	// Position angle of the contact point on the solar limb, from celestial north toward east, normalized to
 	// [0, TAU). This is the table/circumstances angle: it coincides with the lunar-center angle at C1/MAX/C4
 	// and at annular C2/C3, but is opposite (center + PI) at total C2/C3 (internal tangency on the far limb).
@@ -509,27 +512,42 @@ function localStateAtJulianDay(pbe: PolynomialBesselianElements, longitude: Angl
 	return computeLocalFundamentalState(pbe, longitude, latitude, timeAtJulianDay(pbe.maximumTime, jd), state)
 }
 
-// Solar altitude (radians) at one instant. With a SunMoonPosition sample it uses the apparent Sun
-// right ascension/declination and Greenwich apparent sidereal time; without it, it falls back to the
-// Besselian shadow-axis altitude (an approximation: the axis is treated as the Sun direction and the
-// geodetic latitude is used directly, matching solarAltitudeAtPoint in sun.eclipse.ts).
-function computeSolarAltitude(time: Time, longitude: Angle, latitude: Angle, position?: SunMoonPosition, fallbackBesselian?: InstantBesselianElements) {
+// Local hour angle of the Sun (radians, westward, used only through its sine and cosine) at one instant and an
+// east-positive longitude. With a SunMoonPosition sample it uses the apparent Sun right ascension and Greenwich
+// apparent sidereal time; without it, it falls back to the hour angle of the Besselian shadow axis (an
+// approximation: the axis is treated as the Sun direction). The declination that goes with it is the sample's
+// apparent one, or the axis declination d of the fallback elements.
+function solarHourAngle(time: Time, longitude: Angle, position?: SunMoonPosition, fallbackBesselian?: InstantBesselianElements) {
 	if (position) {
 		const deltaT = position.deltaT ?? 0
 		const ttTime = tt(time)
 		const ut1Fraction = ttTime.fraction - deltaT / DAYSEC
 		const gast = eraGst06(ttTime.day, ut1Fraction, ttTime.day, ttTime.fraction, precessionNutationMatrix(ttTime))
-		const H = normalizePI(gast + longitude - position.sun.rightAscension)
-		const sinAltitude = Math.sin(latitude) * Math.sin(position.sun.declination) + Math.cos(latitude) * Math.cos(position.sun.declination) * Math.cos(H)
-		return Math.asin(clamp(sinAltitude, -1, 1))
+		return normalizePI(gast + longitude - position.sun.rightAscension)
 	}
 
-	if (!fallbackBesselian) throw new Error('computeSolarAltitude requires fallback Besselian elements when no Sun/Moon sample is supplied')
+	if (!fallbackBesselian) throw new Error('the solar hour angle requires fallback Besselian elements when no Sun/Moon sample is supplied')
 
-	const be = fallbackBesselian
-	const H = hourAngleFromLongitude(longitude, be.mu, be.deltaTLongitudeCorrection)
-	const sinAltitude = Math.sin(be.d) * Math.sin(latitude) + Math.cos(be.d) * Math.cos(latitude) * Math.cos(H)
+	return hourAngleFromLongitude(longitude, fallbackBesselian.mu, fallbackBesselian.deltaTLongitudeCorrection)
+}
+
+// Solar altitude (radians) at one instant, from solarHourAngle and its declination; the fallback uses the
+// geodetic latitude directly, matching solarAltitudeAtPoint in sun.eclipse.ts.
+function computeSolarAltitude(time: Time, longitude: Angle, latitude: Angle, position?: SunMoonPosition, fallbackBesselian?: InstantBesselianElements) {
+	const H = solarHourAngle(time, longitude, position, fallbackBesselian)
+	const d = position ? position.sun.declination : fallbackBesselian!.d
+	const sinAltitude = Math.sin(latitude) * Math.sin(d) + Math.cos(latitude) * Math.cos(d) * Math.cos(H)
 	return Math.asin(clamp(sinAltitude, -1, 1))
+}
+
+// Solar azimuth (radians, from North through East, normalized to [0, TAU)) at one instant, from solarHourAngle
+// and its declination like computeSolarAltitude. It is resolved with atan2, so it stays finite at the zenith, where
+// the direction is undefined and 0 is returned.
+function computeSolarAzimuth(time: Time, longitude: Angle, latitude: Angle, position?: SunMoonPosition, fallbackBesselian?: InstantBesselianElements) {
+	const H = solarHourAngle(time, longitude, position, fallbackBesselian)
+	const d = position ? position.sun.declination : fallbackBesselian!.d
+	const cosD = Math.cos(d)
+	return normalizeAngle(Math.atan2(-cosD * Math.sin(H), Math.sin(d) * Math.cos(latitude) - cosD * Math.sin(latitude) * Math.cos(H)))
 }
 
 // Topocentric local aspect of one contact, derived entirely from the local Besselian fundamental-plane
@@ -652,7 +670,7 @@ function describeEvent(kind: LocalEclipseContactKind, centralKind: LocalCentralP
 	}
 }
 
-// Builds one resolved local event at a Julian Day, including altitude, P/Z and the Local View cache.
+// Builds one resolved local event at a Julian Day, including the Sun's altitude and azimuth, P/Z and the Local View cache.
 function buildLocalEvent(kind: LocalEclipseContactKind, jd: number, pbe: PolynomialBesselianElements, longitude: Angle, latitude: Angle, options: LocalSolarEclipseCircumstancesOptions, state?: LocalFundamentalState): LocalSolarEclipseEvent {
 	const time = timeAtJulianDay(pbe.maximumTime, jd)
 	state = computeLocalFundamentalState(pbe, longitude, latitude, time, state)
@@ -660,6 +678,7 @@ function buildLocalEvent(kind: LocalEclipseContactKind, jd: number, pbe: Polynom
 	const position = options.sunMoonPosition?.(time)
 
 	const sunAltitude = computeSolarAltitude(time, longitude, latitude, position, state.be)
+	const sunAzimuth = computeSolarAzimuth(time, longitude, latitude, position, state.be)
 	const solarAngularRadius = computeSolarAngularRadius(position?.sun.distance)
 	const aspect = computeLocalTopocentricAspect(kind, state, time, longitude, latitude, position)
 
@@ -675,6 +694,7 @@ function buildLocalEvent(kind: LocalEclipseContactKind, jd: number, pbe: Polynom
 		time,
 		jd,
 		sunAltitude,
+		sunAzimuth,
 		// The table angles are the limb-contact angles; the Local View uses the center angles below.
 		positionAngle: aspect.contactPositionAngle,
 		zenithAngle: aspect.contactZenithAngle,

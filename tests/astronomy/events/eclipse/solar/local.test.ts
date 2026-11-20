@@ -22,7 +22,7 @@ import { computePolynomialBesselianElements, refineSolarEclipse, type Polynomial
 import { timeToDate, timeYMD, timeYMDHMS, Timescale, toJulianDay, type Time } from '../../../../../src/astronomy/time/time'
 import { ASEC2RAD, PI, PIOVERFOUR, PIOVERTWO, RAD2DEG, TAU } from '../../../../../src/core/constants'
 import { sphericalSeparation } from '../../../../../src/math/numerical/geometry'
-import { deg, normalizeAngle } from '../../../../../src/math/units/angle'
+import { deg, normalizeAngle, normalizePI } from '../../../../../src/math/units/angle'
 
 // The Sun and the Moon of the eclipses: the analytical theories, interpolated for the dense contact searches.
 const sunMoonPosition = sunMoonPositionOf(interpolatedEphemerisSource(analyticalEphemerisSource))
@@ -208,7 +208,32 @@ describe('local circumstances', () => {
 			expect(event.positionAngle!).toBeLessThan(TAU)
 			expect(event.zenithAngle!).toBeGreaterThanOrEqual(0)
 			expect(event.zenithAngle!).toBeLessThan(TAU)
+			expect(event.sunAzimuth).toBeGreaterThanOrEqual(0)
+			expect(event.sunAzimuth).toBeLessThan(TAU)
 		}
+	})
+
+	test('the Sun is in the east on a morning eclipse and in the west on an afternoon one', () => {
+		// Honolulu saw the 2024 eclipse in the morning, New York in the afternoon.
+		const morning = localCircumstances(total2024.pbe, -157.86, 21.3)
+		const afternoon = localCircumstances(total2024.pbe, -74, 40.71)
+
+		for (const kind of ['C1', 'MAX', 'C4'] as const) {
+			expect(morning.events[kind]!.sunAzimuth).toBeGreaterThan(0)
+			expect(morning.events[kind]!.sunAzimuth).toBeLessThan(PI)
+			expect(afternoon.events[kind]!.sunAzimuth).toBeGreaterThan(PI)
+			expect(afternoon.events[kind]!.sunAzimuth).toBeLessThan(TAU)
+		}
+
+		// The afternoon Sun keeps moving west through the eclipse.
+		expect(afternoon.events.C4!.sunAzimuth).toBeGreaterThan(afternoon.events.C1!.sunAzimuth)
+	})
+
+	test('the Besselian fallback gives nearly the apparent solar azimuth', () => {
+		const apparent = localCircumstances(total2024.pbe, -106.4, 23.25)
+		const besselian = computeLocalSolarEclipseCircumstances(total2024.pbe, deg(-106.4), deg(23.25))
+		// The shadow axis is not exactly the Sun direction and the contact instants differ slightly.
+		expect(Math.abs(normalizePI(besselian.events.MAX!.sunAzimuth - apparent.events.MAX!.sunAzimuth))).toBeLessThan(deg(0.5))
 	})
 })
 
@@ -387,6 +412,7 @@ describe('local view horizon geometry', () => {
 			time: total2024.eclipse.maximalTime,
 			jd: 0,
 			sunAltitude,
+			sunAzimuth: 0,
 			positionAngle: 0,
 			zenithAngle: 0,
 			visibility: 'aboveHorizon',
@@ -492,6 +518,7 @@ describe('computeLocalViewDiskPair', () => {
 			time: total2024.eclipse.maximalTime,
 			jd: 0,
 			sunAltitude: PIOVERTWO,
+			sunAzimuth: 0,
 			positionAngle: centerPositionAngle,
 			zenithAngle: 0,
 			visibility: 'aboveHorizon',
@@ -687,6 +714,13 @@ describe('greatest eclipse and greatest duration circumstances', () => {
 		expect(gd.pathWidthKm!).toBeGreaterThan(175)
 		expect(gd.pathWidthKm!).toBeLessThan(207)
 		expect(Math.abs(gd.centralDuration! - 397.07)).toBeLessThan(8)
+	})
+
+	test('1995-04-29 local maximum at the published greatest eclipse has its Sun altitude and azimuth', () => {
+		// Latitude 04°51.0'S, Longitude 079°23.8'W; Sun altitude 70.2°, azimuth 347.5° (NASA/GSFC).
+		const c = localCircumstances(pbe, -(79 + 23.8 / 60), -(4 + 51 / 60))
+		expect(Math.abs(c.events.MAX!.sunAltitude * RAD2DEG - 70.2)).toBeLessThan(0.5)
+		expect(Math.abs(c.events.MAX!.sunAzimuth * RAD2DEG - 347.5)).toBeLessThan(1)
 	})
 
 	test('greatest duration lasts at least as long as greatest eclipse and is a distinct, later point', () => {
