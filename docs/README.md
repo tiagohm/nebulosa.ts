@@ -2414,13 +2414,13 @@ console.log(listLocalLunarEclipses(deg(-46.6333), deg(-23.55), start, stop, sunM
 
 The local view of a lunar eclipse is the diagram eclipse circulars draw: the Earth's penumbra and umbra as two concentric circles, the Moon's disk at each contact, the path of its center through the shadow, and the observer's horizon. It shows at a glance which part of the Moon is eclipsed first and which contacts happen with the Moon above the horizon.
 
-`computeLocalLunarEclipseViewGeometry` builds it as plain shapes in SVG pixels (circles, a path, a polygon, and a line, with no text or markup) from the events of [Lunar Eclipse Local Circumstances](#lunar-eclipse-local-circumstances). It is a schematic of the Moon plane: the shadow center is fixed at the center of the view, the Moon is placed by its distance from the shadow axis and its position angle at each contact, and the diagram is oriented with the local zenith or celestial north up. The horizon offset uses a mean angular size, so it is meant for judging which side of the horizon a disk is on. SVG `y` grows downward.
+`computeLocalLunarEclipseViewGeometry` builds it as plain shapes in SVG pixels (circles, a path, a polygon, and a line, with no text or markup) from the events of [Lunar Eclipse Local Circumstances](#lunar-eclipse-local-circumstances). It is a schematic of the Moon plane: the shadow center is fixed at the center of the view, the Moon is placed by its distance from the shadow axis and its position angle at each contact, and the diagram is oriented with the local zenith or celestial north up. The horizon offset uses a mean angular size, so it is meant for judging which side of the horizon a disk is on. SVG `y` grows downward. Between the contacts, `computeLocalLunarEclipseInstant` gives the state at a fraction of the eclipse (0 is P1, 1 is P4): the Moon follows the contacts' own straight passage through the shadow, so it moves through every contact's disk.
 
 ```ts
 import { nearestLunarEclipse } from 'nebulosa/src/astronomy/bodies/moon'
 import { analyticalEphemerisSource, interpolatedEphemerisSource } from 'nebulosa/src/astronomy/ephemeris/source'
 import { sunMoonPositionOf } from 'nebulosa/src/astronomy/events/eclipse/eclipse'
-import { computeLocalLunarEclipseCircumstances, computeLocalLunarEclipseViewGeometry } from 'nebulosa/src/astronomy/events/eclipse/lunar/local'
+import { computeLocalLunarEclipseCircumstances, computeLocalLunarEclipseInstant, computeLocalLunarEclipseViewGeometry } from 'nebulosa/src/astronomy/events/eclipse/lunar/local'
 import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
 import { deg } from 'nebulosa/src/math/units/angle'
 
@@ -2441,6 +2441,12 @@ console.log(view.shapes.map((shape) => `${shape.kind}:${shape.role}`).join(' '))
 const north = computeLocalLunarEclipseViewGeometry(circumstances, eclipse, { selectedEvent: 'U2', orientationMode: 'north' })
 
 console.log(north.selectedEvent) // U2 — the contact drawn as the primary disk
+
+// A quarter of the way from P1 to P4, between the contacts.
+const instant = computeLocalLunarEclipseInstant(eclipse, deg(115.86), deg(-31.95), circumstances.events, 0.25, sunMoonPosition)
+const quarter = computeLocalLunarEclipseViewGeometry(circumstances, eclipse, { instant })
+
+console.log(quarter.selectedEvent) // undefined — an instant, not a contact
 ```
 
 ### Local Solar Eclipse Circumstances
@@ -2519,13 +2525,13 @@ for (const { eclipse, elements } of listLocalSolarEclipses(longitude, latitude, 
 
 The local view of a solar eclipse is the picture of the Sun with the Moon in front of it as the observer sees it: the solar disk, the Moon's disk offset by the local separation of the centers, and the horizon when the Sun is low. Drawn at each contact, it shows where on the solar limb the Moon first touches and how deep the eclipse gets, which is what observers use to aim and frame their instruments.
 
-`computeLocalSolarEclipseViewGeometry` builds it as plain shapes in SVG pixels (circles, a polygon, and a line, with no text or markup) from the events of [Local Solar Eclipse Circumstances](#local-solar-eclipse-circumstances). The Sun is the unit of the diagram: the Moon is placed by the separation of the centers in solar radii, and its radius follows from the Moon/Sun diameter ratio of the event. The diagram is oriented with the local zenith or celestial north up, and east on the right or mirrored as in the naked-eye view. SVG `y` grows downward.
+`computeLocalSolarEclipseViewGeometry` builds it as plain shapes in SVG pixels (circles, a polygon, and a line, with no text or markup) from the events of [Local Solar Eclipse Circumstances](#local-solar-eclipse-circumstances). The Sun is the unit of the diagram: the Moon is placed by the separation of the centers in solar radii, and its radius follows from the Moon/Sun diameter ratio of the event. The diagram is oriented with the local zenith or celestial north up, and east on the right or mirrored as in the naked-eye view. SVG `y` grows downward. Between the contacts, `computeLocalSolarEclipseInstant` gives the state at a fraction of the local eclipse (0 is C1, 1 is C4), drawn in place of a contact with every contact as a ghost, so the passage of the Moon can be followed continuously.
 
 ```ts
 import { nearestSolarEclipse } from 'nebulosa/src/astronomy/bodies/sun'
 import { analyticalEphemerisSource, interpolatedEphemerisSource } from 'nebulosa/src/astronomy/ephemeris/source'
 import { sunMoonPositionOf } from 'nebulosa/src/astronomy/events/eclipse/eclipse'
-import { computeLocalSolarEclipseCircumstances, computeLocalSolarEclipseViewGeometry } from 'nebulosa/src/astronomy/events/eclipse/solar/local'
+import { computeLocalSolarEclipseCircumstances, computeLocalSolarEclipseInstant, computeLocalSolarEclipseViewGeometry } from 'nebulosa/src/astronomy/events/eclipse/solar/local'
 import { computePolynomialBesselianElements } from 'nebulosa/src/astronomy/events/eclipse/solar/map'
 import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
 import { deg } from 'nebulosa/src/math/units/angle'
@@ -2548,6 +2554,12 @@ console.log(view.shapes.map((shape) => `${shape.kind}:${shape.role}`).join(' '))
 const north = computeLocalSolarEclipseViewGeometry(circumstances, { selectedEvent: 'C2', orientationMode: 'north', handedness: 'eastLeft' })
 
 console.log(north.selectedEvent) // C2 — the contact drawn as the primary state
+
+// A quarter of the way from C1 to C4, between the contacts.
+const instant = computeLocalSolarEclipseInstant(pbe, deg(-96.797), deg(32.776), circumstances.events, 0.25, { sunMoonPosition })
+const quarter = computeLocalSolarEclipseViewGeometry(circumstances, { instant })
+
+console.log(quarter.selectedEvent) // undefined — an instant, not a contact
 ```
 
 ### Local Standard of Rest Frames

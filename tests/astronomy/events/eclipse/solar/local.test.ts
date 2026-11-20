@@ -3,6 +3,7 @@ import { nearestSolarEclipse } from '../../../../../src/astronomy/bodies/sun'
 import { analyticalEphemerisSource, interpolatedEphemerisSource } from '../../../../../src/astronomy/ephemeris/source'
 import { sunMoonPositionOf } from '../../../../../src/astronomy/events/eclipse/eclipse'
 import {
+	computeLocalSolarEclipseInstant,
 	computeLocalSolarEclipseViewGeometry,
 	computeLocalViewDiskPair,
 	buildLocalViewHorizonGeometry,
@@ -234,6 +235,47 @@ describe('local circumstances', () => {
 		const besselian = computeLocalSolarEclipseCircumstances(total2024.pbe, deg(-106.4), deg(23.25))
 		// The shadow axis is not exactly the Sun direction and the contact instants differ slightly.
 		expect(Math.abs(normalizePI(besselian.events.MAX!.sunAzimuth - apparent.events.MAX!.sunAzimuth))).toBeLessThan(deg(0.5))
+	})
+})
+
+describe('local view at an instant', () => {
+	const c = localCircumstances(total2024.pbe, -106.4, 23.25)
+	const instant = (fraction: number) => computeLocalSolarEclipseInstant(total2024.pbe, deg(-106.4), deg(23.25), c.events, fraction, { sunMoonPosition })
+
+	test('0 and 1 are C1 and C4 themselves, and the fraction is clamped', () => {
+		expect(instant(0)).toBe(c.events.C1)
+		expect(instant(1)).toBe(c.events.C4)
+		expect(instant(-0.5)).toBe(c.events.C1)
+		expect(instant(2)).toBe(c.events.C4)
+	})
+
+	test('between C1 and C4 it is the state at that instant, drawn like the contact it falls on', () => {
+		const { C1, MAX, C4 } = c.events
+		const atMax = instant((MAX!.jd - C1!.jd) / (C4!.jd - C1!.jd))!
+		expect(atMax.kind).toBeUndefined()
+		expect(atMax.jd).toBeCloseTo(MAX!.jd, 9)
+		expect(atMax.sunAltitude).toBeCloseTo(MAX!.sunAltitude, 9)
+		expect(atMax.sunAzimuth).toBeCloseTo(MAX!.sunAzimuth, 9)
+
+		const drawn = localView(c, { instant: atMax })
+		const reference = localView(c, { selectedEvent: 'MAX' })
+		const disk = (view: typeof drawn) => view.shapes.find((shape) => shape.kind === 'circle' && shape.role === 'moonDisk') as { cx: number; cy: number }
+		expect(drawn.selectedEvent).toBeUndefined()
+		expect(disk(drawn).cx).toBeCloseTo(disk(reference).cx, 6)
+		expect(disk(drawn).cy).toBeCloseTo(disk(reference).cy, 6)
+		// Every contact is a ghost behind an instant between them.
+		expect(drawn.shapes.filter((shape) => shape.role === 'ghostMoonDisk')).toHaveLength(5)
+	})
+
+	test('the Moon moves steadily across the Sun from C1 to C4', () => {
+		const separations = [0.1, 0.3, 0.5, 0.7, 0.9].map((f) => instant(f)!.localViewState!.separationSolarRadii)
+		expect(Math.min(...separations)).toBeLessThan(separations[0])
+		expect(Math.min(...separations)).toBeLessThan(separations[4])
+	})
+
+	test('is absent where the eclipse does not reach', () => {
+		const none = localCircumstances(total2024.pbe, 115, -32)
+		expect(computeLocalSolarEclipseInstant(total2024.pbe, deg(115), deg(-32), none.events, 0.5, { sunMoonPosition })).toBeUndefined()
 	})
 })
 

@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { nearestLunarEclipse } from '../../../../../src/astronomy/bodies/moon'
 import type { SunMoonPosition } from '../../../../../src/astronomy/events/eclipse/eclipse'
-import { computeLocalLunarEclipseCircumstances, computeLocalLunarEclipseViewGeometry, listLocalLunarEclipses, moonAltitudeAt, type LocalLunarEclipseSvgCircle, type LocalLunarEclipseSvgPolygon } from '../../../../../src/astronomy/events/eclipse/lunar/local'
+import { computeLocalLunarEclipseCircumstances, computeLocalLunarEclipseInstant, computeLocalLunarEclipseViewGeometry, listLocalLunarEclipses, moonAltitudeAt, type LocalLunarEclipseSvgCircle, type LocalLunarEclipseSvgPolygon } from '../../../../../src/astronomy/events/eclipse/lunar/local'
 import { computeLunarEclipseMapGeometry } from '../../../../../src/astronomy/events/eclipse/lunar/map'
 import { toJulianDay, type Time, timeShift, timeYMDHMS, greenwichApparentSiderealTime, timeAtJulianDay, tt, utc } from '../../../../../src/astronomy/time/time'
 import { DAYSEC, PI, PIOVERTWO, TAU } from '../../../../../src/core/constants'
@@ -426,6 +426,37 @@ describe('P/Z orientation angles and Alt/Az', () => {
 		expect(angleSeparation(local.events.U1!.positionAngle, shadowCenterPositionAngle(TOTAL.firstContactUmbraTime))).toBeLessThan(1e-9)
 		expect(angleSeparation(local.events.U2!.positionAngle, shadowCenterPositionAngle(TOTAL.totalBeginTime) + PI)).toBeLessThan(1e-9)
 		expect(angleSeparation(local.events.U3!.positionAngle, shadowCenterPositionAngle(TOTAL.totalEndTime) + PI)).toBeLessThan(1e-9)
+	})
+})
+
+describe('Local View at an instant', () => {
+	const local = computeLocalLunarEclipseCircumstances(TOTAL, FAST_LONGITUDE, FAST_LATITUDE, fastSunMoonPosition, { altitudeSamples: 4 })
+	const { P1, U1, MAX, P4 } = local.events
+	const instant = (fraction: number) => computeLocalLunarEclipseInstant(TOTAL, FAST_LONGITUDE, FAST_LATITUDE, local.events, fraction, fastSunMoonPosition)
+	const fractionOf = (jd: number) => (jd - P1!.jd) / (P4!.jd - P1!.jd)
+	const disk = (view: ReturnType<typeof computeLocalLunarEclipseViewGeometry>) => view.shapes.find((s): s is LocalLunarEclipseSvgCircle => s.kind === 'circle' && s.role === 'moonDisk')!
+
+	test('0 and 1 are P1 and P4 themselves, and the fraction is clamped', () => {
+		expect(instant(0)).toBe(P1)
+		expect(instant(1)).toBe(P4)
+		expect(instant(-1)).toBe(P1)
+		expect(instant(3)).toBe(P4)
+	})
+
+	test('the Moon passes through the contacts on the straight passage of the contacts themselves', () => {
+		for (const contact of [U1!, MAX!]) {
+			const state = instant(fractionOf(contact.jd))!
+			expect(state.kind).toBeUndefined()
+			expect(state.umbralMagnitude).toBeCloseTo(contact.umbralMagnitude, 6)
+			const drawn = disk(computeLocalLunarEclipseViewGeometry(local, TOTAL, { selectedEvent: 'MAX', instant: state }))
+			const reference = disk(computeLocalLunarEclipseViewGeometry(local, TOTAL, { selectedEvent: contact.kind }))
+			expect(drawn.cx).toBeCloseTo(reference.cx, 4)
+			expect(drawn.cy).toBeCloseTo(reference.cy, 4)
+		}
+	})
+
+	test('is absent without the contacts', () => {
+		expect(computeLocalLunarEclipseInstant(TOTAL, FAST_LONGITUDE, FAST_LATITUDE, {}, 0.5, fastSunMoonPosition)).toBeUndefined()
 	})
 })
 

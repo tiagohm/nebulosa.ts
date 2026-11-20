@@ -81,6 +81,16 @@ export interface LocalLunarEclipseEvent {
 	readonly penumbralMagnitude: number
 }
 
+// The local state at one instant as the Local View draws it: a contact (kind set), or an instant between P1 and P4
+// (kind absent; see computeLocalLunarEclipseInstant), whose position and zenith angles are the shadow center's
+// direction and whose shadowDistance places the Moon.
+export type LocalLunarEclipseInstant = Omit<LocalLunarEclipseEvent, 'kind'> & {
+	readonly kind?: LunarEclipseContactKind
+	// Shadow-axis distance of the Moon (plane Earth radii) at an instant between the contacts; a contact's follows
+	// from its kind (contactShadowDistance).
+	readonly shadowDistance?: number
+}
+
 // Coarse local visibility summary.
 export interface LocalLunarEclipseVisibility {
 	// Classification kind.
@@ -138,8 +148,9 @@ function contactGast(time: Time, deltaT: number) {
 
 // Whether the contact is the internal (totality) tangency U2/U3 of a total eclipse. There the lunar limb is
 // tangent to the umbra from the inside, so the limb contact point lies on the far side of the disk from the
-// Earth-shadow center; the external contacts (P1/U1/U4/P4) touch on the shadow-center side instead.
-function isInternalTangencyContact(kind: LunarEclipseContactKind, type: LunarEclipse['type']) {
+// Earth-shadow center; the external contacts (P1/U1/U4/P4) touch on the shadow-center side instead. An instant between
+// the contacts (undefined) is no tangency.
+function isInternalTangencyContact(kind: LunarEclipseContactKind | undefined, type: LunarEclipse['type']) {
 	return type === 'TOTAL' && (kind === 'U2' || kind === 'U3')
 }
 
@@ -211,8 +222,15 @@ export function moonAltitudeAt(time: Time, longitude: Angle, latitude: Angle, su
 // Builds one resolved local event: altitude/azimuth, the P/Z orientation angles, and the per-contact
 // magnitudes.
 function computeLocalEvent(contact: LunarEclipseContact, eclipse: LunarEclipse, longitude: Angle, latitude: Angle, sunMoonPosition: SunMoonProvider, horizonAltitude: Angle): LocalLunarEclipseEvent {
-	const position = sunMoonPosition(contact.time)
-	const gast = contactGast(contact.time, position.deltaT ?? 0)
+	return { ...computeLocalState(contact.kind, contact.time, contact.jd, contactShadowDistance(contact.kind, eclipse.u, eclipse.gamma), eclipse, longitude, latitude, sunMoonPosition, horizonAltitude), kind: contact.kind }
+}
+
+// Builds the local state at one instant: altitude/azimuth, the P/Z orientation angles, and the magnitudes at a
+// shadow-axis distance (plane Earth radii). kind is the contact, which flips P at a total internal tangency, or
+// undefined for an instant between the contacts, which keeps its shadow distance.
+function computeLocalState(kind: LunarEclipseContactKind | undefined, time: Time, jd: number, shadowDistance: number, eclipse: LunarEclipse, longitude: Angle, latitude: Angle, sunMoonPosition: SunMoonProvider, horizonAltitude: Angle): LocalLunarEclipseInstant {
+	const position = sunMoonPosition(time)
+	const gast = contactGast(time, position.deltaT ?? 0)
 	const lst = gast + longitude
 
 	const moonRA = position.moon.rightAscension
@@ -230,20 +248,19 @@ function computeLocalEvent(contact: LunarEclipseContact, eclipse: LunarEclipse, 
 	const shadowRA = position.sun.rightAscension + PI
 	const shadowDEC = -position.sun.declination
 	const shadowCenterAngle = positionAngleBetween(moonRA, moonDEC, shadowRA, shadowDEC) // The Earth shadow center is the antisolar point.
-	const positionAngle = isInternalTangencyContact(contact.kind, eclipse.type) ? normalizeAngle(shadowCenterAngle + PI) : shadowCenterAngle
+	const positionAngle = isInternalTangencyContact(kind, eclipse.type) ? normalizeAngle(shadowCenterAngle + PI) : shadowCenterAngle
 
 	// Lunar parallactic angle converts the celestial-north P angle into the zenith-oriented Z angle.
 	const hourAngle = normalizePI(lst - topoRA)
 	const q = parallacticAngle(hourAngle, topoDEC, latitude)
 	const zenithAngle = normalizeAngle(positionAngle - q)
 
-	const shadowDistance = contactShadowDistance(contact.kind, eclipse.u, eclipse.gamma)
 	const [umbralMagnitude, penumbralMagnitude] = shadowMagnitudes(shadowDistance, eclipse.u)
 
 	return {
-		kind: contact.kind,
-		time: contact.time,
-		jd: contact.jd,
+		kind,
+		time,
+		jd,
 		observable: altitude >= horizonAltitude,
 		altitude,
 		azimuth,
@@ -251,6 +268,7 @@ function computeLocalEvent(contact: LunarEclipseContact, eclipse: LunarEclipse, 
 		zenithAngle,
 		umbralMagnitude,
 		penumbralMagnitude,
+		shadowDistance: kind === undefined ? shadowDistance : undefined,
 	}
 }
 
@@ -743,6 +761,9 @@ export interface LocalLunarEclipseViewOptions {
 	readonly height: number
 	// Contact drawn as the primary (highlighted) state and as the frame reference for the zenith rotation.
 	readonly selectedEvent: LunarEclipseContactKind
+	// Instant drawn as the primary state in place of selectedEvent, such as one between the contacts from
+	// computeLocalLunarEclipseInstant; the diagram's frame and horizon are then its own.
+	readonly instant?: LocalLunarEclipseInstant
 	// Diagram orientation. Only geometry changes; no UI is implied.
 	readonly orientationMode: LocalLunarViewOrientationMode
 	// Horizontal handedness. Defaults to 'eastRight'.
@@ -858,7 +879,7 @@ function selectPrimaryEvent(events: Partial<Record<LunarEclipseContactKind, Loca
 // Shadow-center (disk-placement) direction of a resolved event: the reported limb-contact P angle, undoing the
 // U2/U3 internal-tangency flip so the Moon disk is placed by the geometric shadow-center direction, not the
 // contact-point direction.
-function eventShadowCenterAngle(event: LocalLunarEclipseEvent, type: LunarEclipse['type']) {
+function eventShadowCenterAngle(event: LocalLunarEclipseInstant, type: LunarEclipse['type']) {
 	return isInternalTangencyContact(event.kind, type) ? normalizeAngle(event.positionAngle - PI) : event.positionAngle
 }
 
@@ -885,7 +906,7 @@ function moonDiskOffset(shadowCenterAngle: Angle, ell: number, scale: number, fr
 // scaled by the mean angular size of one Earth radius at the Moon, a schematic approximation (the shadow is tiny
 // next to the altitude).
 //   diskCx, diskCy: SVG pixel center of the selected Moon disk.
-function buildHorizonShapes(primary: LocalLunarEclipseEvent, options: LocalLunarEclipseViewOptions, diskCx: number, diskCy: number, scale: number, eastSign: number): LocalLunarEclipseSvgShape[] {
+function buildHorizonShapes(primary: LocalLunarEclipseInstant, options: LocalLunarEclipseViewOptions, diskCx: number, diskCy: number, scale: number, eastSign: number): LocalLunarEclipseSvgShape[] {
 	// Zenith direction in SVG pixels (y grows downward). In the north frame the zenith is rotated from "up" by
 	// the frame parallactic angle; here the zenith frame keeps it straight up, so the rotation is folded into
 	// the disk angles instead and the horizon is drawn straight.
@@ -933,6 +954,33 @@ function buildHorizonShapes(primary: LocalLunarEclipseEvent, options: LocalLunar
 	return [band, line]
 }
 
+// The local state at a fraction of the local eclipse, for the Local View (options.instant): 0 is P1 and 1 is P4, the
+// contacts themselves, and a fraction between them the state at P1 + fraction·(P4 − P1). Its shadow-axis distance
+// follows the contacts' own straight passage through the shadow, sqrt(gamma² + (n·Δt)²) from MAX, with the speed n
+// fixed on each side by MAX and P1 or P4, so the Moon passes through the ghost disks of every contact; its direction,
+// altitude, and azimuth come from the Sun and the Moon at that instant. fraction is clamped to [0, 1]. Returns
+// undefined without P1, MAX, and P4.
+//   events: the place's contacts, from computeLocalLunarEclipseCircumstances with the same eclipse, place, and options.
+export function computeLocalLunarEclipseInstant(eclipse: LunarEclipse, longitude: Angle, latitude: Angle, events: LocalLunarEclipseCircumstances['events'], fraction: number, getSunMoonPosition: SunMoonProvider, options: LocalLunarEclipseCircumstancesOptions = {}): LocalLunarEclipseInstant | undefined {
+	const { P1, MAX, P4 } = events
+	if (!P1 || !MAX || !P4) return undefined
+	const f = clamp(fraction, 0, 1)
+	if (f === 0) return P1
+	if (f === 1) return P4
+
+	const jd = P1.jd + f * (P4.jd - P1.jd)
+	const contact = jd < MAX.jd ? P1 : P4
+	const gamma = Math.abs(eclipse.gamma)
+	const contactDistance = contactShadowDistance(contact.kind, eclipse.u, eclipse.gamma)
+	const span = Math.abs(MAX.jd - contact.jd)
+	// Shadow-axis distance travelled per day along the passage on this side of MAX.
+	const speed = span > 0 ? Math.sqrt(Math.max(0, contactDistance * contactDistance - gamma * gamma)) / span : 0
+	const along = speed * (jd - MAX.jd)
+	const shadowDistance = Math.sqrt(gamma * gamma + along * along)
+
+	return computeLocalState(undefined, timeAtJulianDay(eclipse.maximalTime, jd), jd, shadowDistance, eclipse, longitude, latitude, getSunMoonPosition, normalizeHorizonAltitude(options.horizonAltitude))
+}
+
 // Builds the serializable Local View geometry from the resolved circumstances. Emits only geometric shapes: no
 // labels, text or UI. The shadow center is fixed at the diagram center; the Moon disks are placed by their P
 // angle and shadow-axis distance, so the eclipse is read off the disk positions relative to the umbra and
@@ -954,7 +1002,7 @@ export function computeLocalLunarEclipseViewGeometry(circumstances: Pick<LocalLu
 	const penumbraRadiusPx = scale * eclipse.rho
 	const moonRadiusPx = scale * MOON_RADIUS_EARTH_RADII
 
-	const primary = selectPrimaryEvent(events, resolved.selectedEvent)
+	const primary = resolved.instant ?? selectPrimaryEvent(events, resolved.selectedEvent)
 	const frameParallactic = primary ? primary.positionAngle - primary.zenithAngle : 0
 
 	// Selected disk center: the horizon must be anchored here (not at the shadow center) so the band agrees with
@@ -962,7 +1010,7 @@ export function computeLocalLunarEclipseViewGeometry(circumstances: Pick<LocalLu
 	let primaryDiskX = cx
 	let primaryDiskY = cy
 	if (primary) {
-		const ell = contactShadowDistance(primary.kind, eclipse.u, eclipse.gamma)
+		const ell = primary.kind === undefined ? (primary.shadowDistance ?? 0) : contactShadowDistance(primary.kind, eclipse.u, eclipse.gamma)
 		const offset = moonDiskOffset(eventShadowCenterAngle(primary, eclipse.type), ell, scale, frameParallactic, resolved.orientationMode, eastSign)
 		primaryDiskX = cx + offset.x
 		primaryDiskY = cy + offset.y

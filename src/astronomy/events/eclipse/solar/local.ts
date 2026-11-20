@@ -198,6 +198,10 @@ export interface LocalViewEventState {
 	readonly solarAngularRadius?: Angle
 }
 
+// The local state at one instant as the Local View draws it: a contact (kind set), or an instant between C1 and C4
+// (kind absent; see computeLocalSolarEclipseInstant), whose position and zenith angles are the lunar center's.
+export type LocalSolarEclipseInstant = Omit<LocalSolarEclipseEvent, 'kind'> & { readonly kind?: LocalEclipseContactKind }
+
 // One resolved local contact event.
 export interface LocalSolarEclipseEvent {
 	// Which contact this event is.
@@ -275,6 +279,9 @@ export interface LocalSolarEclipseViewOptions {
 	readonly height: number
 	// Which instant is drawn as the primary state.
 	readonly selectedEvent: LocalEclipseContactKind
+	// Instant drawn as the primary state in place of selectedEvent, such as one between the contacts from
+	// computeLocalSolarEclipseInstant; the diagram's frame and horizon are then its own.
+	readonly instant?: LocalSolarEclipseInstant
 	// Orientation of the diagram.
 	//
 	// - `zenith`: zenith/up frame.
@@ -579,8 +586,9 @@ interface LocalTopocentricAspect {
 }
 
 // Rotates a center position angle to the corresponding limb-contact angle: identical except at a total
-// internal tangency (C2/C3), where the contact point sits on the opposite limb.
-function contactAngleFromCenter(kind: LocalEclipseContactKind, centralKind: LocalCentralPhaseKind, centerAngle: Angle) {
+// internal tangency (C2/C3), where the contact point sits on the opposite limb. An instant between the contacts
+// (kind undefined) keeps the center angle.
+function contactAngleFromCenter(kind: LocalEclipseContactKind | undefined, centralKind: LocalCentralPhaseKind, centerAngle: Angle) {
 	if ((kind === 'C2' || kind === 'C3') && centralKind === 'total') return normalizeAngle(centerAngle + PI)
 	return normalizeAngle(centerAngle)
 }
@@ -612,8 +620,9 @@ function isLocalViewAngleUndefined(state: LocalFundamentalState) {
 }
 
 // Computes the topocentric aspect (position and zenith angles of the contact point on the solar disk,
-// plus the parallactic angle) for one local contact `kind` at the given time and observer location.
-function computeLocalTopocentricAspect(kind: LocalEclipseContactKind, state: LocalFundamentalState, time: Time, longitude: Angle, latitude: Angle, position: SunMoonPosition | undefined): LocalTopocentricAspect {
+// plus the parallactic angle) for one local contact `kind`, or an instant between the contacts (undefined), at the
+// given time and observer location.
+function computeLocalTopocentricAspect(kind: LocalEclipseContactKind | undefined, state: LocalFundamentalState, time: Time, longitude: Angle, latitude: Angle, position: SunMoonPosition | undefined): LocalTopocentricAspect {
 	const q = computeSolarParallacticAngle(time, longitude, latitude, state, position)
 
 	// At a near-exact central alignment the lunar-center direction is undefined (atan2(0, 0)); report undefined
@@ -652,15 +661,18 @@ export function computeSeparationSolarRadii(state: LocalFundamentalState) {
 }
 
 // Central-phase character implied by a contact, used for descriptions. For C2/C3 the umbral radius sign
-// decides total vs annular; other contacts carry the state's own classification.
-function eventCentralKind(kind: LocalEclipseContactKind, state: LocalFundamentalState) {
+// decides total vs annular; other contacts and instants between them carry the state's own classification.
+function eventCentralKind(kind: LocalEclipseContactKind | undefined, state: LocalFundamentalState) {
 	if (kind === 'C2' || kind === 'C3') return state.L2 < 0 ? 'total' : 'annular'
 	return state.centralPhaseKind
 }
 
-// English description for one contact, given its central-phase character.
-function describeEvent(kind: LocalEclipseContactKind, centralKind: LocalCentralPhaseKind) {
+// English description for one contact, or an instant between the contacts (undefined), given its central-phase
+// character.
+function describeEvent(kind: LocalEclipseContactKind | undefined, centralKind: LocalCentralPhaseKind) {
 	switch (kind) {
+		case undefined:
+			return 'Eclipse in progress'
 		case 'C1':
 			return 'Beginning of partial phase'
 		case 'C2':
@@ -674,8 +686,11 @@ function describeEvent(kind: LocalEclipseContactKind, centralKind: LocalCentralP
 	}
 }
 
-// Builds one resolved local event at a Julian Day, including the Sun's altitude and azimuth, P/Z and the Local View cache.
-function buildLocalEvent(kind: LocalEclipseContactKind, jd: number, pbe: PolynomialBesselianElements, longitude: Angle, latitude: Angle, options: LocalSolarEclipseCircumstancesOptions, state?: LocalFundamentalState): LocalSolarEclipseEvent {
+// Builds one resolved local event at a Julian Day, including the Sun's altitude and azimuth, P/Z and the Local View
+// cache: a contact of its kind, or with kind undefined an instant between the contacts.
+function buildLocalEvent(kind: LocalEclipseContactKind, jd: number, pbe: PolynomialBesselianElements, longitude: Angle, latitude: Angle, options: LocalSolarEclipseCircumstancesOptions, state?: LocalFundamentalState): LocalSolarEclipseEvent
+function buildLocalEvent(kind: undefined, jd: number, pbe: PolynomialBesselianElements, longitude: Angle, latitude: Angle, options: LocalSolarEclipseCircumstancesOptions, state?: LocalFundamentalState): LocalSolarEclipseInstant
+function buildLocalEvent(kind: LocalEclipseContactKind | undefined, jd: number, pbe: PolynomialBesselianElements, longitude: Angle, latitude: Angle, options: LocalSolarEclipseCircumstancesOptions, state?: LocalFundamentalState): LocalSolarEclipseInstant {
 	const time = timeAtJulianDay(pbe.maximumTime, jd)
 	state = computeLocalFundamentalState(pbe, longitude, latitude, time, state)
 	// One ephemeris sample per event, shared by altitude and angular-radius (was up to three calls).
@@ -1519,8 +1534,8 @@ function computeLocalDetails(events: LocalSolarEclipseCircumstances['events'], s
 // Returns the event's Local View state or throws: drawing without it would silently place the Moon
 // concentric with the Sun, which looks valid but is physically wrong. Events from buildLocalEvent always
 // carry it; this guards against externally constructed events.
-function requireLocalViewState(event: LocalSolarEclipseEvent) {
-	if (!event.localViewState) throw new Error(`Local View requires localViewState for ${event.kind}`)
+function requireLocalViewState(event: LocalSolarEclipseInstant) {
+	if (!event.localViewState) throw new Error(`Local View requires localViewState for ${event.kind ?? 'the instant'}`)
 	return event.localViewState
 }
 
@@ -1542,7 +1557,7 @@ function localViewAngleForEvent(eventState: LocalViewEventState, options: LocalS
 // the diagram; the Moon is offset by the local separation along the lunar-CENTER position angle (never the
 // limb-contact angle), measured from the top of the diagram clockwise. All disks of one diagram share the
 // frame of `frameEvent` (the primary event), so ghost disks and the primary disk use a single zenith.
-export function computeLocalViewDiskPair(event: LocalSolarEclipseEvent, options: LocalSolarEclipseViewOptions, frameEvent: LocalSolarEclipseEvent = event) {
+export function computeLocalViewDiskPair(event: LocalSolarEclipseInstant, options: LocalSolarEclipseViewOptions, frameEvent: LocalSolarEclipseInstant = event) {
 	const viewState = requireLocalViewState(event)
 	const frameState = requireLocalViewState(frameEvent)
 	const sunCx = options.width * 0.5
@@ -1584,7 +1599,7 @@ function altitudeToLocalViewOffsetPx(sunAltitude: Angle, solarAngularRadius: Ang
 // pushes it below the Sun center. In the `north` frame the top is celestial north, so the zenith is rotated
 // from "up" by the solar parallactic angle q; the horizon is rotated with it. At q = 0 the north frame
 // reduces exactly to the zenith frame.
-export function buildLocalViewHorizonGeometry(event: LocalSolarEclipseEvent, options: LocalSolarEclipseViewOptions) {
+export function buildLocalViewHorizonGeometry(event: LocalSolarEclipseInstant, options: LocalSolarEclipseViewOptions) {
 	const viewState = requireLocalViewState(event)
 	const sunCx = options.width * 0.5
 	const sunCy = options.height * 0.5
@@ -1652,13 +1667,33 @@ function selectPrimaryEvent(events: LocalSolarEclipseCircumstances['events'], se
 	return undefined
 }
 
+// The local state at a fraction of the local eclipse, for the Local View (options.instant): 0 is C1 and 1 is C4, the
+// contacts themselves, and a fraction between them the state at C1 + fraction·(C4 − C1), built like a contact but
+// with the lunar center's angles. fraction is clamped to [0, 1]. Returns undefined without both C1 and C4.
+//   events: the place's contacts, from computeLocalSolarEclipseCircumstances with the same elements, place, and options.
+export function computeLocalSolarEclipseInstant(
+	pbe: PolynomialBesselianElements,
+	longitude: Angle,
+	latitude: Angle,
+	events: LocalSolarEclipseCircumstances['events'],
+	fraction: number,
+	options: LocalSolarEclipseCircumstancesOptions = DEFAULT_LOCAL_SOLAR_ECLIPSE_CIRCUMSTANCES_OPTIONS,
+): LocalSolarEclipseInstant | undefined {
+	const { C1, C4 } = events
+	if (!C1 || !C4) return undefined
+	const f = clamp(fraction, 0, 1)
+	if (f === 0) return C1
+	if (f === 1) return C4
+	return buildLocalEvent(undefined, C1.jd + f * (C4.jd - C1.jd), pbe, longitude, latitude, options)
+}
+
 // Builds the serializable Local View geometry from the resolved events. Emits only geometric shapes: no
 // labels, no text primitives and no UI controls.
 export function computeLocalSolarEclipseViewGeometry(circumstances: Pick<LocalSolarEclipseCircumstances, 'events'>, options: Partial<LocalSolarEclipseViewOptions> = DEFAULT_LOCAL_VIEW_OPTIONS): LocalSolarEclipseViewGeometry {
 	const events = circumstances.events
 	const resolvedOptions = Object.assign({}, DEFAULT_LOCAL_VIEW_OPTIONS, options)
 	const shapes: LocalSolarEclipseSvgShape[] = []
-	const primary = selectPrimaryEvent(events, resolvedOptions.selectedEvent)
+	const primary = resolvedOptions.instant ?? selectPrimaryEvent(events, resolvedOptions.selectedEvent)
 
 	// Ghost MOON disks for every other available contact, drawn behind the primary state. The Sun is fixed
 	// at the diagram center, so a per-contact ghost Sun would only stack redundant circles; what differs
