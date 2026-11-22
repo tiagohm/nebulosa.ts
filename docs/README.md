@@ -6427,6 +6427,39 @@ console.log(coordinateToTile(center.rightAscension, center.declination, 2)) // 3
 console.log(toDeg(distanceToTile(36, 2, center.rightAscension, center.declination)), tileIntersectsDisc(36, 2, center.rightAscension, center.declination, deg(1))) // 0.3133201 true — degrees
 ```
 
+### Built-in Plate Solving
+
+Plate solving finds where an image points without trusting the mount: the pattern of the detected stars is recognized in a star catalog. The method is the geometric hashing of Astrometry.net (Lang et al. 2010). Four stars form a quad; the similarity that carries its backbone pair A and B to (0, 0) and (1, 1) carries the other two stars to a 4-number code that does not change with position, rotation, or scale, so a quad of the image and the same quad in an index of catalog quads share a code. Each code match is a hypothesis of the image's position, scale, rotation, and parity, and it is accepted only when a Bayesian test against all the other stars of the field gives odds of at least 1e9 that the stars are where the catalog puts them, instead of being a chance alignment. The accepted solution is refined star by star, optionally with a SIP distortion (see [SIP Distortion Fitting](#sip-distortion-fitting)).
+
+This solver runs in TypeScript, in process, from a detected star list (see [Star Detection](#star-detection)); unlike [ASTAP Plate Solving](#astap-plate-solving), [Local Astrometry.net Plate Solving](#local-astrometrynet-plate-solving), and [Native libastrometry Plate Solving](#native-libastrometry-plate-solving), it needs no external program or native library. The codes are computed exactly as Astrometry.net computes them, with north as the first code axis and east as the second. A quad index covers one band of quad sizes, and a field is solvable when the indexes hold quads of roughly 10 % to 100 % of its width. `EphemeralQuadIndex` builds a band in memory from a star list brightest first, keeping a few bright stars per sky cell. `nativeNearbyPlateSolve` builds such bands from any [Star Catalog Interface and Spatial Query](#star-catalog-interface-and-spatial-query) around a position hint, with a star density matched to the image, so a catalog without quads, such as an [HNSKY Tiled Catalog](#hnsky-tiled-catalog), serves a hinted solve; it needs a position and a scale. An in-memory index covers only the cone it was built for, so a blind solve needs indexes that cover the whole sky. The result is a TAN or TAN-SIP header referenced at the image center and its [Plate Solution](#plate-solution), or `undefined` when the search ends without a match. The search is CPU work that yields between blocks of stars, so a signal or timeout can stop it.
+
+```ts
+import { nativeNearbyPlateSolve, nativePlateSolve } from 'nebulosa/src/astrometry/solvers/native'
+import { catalogStarVectors, EphemeralQuadIndex } from 'nebulosa/src/astrometry/solvers/quad.index.ephemeral'
+import { eraS2c } from 'nebulosa/src/astronomy/coordinates/erfa/erfa'
+import { arcsec, deg, toArcsec, toDeg, toHour } from 'nebulosa/src/math/units/angle'
+
+// stars: DetectedStar[] — the 300 brightest stars of data/NGC3372--32.3.fit (1037 × 706 pixels, 2.7"/pixel).
+// catalog: StarCatalog — the HNSKY g14 catalog of data/HNSKY_g14.tar.
+const hint = { width: 1037, height: 706, rightAscension: deg(161.0178), declination: deg(-59.6023), radius: deg(1), scale: { lower: arcsec(2.46), upper: arcsec(3.01) } }
+
+// Builds quads from the catalog around the hint, solves, and refines with a SIP of order 2.
+const solution = await nativeNearbyPlateSolve(stars, catalog, hint)
+
+if (solution) {
+	console.log(toHour(solution.solution.rightAscension), toDeg(solution.solution.declination)) // 10.7345 -59.6020 — image center, hours and degrees, ICRS
+	console.log(toArcsec(solution.solution.scale), toDeg(solution.solution.orientation), solution.solution.parity) // 2.736 110.1 NORMAL — arcsec/pixel, degrees
+	console.log(solution.header.CTYPE1, solution.logOdds, solution.matchCount) // RA---TAN-SIP, natural log of the odds, matched stars
+}
+
+// The catalog stars of a cone as unit vectors, brightest first, and an index of quads from 0.15° to 0.21° built over them.
+const cone = { center: eraS2c(deg(161.0178), deg(-59.6023)), radius: deg(1.5) }
+const index = EphemeralQuadIndex.fromVectors(await catalogStarVectors(catalog, cone), { scaleLower: deg(0.15), scaleUpper: deg(0.21), region: cone })
+
+// Solves against prebuilt indexes; without hints every scale and position they hold is searched.
+await nativePlateSolve(stars, [index], { width: 1037, height: 706 })
+```
+
 ### Catalog Crossmatching
 
 Crossmatching identifies which catalog star each detected image star is. It is the step between detection and anything that needs a known star: photometric calibration against catalog magnitudes, labeling stars, measuring residuals against a reference catalog, or recovering an approximate solution when only the mount's pointing is known. Detections are in pixels and catalog stars in equatorial coordinates, so the catalog stars around the approximate pointing are projected on a gnomonic plane (see [Sky Projections](#sky-projections)) and the two point sets are matched geometrically, without knowing scale or rotation in advance (see [Star Pattern Matching](#star-pattern-matching)).
@@ -6654,10 +6687,10 @@ A linear TAN solution places stars correctly only near the reference pixel: fiel
 x_ref − x = Σ A_i_j · u^i · v^j      y_ref − y = Σ B_i_j · u^i · v^j      2 ≤ i + j ≤ order
 ```
 
-The terms of degree 0 and 1 belong to `CRVAL` and the CD matrix, so the model starts at degree 2. `fitSipDistortion` fits both polynomials by weighted least squares from matched stars, each with its measured pixel and the pixel where the linear WCS puts its catalog position, and rejects outliers by iterative sigma clipping. A higher order needs more stars and a good spread across the field, otherwise the polynomial extrapolates wildly in the empty regions; when the image size is known, the fit refuses a poor distribution unless told otherwise. The model belongs to the reference pixel of the linear WCS and must be refit when `CRPIX` changes. Writing it into a header promotes `TAN` to `TAN-SIP`; the inverse polynomials are not fitted, so sky to pixel is then computed by iteration (see [FITS TAN and SIP Coordinate Mapping](#fits-tan-and-sip-coordinate-mapping)).
+The terms of degree 0 and 1 belong to `CRVAL` and the CD matrix, so the model starts at degree 2. `fitSipDistortion` fits both polynomials by weighted least squares from matched stars, each with its measured pixel and the pixel where the linear WCS puts its catalog position, and rejects outliers by iterative sigma clipping. A higher order needs more stars and a good spread across the field, otherwise the polynomial extrapolates wildly in the empty regions; when the image size is known, the fit refuses a poor distribution unless told otherwise. The model belongs to the reference pixel of the linear WCS and must be refit when `CRPIX` changes. Writing it into a header promotes `TAN` to `TAN-SIP`. Sky to pixel needs the reverse mapping: without the reverse polynomials `AP` and `BP` it is computed by iteration (see [FITS TAN and SIP Coordinate Mapping](#fits-tan-and-sip-coordinate-mapping)), and `fitInverseSip` fits them, with every term from degree 0, on a grid over the image, for readers that do not iterate.
 
 ```ts
-import { applySipCorrection, countSipTerms, evaluateSipCorrection, fitSipDistortion, listSipTerms, sipModelIntoFitsHeader } from 'nebulosa/src/astrometry/wcs/sip.fit'
+import { applySipCorrection, countSipTerms, evaluateSipCorrection, fitInverseSip, fitSipDistortion, inverseSipIntoFitsHeader, listSipTerms, sipModelIntoFitsHeader } from 'nebulosa/src/astrometry/wcs/sip.fit'
 
 // stars: MatchedStar[] — measured pixel (x, y) and the pixel (xRef, yRef) predicted by the linear WCS from the catalog.
 // header: FitsHeader — the linear TAN solution of the image.
@@ -6676,6 +6709,9 @@ console.log(applySipCorrection(900, 700, fit.model, wcs)) // { x, y } in pixels
 
 // Write A_ORDER, B_ORDER, and the coefficients into a TAN header, which becomes TAN-SIP.
 sipModelIntoFitsHeader(fit.model, header)
+
+// Fit the reverse polynomials (order 3 by default for an order-2 model) and write AP_ORDER, BP_ORDER, and their coefficients.
+inverseSipIntoFitsHeader(fitInverseSip(fit.model, wcs), header)
 ```
 
 ### Star Pattern Matching

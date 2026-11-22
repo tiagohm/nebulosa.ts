@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { DEC_TAN_SIP, RA_TAN_SIP, tanProject, tanUnproject } from '../../../src/astrometry/wcs/fits.wcs'
-import { type MatchedStar, type SipFitResult, type SipModel, applySipCorrection, buildSipDesignMatrix, countSipTerms, evaluateSipCorrection, fitSipDistortion, listSipTerms, sipModelIntoFitsHeader } from '../../../src/astrometry/wcs/sip.fit'
+import { type MatchedStar, type SipFitResult, type SipModel, applySipCorrection, buildSipDesignMatrix, countSipTerms, evaluateSipCorrection, fitInverseSip, fitSipDistortion, inverseSipIntoFitsHeader, listSipTerms, sipModelIntoFitsHeader } from '../../../src/astrometry/wcs/sip.fit'
 import type { FitsHeader } from '../../../src/io/formats/fits/fits'
 
 const WCS = { CRPIX1: 512, CRPIX2: 384, NAXIS1: 1024, NAXIS2: 768 } as const
@@ -345,5 +345,48 @@ describe('SIP validation', () => {
 		stars[0] = { ...stars[0], weight: 0 }
 
 		expect(() => fitSipDistortion(stars, WCS, { order: 3, weighting: 'star', spatialDistribution: 'off' })).toThrow('weight must be a positive finite number')
+	})
+})
+
+describe('reverse polynomials', () => {
+	test('undo the forward correction over the image', () => {
+		const inverse = fitInverseSip(TRUE_MODEL, WCS)
+		expect(inverse.order).toBe(4)
+
+		for (const [x, y] of [
+			[1, 1],
+			[1024, 768],
+			[200, 600],
+			[512, 384],
+			[900, 100],
+		]) {
+			const { dx, dy } = evaluateSipCorrection(x, y, TRUE_MODEL, WCS)
+			const U = x - WCS.CRPIX1 + dx
+			const V = y - WCS.CRPIX2 + dy
+			let u = U
+			let v = V
+			for (const key in inverse.AP) {
+				const [, i, j] = key.split('_').map(Number)
+				u += inverse.AP[key] * U ** i * V ** j
+			}
+			for (const key in inverse.BP) {
+				const [, i, j] = key.split('_').map(Number)
+				v += inverse.BP[key] * U ** i * V ** j
+			}
+			expect(u).toBeCloseTo(x - WCS.CRPIX1, 2)
+			expect(v).toBeCloseTo(y - WCS.CRPIX2, 2)
+		}
+	})
+
+	test('are read back by the TAN-SIP projection', () => {
+		const header: FitsHeader = { ...TAN_WCS }
+		sipModelIntoFitsHeader(TRUE_MODEL, header)
+		inverseSipIntoFitsHeader(fitInverseSip(TRUE_MODEL, WCS), header)
+		expect(header.AP_ORDER).toBe(4)
+
+		const [ra, dec] = tanUnproject(header, 950, 700)!
+		const [x, y] = tanProject(header, ra, dec)!
+		expect(x).toBeCloseTo(950, 2)
+		expect(y).toBeCloseTo(700, 2)
 	})
 })

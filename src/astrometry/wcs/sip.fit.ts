@@ -483,6 +483,90 @@ export function sipModelIntoFitsHeader(sipModel: SipModel, header: FitsHeader) {
 	return header
 }
 
+// A fitted reverse SIP model: AP and BP map corrected offsets (U, V) back to raw pixel offsets (u, v) as
+// u = U + AP(U, V) and v = V + BP(U, V), with every term of total degree 0..order.
+export interface InverseSipModel {
+	readonly order: number
+	// AP coefficients keyed by 'AP_p_q'.
+	readonly AP: SipCoefficientMap
+	// BP coefficients keyed by 'BP_p_q'.
+	readonly BP: SipCoefficientMap
+}
+
+// Maximum order of a reverse SIP polynomial accepted by the FITS WCS reader.
+const MAX_INVERSE_SIP_ORDER = 9
+
+// Fits the reverse polynomials of a forward SIP model by least squares on a grid of gridSize × gridSize pixels
+// spanning the image (Astrometry.net's sip_compute_inverse_polynomials uses about 10·(order + 1) per axis). The
+// image size comes from wcs; order defaults to the forward order plus one. Offsets are normalized by the image
+// half-diagonal for conditioning. Throws SipFitError when the image size is unknown or the system is singular.
+export function fitInverseSip(sipModel: SipModel, wcs: SipFitsHeader | FitsHeader, order: number = Math.min(MAX_INVERSE_SIP_ORDER, sipModel.order + 1), gridSize: number = 10 * (order + 1)): InverseSipModel {
+	wcs = extractSipInputWcsFromFitsHeader(wcs)
+	validateSipFitsHeader(wcs)
+	const width = wcs.width
+	const height = wcs.height
+	if (width === undefined || height === undefined || !(width > 0 && height > 0)) throw new SipFitError('invalidOption', 'the image size is required to fit the reverse SIP polynomials')
+	if (!Number.isInteger(order) || !(order >= 0 && order <= MAX_INVERSE_SIP_ORDER)) throw new SipFitError('invalidOrder', `reverse SIP order must be an integer in [0, ${MAX_INVERSE_SIP_ORDER}]`)
+
+	const terms: SipTerm[] = []
+	for (let degree = 0; degree <= order; degree++) for (let i = degree; i >= 0; i--) terms.push({ i, j: degree - i })
+
+	const samples = Math.max(2, gridSize)
+	const rows = samples * samples
+	const normalization = Math.hypot(width, height) / 2
+	const matrix = new Matrix(rows, terms.length)
+	const targetU = new Float64Array(rows)
+	const targetV = new Float64Array(rows)
+	const up = new Float64Array(order + 1)
+	const vp = new Float64Array(order + 1)
+
+	for (let row = 0; row < rows; row++) {
+		const x = 1 + ((row % samples) * (width - 1)) / (samples - 1)
+		const y = 1 + (Math.floor(row / samples) * (height - 1)) / (samples - 1)
+		const { dx, dy } = evaluateSipCorrection(x, y, sipModel, wcs)
+		const U = (x - wcs.crpix1 + dx) / normalization
+		const V = (y - wcs.crpix2 + dy) / normalization
+		up[0] = 1
+		vp[0] = 1
+		for (let p = 1; p <= order; p++) {
+			up[p] = up[p - 1] * U
+			vp[p] = vp[p - 1] * V
+		}
+		for (let t = 0; t < terms.length; t++) matrix.data[row * terms.length + t] = up[terms[t].i] * vp[terms[t].j]
+		targetU[row] = -dx
+		targetV[row] = -dy
+	}
+
+	const qr = new QrDecomposition(matrix)
+	if (!qr.isFullRank) throw new SipFitError('singularMatrix', 'the reverse SIP system is singular')
+	const ap = qr.solve(targetU)
+	const bp = qr.solve(targetV)
+	const AP: Record<string, number> = {}
+	const BP: Record<string, number> = {}
+
+	for (let t = 0; t < terms.length; t++) {
+		const { i, j } = terms[t]
+		const scale = normalization ** (i + j)
+		AP[`AP_${i}_${j}`] = ap[t] / scale
+		BP[`BP_${i}_${j}`] = bp[t] / scale
+	}
+
+	return { order, AP, BP }
+}
+
+// Writes reverse SIP coefficients into a FITS header that already holds the forward ones, replacing stale reverse terms.
+export function inverseSipIntoFitsHeader(model: InverseSipModel, header: FitsHeader) {
+	for (const key in header) {
+		if (key.startsWith('AP_') || key.startsWith('BP_')) delete header[key]
+	}
+
+	header.AP_ORDER = model.order
+	header.BP_ORDER = model.order
+	for (const key in model.AP) header[key] = model.AP[key]
+	for (const key in model.BP) header[key] = model.BP[key]
+	return header
+}
+
 // Promotes a plain TAN CTYPE to its TAN-SIP form in place, leaving other values untouched.
 function setSipAxisType(header: FitsHeader, key: 'CTYPE1' | 'CTYPE2', tan: string, sip: string) {
 	const value = header[key]
