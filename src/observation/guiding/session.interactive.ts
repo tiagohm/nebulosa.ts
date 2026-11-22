@@ -31,7 +31,8 @@ import { DEFAULT_GUIDING_CLOCK, type GuidingInterruptionKind, GuidingInterruptio
 // the open `guidingRun`: the commander records the physical evidence of each pulse and, when the run ends, zeroes both
 // axes, waits for the observed end of every pulse and blocks the key with the `guidePulse` cause while that end stays
 // unobserved. Only `startGuiding` and `resume` open the gate, synchronously right before asking the client to guide;
-// every pause, stop, refusal and loss closes it. Ending a run (`stopGuiding`, a releasing pause, `stop`) resolves only
+// every pause, stop, refusal and loss closes it. A calibration that fails returns the client to looping, guiding
+// nothing, so it closes the gate and ends the `guidingRun` too, releasing the guide output and the mount. Ending a run (`stopGuiding`, a releasing pause, `stop`) resolves only
 // once its cleanup proved the guide output at a standstill, and fails `commandFailed` otherwise.
 //
 // The loss of a device of the session (the device lifecycle cancelling the root or the run) is terminal: the gate
@@ -181,6 +182,8 @@ export class InteractiveGuidingSession {
 	#dithering = false
 	// Whether the pause in effect interrupted a calibration, which `resume` restarts instead of continuing.
 	#pausedCalibrating = false
+	// End of the `guidingRun` a failed calibration started, until it resolves; `startGuiding` and `resume` wait for it.
+	#releasing?: Promise<OperationResult<void>>
 
 	// Binds the session to its client, the guide camera and the guide output the client guides with, and the commander
 	// of that guide output, which dispatches the pulses and proves their end.
@@ -352,7 +355,8 @@ export class InteractiveGuidingSession {
 	// it does not live, opens the `guidingRun` holding the guide output unless it is open ('busy' when the guide output
 	// is taken), then in one synchronous block opens the gate and asks the client to guide, closing the gate (and
 	// ending a run this call opened) when it refuses, and waits for the settle after that call as a child of `task`. The
-	// gate stays open after a settle that failed or a cancelled wait: the client is guiding.
+	// gate stays open after a settle that failed or a cancelled wait while the client is guiding; a calibration that
+	// failed ended the run, and the call resolves once that end released the guide output.
 	async startGuiding(task: OperationScope, scope: OperationScope, options: GuidingStartOptions): Promise<OperationResult<void>> {
 		const opened = await this.#open(scope, options.clock)
 		if (!opened.ok) return opened
@@ -371,6 +375,7 @@ export class InteractiveGuidingSession {
 			return failedOperationResult('unexpectedState', 'the guider refused to guide')
 		})
 
+		if (!started.ok) await this.#releasing
 		if (!started.ok && reopened && admission.isOpen === false) await this.#endRun()
 		return started.ok ? successfulOperationResult(undefined) : started
 	}
@@ -421,7 +426,8 @@ export class InteractiveGuidingSession {
 	// then in one synchronous block opens the gate, resumes the client and asks it to guide, recalibrating when the
 	// pause interrupted a calibration (a running guiding then only settles again); a refusal closes the gate, pauses the
 	// client again and ends a run this call opened. Then waits for the settle after that call as a child of `task`. The
-	// gate stays open after a settle that failed or a cancelled wait.
+	// gate stays open after a settle that failed or a cancelled wait while the client is guiding; a restarted
+	// calibration that failed ended the run, and the call resolves once that end released the guide output.
 	async resume(task: OperationScope, settle: GuidingSettle): Promise<OperationResult<void>> {
 		const admission = this.#admission
 		if (admission === undefined || this.#root === undefined) return failedOperationResult('unexpectedState', 'the guiding session is not looping')
@@ -444,6 +450,7 @@ export class InteractiveGuidingSession {
 			return failedOperationResult('unexpectedState', 'the guider refused to resume')
 		})
 
+		if (!resumed.ok) await this.#releasing
 		if (!resumed.ok && reopened && !admission.isOpen) await this.#endRun()
 		return resumed.ok ? successfulOperationResult(undefined) : resumed
 	}
@@ -543,9 +550,24 @@ export class InteractiveGuidingSession {
 			case 'calibrationStep':
 				this.#settle.notify({ kind: 'calibrating' })
 				return
+			case 'calibrationFailed':
+				this.#release()
+				return
 			case 'settleDone':
 				this.#settle.notify({ kind: 'done', status: event.succeeded ? 0 : 1, error: event.error })
 		}
+	}
+
+	// Ends the open `guidingRun` after a failed calibration left the client looping: closes the gate and ends the run, as
+	// `stopGuiding` does without asking the client to loop, keeping the end in `#releasing` until it resolves.
+	#release() {
+		if (this.#run === undefined) return
+		const releasing = this.#endRun()
+		this.#releasing = releasing
+		const clear = () => {
+			if (this.#releasing === releasing) this.#releasing = undefined
+		}
+		void releasing.then(clear, clear)
 	}
 
 	// Sends one admitted pulse through the commander under the open run; refused without one.

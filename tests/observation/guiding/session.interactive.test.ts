@@ -91,6 +91,15 @@ function setup() {
 	return { client, session, cameraManager, clock }
 }
 
+// Resolves once the client started a settle, as it does when the session asks it to guide.
+async function settleStarted(client: GuiderClient) {
+	let started = false
+	const handler: GuiderClientHandler = { event: (_, event) => void (started ||= event.type === 'settleStarted') }
+	client.addHandler(handler)
+	await waitUntil(() => started, 2000, 1)
+	client.removeHandler(handler)
+}
+
 // Starts guiding and reports the settle once the session asked the client to guide.
 async function startGuiding({ client, session, clock }: ReturnType<typeof setup>, recalibrate = false) {
 	let asked = false
@@ -185,6 +194,42 @@ describe('guiding run', () => {
 		expect(await startGuiding(context)).toEqual(successfulOperationResult(undefined))
 		expect(session.operationId()).toBe(root)
 		expect(session.snapshot().runId).not.toBe(run)
+	}, 20000)
+
+	test('a failed calibration ends the run and releases the guide output and the mount; a failed settle while guiding keeps it', async () => {
+		const context = setup()
+		const { client, session, clock } = context
+		const { mount, guideOutput } = rig.devices()
+		expect(await session.startLoop(rig.coordinator)).toEqual(successfulOperationResult(undefined))
+		const root = session.operationId()!
+
+		// The calibration fails: the client reports it, then the failed settle of the start.
+		const pending = session.startGuiding(rig.coordinator, rig.coordinator, { recalibrate: false, settle: SETTLE, clock })
+		await settleStarted(client)
+		expect(session.snapshot()).toMatchObject({ guideOutputHeld: true, pulsesAdmitted: true })
+		const run = session.snapshot().runId!
+
+		const error = 'RA calibration pulses did not produce measurable motion'
+		client.emitEvent('calibrationFailed', { guideOutput: guideOutput.name, failure: { code: 'too_many_ra_no_motion_steps', phase: 'raForwardMeasure', message: error } })
+		client.emitEvent('settleDone', { succeeded: false, totalFrames: 1, droppedFrames: 0, error })
+		expect(await pending).toEqual(failedOperationResult('commandFailed', `settle failed with status 1: ${error}`))
+
+		// The run ended before the start resolved: the gate is closed and the mount is free, and the session loops on.
+		expect(rig.coordinator.get(run)).toBeUndefined()
+		expect(session.snapshot()).toMatchObject({ active: true, guideOutputHeld: false, pulsesAdmitted: false })
+		expect(client.guidePulse(100, 'North')).toBeFalse()
+		expect(rig.arbiter.ownersOf(resourceKey(mount))).toEqual([])
+		expect(session.operationId()).toBe(root)
+		expect(await rig.commanders.guideOutput.pulse(rig.coordinator, mount, 'NORTH', 50, { settleTimeout: 500 })).toEqual(successfulOperationResult(undefined))
+
+		// Guiding starts again; a settle that fails while the client guides keeps the run.
+		expect(await startGuiding(context)).toEqual(successfulOperationResult(undefined))
+		const guiding = session.snapshot().runId!
+		const again = session.startGuiding(rig.coordinator, rig.coordinator, { recalibrate: false, settle: SETTLE, clock })
+		await settleStarted(client)
+		client.emitEvent('settleDone', { succeeded: false, totalFrames: 1, droppedFrames: 0, error: 'settle timed out' })
+		expect(await again).toEqual(failedOperationResult('commandFailed', 'settle failed with status 1: settle timed out'))
+		expect(session.snapshot()).toMatchObject({ guideOutputHeld: true, pulsesAdmitted: true, runId: guiding })
 	}, 20000)
 
 	test('a run through the ST4 port of a camera also leases the mount it drives, so nothing moves it between two pulses', async () => {
