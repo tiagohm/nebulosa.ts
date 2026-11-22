@@ -233,6 +233,8 @@ class NativeSearch {
 	readonly #scaleLower: number
 	readonly #scaleUpper: number
 	readonly #hint?: SkyCone
+	// Code search region of each index: the hint cone widened by the field radius.
+	readonly #searchRegions = new Map<QuadIndex, SkyCone>()
 	readonly #fieldRadiusPixels: number
 	readonly #pixelError: number
 	readonly #distractor: number
@@ -276,6 +278,16 @@ class NativeSearch {
 
 		// Bands of larger quads first: they hold fewer quads made of brighter stars, so a blind search tries them sooner.
 		this.indexes = selected.sort((a, b) => b.scaleLower - a.scaleLower)
+
+		// The quads of the field lie up to a field radius from its center, which lies in the hint cone: widen the code
+		// search by the field radius, or by ten times the longest quad of a band when the scale is unknown (a band serves
+		// fields up to about ten times its quads).
+		if (hint !== undefined) {
+			for (const index of this.indexes) {
+				const fieldRadius = Number.isFinite(this.#scaleUpper) ? this.#fieldRadiusPixels * this.#scaleUpper : 10 * index.scaleUpper
+				this.#searchRegions.set(index, { center: hint.center, radius: Math.min(Math.PI, hint.radius + fieldRadius) })
+			}
+		}
 		minBackbone = Math.max(minBackbone * (1 - this.#tolerance), 0.1 * Math.min(options.width, options.height))
 		maxBackbone = Math.min(maxBackbone * (1 + this.#tolerance), 2 * this.#fieldRadiusPixels)
 		this.enumerator = new FieldQuadEnumerator(field, minBackbone, maxBackbone, this.#tolerance)
@@ -290,7 +302,7 @@ class NativeSearch {
 			for (const index of this.indexes) {
 				if (this.#solved !== undefined) return
 				if (backbone * this.#scaleUpper < index.scaleLower * (1 - this.#tolerance) || backbone * this.#scaleLower > index.scaleUpper * (1 + this.#tolerance)) continue
-				index.searchCodes(variant.code, this.#tolerance, (quad) => this.#hit(index, quad, stars, backbone), this.#hint)
+				index.searchCodes(variant.code, this.#tolerance, (quad) => this.#hit(index, quad, stars, backbone), this.#searchRegions.get(index))
 			}
 		})
 

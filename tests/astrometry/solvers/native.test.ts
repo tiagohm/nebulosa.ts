@@ -387,6 +387,37 @@ describe('solve', () => {
 		expectSolution(result!.header, truth, width, height)
 	})
 
+	test('a hinted code search covers the hint cone widened by the field radius', async () => {
+		const truth = wcsOf(ra, dec, scale, 0.4, 'NORMAL', width, height)
+		const stars = detect(sky, truth, { seed: 16, width, height, limit: 13 })
+		const [real] = indexesFor(sky, shortSide, [0.2])
+		const regions: number[] = []
+		const recording: QuadIndex = {
+			id: real.id,
+			scaleLower: real.scaleLower,
+			scaleUpper: real.scaleUpper,
+			jitter: real.jitter,
+			epoch: real.epoch,
+			cellSize: real.cellSize,
+			searchCodes: (code, tolerance, visit, region) => {
+				if (region !== undefined) regions.push(region.radius)
+				real.searchCodes(code, tolerance, visit)
+			},
+			quadStars: real.quadStars,
+			starVector: real.starVector,
+			starSweep: real.starSweep,
+			starsInCone: real.starsInCone,
+			[Symbol.dispose]: () => {},
+		}
+
+		const hint = 0.1 * DEG2RAD
+		const result = await nativePlateSolve(stars, [recording], { width, height, scale: { lower: scale * 0.9, upper: scale * 1.1 }, rightAscension: ra, declination: dec, radius: hint, sipOrder: 0 })
+		expect(result).toBeDefined()
+		expect(regions.length).toBeGreaterThan(0)
+		// Half diagonal of 1000 pixels at the upper scale.
+		for (const radius of regions) expect(radius).toBeCloseTo(hint + 1000 * scale * 1.1, 12)
+	})
+
 	test('a field from another sky does not solve', async () => {
 		const other = syntheticSky(99, ra, dec, 2 * DEG2RAD, 400)
 		const truth = wcsOf(ra, dec, scale, 0.3, 'NORMAL', width, height)

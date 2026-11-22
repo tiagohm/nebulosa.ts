@@ -1,7 +1,7 @@
 import { afterAll, describe, expect, test } from 'bun:test'
 import fs from 'fs'
 import os from 'os'
-import { join } from 'path'
+import { basename, join } from 'path'
 import { buildQuadBand } from '../../../src/astrometry/solvers/quad.builder'
 import { dequantizeQuadCodeComponent, quadCode, skyQuadCode } from '../../../src/astrometry/solvers/quad.code'
 import { buildQuadIndexTile, decodeQuadIndexTile, encodeQuadIndexTile, NebulosaQuadIndex, quadIndexTileCone, quadIndexTileFileName, quadIndexTilesFromBand, verifyQuadIndexTile } from '../../../src/astrometry/solvers/quad.index.file'
@@ -212,4 +212,43 @@ test('a tile built alone from its cone holds the quads of its cells only', () =>
 	expect(alone.quadStars.length).toBeGreaterThan(0.8 * target.quadStars.length)
 	expect(alone.quadStars.length).toBeLessThan(1.2 * target.quadStars.length)
 	expect(verifyQuadIndexTile(encodeQuadIndexTile(alone))).toBeTrue()
+})
+
+test('code sections stay loaded under any star budget', () => {
+	const moved = join(DIR, 'moved')
+	fs.mkdirSync(moved, { recursive: true })
+	const copies = paths.map((path) => {
+		const copy = join(moved, basename(path))
+		fs.copyFileSync(path, copy)
+		return copy
+	})
+
+	using index = new NebulosaQuadIndex(copies, { maxLoadedBytes: 1 })
+	let before = 0
+	index.searchCodes([0.3, 0.4, 0.5, 0.2], 0.3, () => before++)
+	index[Symbol.dispose]()
+	// Disposal releases everything; a fresh pass loads the codes again, then the files go away.
+	let first = 0
+	index.searchCodes([0.3, 0.4, 0.5, 0.2], 0.3, () => first++)
+	fs.rmSync(moved, { recursive: true, force: true })
+
+	if (process.platform === 'win32') {
+		// Read sections, not mappings: the codes are still searchable without the files; the stars are not.
+		let after = 0
+		index.searchCodes([0.3, 0.4, 0.5, 0.2], 0.3, () => after++)
+		expect(after).toBe(before)
+		expect(() => index.starsInCone({ center: eraS2c(2, 0.5), radius: 0.2 * DEG2RAD }, () => {})).toThrow()
+	}
+
+	expect(first).toBe(before)
+})
+
+test('the epoch is the file epoch when the files have no proper motions', () => {
+	const tile = quadIndexTilesFromBand(band, { tileNside: 32, jitter: 1e-5, epoch: 2016 })[0]
+	const path = join(DIR, `still${quadIndexTileFileName(tile)}`)
+	fs.writeFileSync(path, encodeQuadIndexTile(tile))
+	using still = new NebulosaQuadIndex([path], { epoch: 2030 })
+	expect(still.epoch).toBe(2016)
+	using moving = new NebulosaQuadIndex([paths[0]], { epoch: 2030 })
+	expect(moving.epoch).toBe(2030)
 })

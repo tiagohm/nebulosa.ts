@@ -16,8 +16,9 @@ import { buildKdTree, type KdTree, searchKdTree } from './quad.kdtree'
 // optional proper motions and catalog source ids, the quads, and their codes quantized to 16 bits in the leaf order of
 // a pointer-free k-d tree whose node boxes follow. A tile owns the quads whose backbone midpoint lies in it, so the
 // tiles of a band hold every quad once. NebulosaQuadIndex serves a set of tiles of one band as a QuadIndex: tile ids
-// live in the high bits of quad and star ids, tiles are mapped (or read where the runtime cannot map files) when first
-// touched and released least recently used first. Angles are radians, epochs Julian years, magnitudes in millimag.
+// live in the high bits of quad and star ids. Files are mapped where the runtime can (Bun cannot on Windows, where the
+// sections are read); the code sections of a tile stay loaded once touched, since a blind search visits every tile,
+// and its star sections are released least recently used first beyond a byte budget. Angles are radians, epochs Julian years, magnitudes in millimag.
 
 // File signature, 8 bytes.
 export const QUAD_INDEX_MAGIC = 'NEBQIDX\0'
@@ -56,7 +57,7 @@ const TILE_ID_FACTOR = 2 ** 32
 // Magnitude stored for a star without one.
 const NO_MAGNITUDE = 0x7fff
 
-// Default bytes of tiles kept loaded by a NebulosaQuadIndex.
+// Default bytes of star sections kept loaded by a NebulosaQuadIndex; code sections are not counted.
 export const DEFAULT_QUAD_INDEX_MAX_LOADED_BYTES = 1024 * 1024 * 1024
 
 // Flag: quad star ids are 32-bit (else 16-bit).
@@ -183,23 +184,31 @@ export function quadIndexTilesFromBand(band: QuadBand, options: QuadIndexTileOpt
 	const wanted = options.tiles === undefined ? undefined : new Set(options.tiles)
 	const tiles: QuadIndexTile[] = []
 
+	// Own stars of each wanted tile, in one pass over the stars.
+	const tileStars = new Map<number, number[]>()
+	for (let s = 0; s < starCount; s++) {
+		const tile = tileOfCell(starCells[s], nside, tileNside)
+		if (!tileQuads.has(tile) || (wanted !== undefined && !wanted.has(tile))) continue
+		const list = tileStars.get(tile)
+		if (list === undefined) tileStars.set(tile, [s])
+		else list.push(s)
+	}
+
 	for (const tile of [...tileQuads.keys()].sort((a, b) => a - b)) {
 		if (wanted !== undefined && !wanted.has(tile)) continue
-		tiles.push(buildTile(band, options, tile, tileQuads.get(tile)!, starCells))
+		tiles.push(buildTile(band, options, tile, tileQuads.get(tile)!, tileStars.get(tile) ?? [], starCells))
 	}
 
 	return tiles
 }
 
 // Assembles one tile of a band.
-function buildTile(band: QuadBand, options: QuadIndexTileOptions, tile: number, quads: readonly number[], starCells: Float64Array): QuadIndexTile {
+function buildTile(band: QuadBand, options: QuadIndexTileOptions, tile: number, quads: readonly number[], ownStars: readonly number[], starCells: Float64Array): QuadIndexTile {
 	const { nside } = band
 	const tileNside = options.tileNside
-	const starCount = band.sweeps.length
 
 	// Own stars sorted by cell, keeping brightness order within a cell; then the margin stars the quads use.
-	const own: number[] = []
-	for (let s = 0; s < starCount; s++) if (tileOfCell(starCells[s], nside, tileNside) === tile) own.push(s)
+	const own = [...ownStars]
 	own.sort((a, b) => starCells[a] - starCells[b] || a - b)
 
 	const local = new Map<number, number>()
@@ -446,6 +455,7 @@ export function decodeQuadIndexTile(bytes: Uint8Array): QuadIndexTile {
 	const header = decodeQuadIndexHeader(bytes)
 	const { sections } = header
 
+	// Typed view of a section of bytes: undefined when an optional one is missing; throws for a missing required or out-of-bounds one.
 	function section<T>(kind: number, type: new (buffer: ArrayBufferLike, offset: number, length: number) => T, elementSize: number, required: true): T
 	function section<T>(kind: number, type: new (buffer: ArrayBufferLike, offset: number, length: number) => T, elementSize: number, required: false): T | undefined
 	function section<T>(kind: number, type: new (buffer: ArrayBufferLike, offset: number, length: number) => T, elementSize: number, required: boolean) {
@@ -489,36 +499,39 @@ export interface NebulosaQuadIndexOptions {
 	readonly id?: string
 	// Epoch the star positions are carried to by their proper motions, Julian year; undefined keeps the file epoch.
 	readonly epoch?: number
-	// Bytes of tiles kept loaded before the least recently used are released.
+	// Bytes of star sections kept loaded before the least recently used are released; code sections stay loaded.
 	readonly maxLoadedBytes?: number
 }
 
-// A file of the set: its path, header and loaded contents.
+// Code sections of a tile, kept once read: every code search of a blind solve visits every tile.
+interface TileCodes {
+	readonly tree: KdTree<Uint16Array>
+	readonly quadStars: Uint16Array | Uint32Array
+}
+
+// Star sections of a tile, loaded under the byte budget of the index.
+interface TileStars {
+	readonly stars: Float32Array
+	readonly sweeps: Uint8Array
+	readonly cellIds: Uint32Array
+	readonly cellOffsets: Uint32Array
+	readonly properMotions?: Float32Array
+	// Bytes the sections hold.
+	readonly bytes: number
+}
+
+// A file of the set: its path, header and loaded sections.
 interface TileFile {
 	readonly path: string
-	readonly header: QuadIndexTileHeader
-	tile?: QuadIndexTile
-	bytes: number
+	readonly header: ReturnType<typeof decodeQuadIndexHeader>
+	// Whole-file mapping, where the runtime maps files.
+	mapped?: Uint8Array
+	codes?: TileCodes
+	stars?: TileStars
 }
 
-// Whether the runtime maps files; Bun has no mmap on Windows.
-let MMAP_SUPPORTED: boolean | undefined
-
-// Reads a whole file, mapped when the runtime can.
-function loadFileBytes(path: string): Uint8Array {
-	if (MMAP_SUPPORTED !== false) {
-		try {
-			const mapped = Bun.mmap(path)
-			MMAP_SUPPORTED = true
-			return mapped
-		} catch (e) {
-			if (MMAP_SUPPORTED === true) throw e
-			MMAP_SUPPORTED = false
-		}
-	}
-
-	return new Uint8Array(fs.readFileSync(path))
-}
+// Whether files are memory mapped: Bun has no mmap on Windows, where the sections are read instead.
+const MMAP_SUPPORTED = process.platform !== 'win32'
 
 // Reads the header bytes of a file.
 function readHeaderBytes(path: string) {
@@ -527,6 +540,48 @@ function readHeaderBytes(path: string) {
 		const bytes = new Uint8Array(HEADER_SIZE)
 		fs.readSync(fd, bytes, 0, HEADER_SIZE, 0)
 		return bytes
+	} finally {
+		fs.closeSync(fd)
+	}
+}
+
+// Element constructor of a section view.
+type SectionType<T> = new (buffer: ArrayBufferLike, offset: number, length: number) => T
+
+// Reads sections of a file as typed views: views of the file mapping where files are mapped, else one read buffer per
+// section. A missing optional section is undefined; a missing required or out-of-bounds one throws.
+function readSections(file: TileFile, requests: readonly (readonly [number, SectionType<ArrayBufferView>, number, boolean])[]): (ArrayBufferView | undefined)[] {
+	const entries = requests.map(([kind, , elementSize, required]) => {
+		const entry = file.header.sections.get(kind)
+		if (entry === undefined) {
+			if (required) throw new Error(`${file.path} misses quad index section ${kind}`)
+			return undefined
+		}
+		if (entry.length % elementSize !== 0) throw new Error(`${file.path} has a malformed quad index section ${kind}`)
+		return entry
+	})
+
+	if (MMAP_SUPPORTED) {
+		file.mapped ??= Bun.mmap(file.path)
+		const mapped = file.mapped
+		return requests.map(([kind, type, elementSize], i) => {
+			const entry = entries[i]
+			if (entry === undefined) return undefined
+			if (entry.offset + entry.length > mapped.byteLength) throw new Error(`${file.path} quad index section ${kind} is out of bounds`)
+			return new type(mapped.buffer, mapped.byteOffset + entry.offset, entry.length / elementSize)
+		})
+	}
+
+	const fd = fs.openSync(file.path, 'r')
+
+	try {
+		return requests.map(([kind, type, elementSize], i) => {
+			const entry = entries[i]
+			if (entry === undefined) return undefined
+			const bytes = new Uint8Array(entry.length)
+			if (fs.readSync(fd, bytes, 0, entry.length, entry.offset) !== entry.length) throw new Error(`${file.path} quad index section ${kind} is out of bounds`)
+			return new type(bytes.buffer, 0, entry.length / elementSize)
+		})
 	} finally {
 		fs.closeSync(fd)
 	}
@@ -546,14 +601,14 @@ export class NebulosaQuadIndex implements QuadIndex {
 	readonly #tileNside: number
 	readonly #targetEpoch?: number
 	readonly #maxLoadedBytes: number
-	// Loaded tile ordinals, least recently used first.
+	// Tile ordinals with loaded star sections, least recently used first.
 	readonly #loaded = new Set<number>()
 	#loadedBytes = 0
 
 	// files are tile files of one band: same band limits, NSIDE and tiling. Throws when they differ or a header is invalid.
 	constructor(paths: readonly string[], options: NebulosaQuadIndexOptions = {}) {
 		if (paths.length === 0) throw new Error('a quad index needs at least one file')
-		this.#files = paths.map((path) => ({ path, header: decodeQuadIndexHeader(readHeaderBytes(path)), bytes: 0 }))
+		this.#files = paths.map((path) => ({ path, header: decodeQuadIndexHeader(readHeaderBytes(path)) }))
 		const first = this.#files[0].header
 
 		for (const [ordinal, { header, path }] of this.#files.entries()) {
@@ -562,15 +617,17 @@ export class NebulosaQuadIndex implements QuadIndex {
 			this.#byTile.set(header.tileId, ordinal)
 		}
 
+		// Positions move to another epoch only when every file has proper motions.
+		const movable = options.epoch !== undefined && this.#files.every((file) => file.header.sections.has(STAR_PROPER_MOTION) && file.header.epoch === first.epoch)
 		this.id = options.id ?? `nqi:${Math.round((first.scaleLower * 180 * 3600) / Math.PI)}`
 		this.scaleLower = first.scaleLower
 		this.scaleUpper = first.scaleUpper
 		this.jitter = first.jitter
-		this.epoch = options.epoch ?? first.epoch
+		this.epoch = movable ? (options.epoch ?? first.epoch) : first.epoch
 		this.cellSize = Math.sqrt(Math.PI / 3) / first.nside
 		this.#nside = first.nside
 		this.#tileNside = first.tileNside
-		this.#targetEpoch = options.epoch
+		this.#targetEpoch = movable ? options.epoch : undefined
 		this.#maxLoadedBytes = options.maxLoadedBytes ?? DEFAULT_QUAD_INDEX_MAX_LOADED_BYTES
 	}
 
@@ -579,32 +636,60 @@ export class NebulosaQuadIndex implements QuadIndex {
 		return this.#files.length
 	}
 
-	// Returns the tile of an ordinal, loading it and releasing the least recently used ones beyond the byte budget.
-	#tile(ordinal: number): QuadIndexTile {
+	// Code sections of a tile, read once and kept.
+	#codes(ordinal: number): TileCodes {
 		const file = this.#files[ordinal]
+		if (file.codes !== undefined) return file.codes
 
-		if (file.tile !== undefined) {
-			this.#loaded.delete(ordinal)
-			this.#loaded.add(ordinal)
-			return file.tile
+		const { header } = file
+		const [quadStars, points, lower, upper] = readSections(file, [
+			[QUAD_STARS_SECTION, header.wide ? Uint32Array : Uint16Array, header.wide ? 4 : 2, true],
+			[QUAD_CODES, Uint16Array, 2, true],
+			[KD_LOWER, Uint16Array, 2, true],
+			[KD_UPPER, Uint16Array, 2, true],
+		])
+
+		file.codes = {
+			tree: { dimension: 4, count: header.quadCount, levels: header.levels, points: points as Uint16Array, indices: new Uint32Array(0), lower: lower as Uint16Array, upper: upper as Uint16Array },
+			quadStars: quadStars as Uint16Array | Uint32Array,
 		}
 
-		const bytes = loadFileBytes(file.path)
-		file.tile = decodeQuadIndexTile(bytes)
-		file.bytes = bytes.byteLength
+		return file.codes
+	}
+
+	// Star sections of a tile, loading them and releasing the least recently used beyond the byte budget.
+	#stars(ordinal: number): TileStars {
+		const file = this.#files[ordinal]
+
+		if (file.stars !== undefined) {
+			this.#loaded.delete(ordinal)
+			this.#loaded.add(ordinal)
+			return file.stars
+		}
+
+		const [stars, sweeps, cellIds, cellOffsets, properMotions] = readSections(file, [
+			[STAR_XYZ, Float32Array, 4, true],
+			[STAR_SWEEP, Uint8Array, 1, true],
+			[CELL_IDS, Uint32Array, 4, true],
+			[CELL_OFFSETS, Uint32Array, 4, true],
+			[STAR_PROPER_MOTION, Float32Array, 4, false],
+		])
+
+		const bytes = stars!.byteLength + sweeps!.byteLength + cellIds!.byteLength + cellOffsets!.byteLength + (properMotions?.byteLength ?? 0)
+		file.stars = { stars: stars as Float32Array, sweeps: sweeps as Uint8Array, cellIds: cellIds as Uint32Array, cellOffsets: cellOffsets as Uint32Array, properMotions: properMotions as Float32Array | undefined, bytes }
 		this.#loaded.add(ordinal)
-		this.#loadedBytes += file.bytes
+		this.#loadedBytes += bytes
 
 		for (const other of this.#loaded) {
 			if (this.#loadedBytes <= this.#maxLoadedBytes) break
 			if (other === ordinal) continue
 			const released = this.#files[other]
-			released.tile = undefined
-			this.#loadedBytes -= released.bytes
+			this.#loadedBytes -= released.stars!.bytes
+			released.stars = undefined
 			this.#loaded.delete(other)
 		}
 
-		return file.tile
+		return file.stars
 	}
 
 	// Tile ordinals touching a cone, or all of them.
@@ -626,7 +711,7 @@ export class NebulosaQuadIndex implements QuadIndex {
 
 		for (const ordinal of this.#ordinals(region)) {
 			const base = ordinal * TILE_ID_FACTOR
-			searchKdTree(this.#tile(ordinal).codes, query, radius, (position) => visit(base + position))
+			searchKdTree(this.#codes(ordinal).tree, query, radius, (position) => visit(base + position))
 		}
 	}
 
@@ -634,17 +719,17 @@ export class NebulosaQuadIndex implements QuadIndex {
 	readonly quadStars = (quad: number, out: Float64Array) => {
 		const ordinal = Math.floor(quad / TILE_ID_FACTOR)
 		const local = quad - ordinal * TILE_ID_FACTOR
-		const stars = this.#tile(ordinal).quadStars
+		const stars = this.#codes(ordinal).quadStars
 		const base = ordinal * TILE_ID_FACTOR
 		for (let i = 0; i < 4; i++) out[i] = base + stars[local * 4 + i]
 		return out
 	}
 
-	// Writes the unit vector of a star into out, carried to the requested epoch when the file has proper motions.
+	// Writes the unit vector of a star into out, carried to the requested epoch when the files have proper motions.
 	readonly starVector = (star: number, out: MutVec3) => {
 		const ordinal = Math.floor(star / TILE_ID_FACTOR)
 		const local = star - ordinal * TILE_ID_FACTOR
-		const tile = this.#tile(ordinal)
+		const tile = this.#stars(ordinal)
 		const x = tile.stars[local * 3]
 		const y = tile.stars[local * 3 + 1]
 		const z = tile.stars[local * 3 + 2]
@@ -653,8 +738,9 @@ export class NebulosaQuadIndex implements QuadIndex {
 		out[1] = y / length
 		out[2] = z / length
 
-		if (this.#targetEpoch !== undefined && tile.properMotions !== undefined && this.#targetEpoch !== tile.epoch) {
-			const years = this.#targetEpoch - tile.epoch
+		const epoch = this.#files[ordinal].header.epoch
+		if (this.#targetEpoch !== undefined && tile.properMotions !== undefined && this.#targetEpoch !== epoch) {
+			const years = this.#targetEpoch - epoch
 			const [ra, dec] = eraC2s(out[0], out[1], out[2])
 			eraS2c(ra + tile.properMotions[local * 2] * years, dec + tile.properMotions[local * 2 + 1] * years, out)
 		}
@@ -665,7 +751,7 @@ export class NebulosaQuadIndex implements QuadIndex {
 	// Brightness rank of a star within its uniformization cell.
 	readonly starSweep = (star: number) => {
 		const ordinal = Math.floor(star / TILE_ID_FACTOR)
-		return this.#tile(ordinal).sweeps[star - ordinal * TILE_ID_FACTOR]
+		return this.#stars(ordinal).sweeps[star - ordinal * TILE_ID_FACTOR]
 	}
 
 	// Visits the own stars of the tiles within the cone (each star once across tiles).
@@ -677,7 +763,7 @@ export class NebulosaQuadIndex implements QuadIndex {
 		const center = cone.center
 
 		for (const ordinal of this.#ordinals(cone)) {
-			const tile = this.#tile(ordinal)
+			const tile = this.#stars(ordinal)
 			const base = ordinal * TILE_ID_FACTOR
 			const { cellIds, cellOffsets, stars } = tile
 
@@ -695,9 +781,14 @@ export class NebulosaQuadIndex implements QuadIndex {
 		}
 	};
 
-	// Releases every loaded tile.
+	// Releases every loaded section and mapping.
 	[Symbol.dispose]() {
-		for (const file of this.#files) file.tile = undefined
+		for (const file of this.#files) {
+			file.stars = undefined
+			file.codes = undefined
+			file.mapped = undefined
+		}
+
 		this.#loaded.clear()
 		this.#loadedBytes = 0
 	}
