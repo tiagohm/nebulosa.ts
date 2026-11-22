@@ -32,7 +32,7 @@ export interface KdTree<T extends KdTreeArray = KdTreeArray> {
 	readonly upper: T
 	// Last point of each leaf, for a tree whose nodes are not split by count (a libkd tree split at its median
 	// value); undefined for the trees built here.
-	readonly leafEnds?: Uint32Array
+	readonly leafEnds?: Int32Array
 }
 
 // Number of levels for count points with at most leafSize points per leaf.

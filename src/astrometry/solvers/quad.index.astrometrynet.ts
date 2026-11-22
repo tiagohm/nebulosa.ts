@@ -135,16 +135,18 @@ export class AstrometryNetQuadIndex implements QuadIndex {
 	readonly #sweeps: Uint8Array
 
 	// Opens an index file, mapping it where the runtime can (not on Windows, where it is read whole). Throws on a file
-	// that is not an index, has an unsupported layout, or was written on a big-endian machine.
+	// that is not an index, has an unsupported layout, or was written on a big-endian machine. A file without the ENDIAN
+	// keyword is read as little-endian when its code and star ranges are plausible in that order.
 	constructor(
 		readonly path: string,
 		options: AstrometryNetQuadIndexOptions = {},
 	) {
-		const bytes = process.platform === 'win32' ? new Uint8Array(fs.readFileSync(path)) : Bun.mmap(path)
+		const bytes = process.platform === 'win32' ? alignedFileBytes(path) : Bun.mmap(path)
 		const units = readFitsUnits(bytes)
 		const primary = units[0]?.cards
 		if (primary?.get('AN_FILE') !== 'QUAD') throw new Error(`${path} is not an Astrometry.net index`)
-		if (primary.get('ENDIAN') !== LITTLE_ENDIAN) throw new Error(`${path} was written with an unsupported byte order`)
+		const endian = primary.get('ENDIAN')
+		if (endian !== undefined && endian !== LITTLE_ENDIAN) throw new Error(`${path} was written with an unsupported byte order`)
 
 		const dimquads = Number(primary.get('DIMQUADS'))
 		if (dimquads !== 3 && dimquads !== 4) throw new Error(`${path} has unsupported patterns of ${dimquads} stars`)
@@ -156,13 +158,15 @@ export class AstrometryNetQuadIndex implements QuadIndex {
 			if (name !== undefined) byName.set(name, unit)
 		}
 
-		const table = <T extends KdTreeArray | Uint8Array>(name: string, type: new (buffer: ArrayBufferLike, offset: number, length: number) => T, elementSize: number) => {
+		// Typed view of the data of the binary table whose first column is name, in place.
+		const table = <T extends KdTreeArray | Uint8Array | Int32Array>(name: string, type: new (buffer: ArrayBufferLike, offset: number, length: number) => T, elementSize: number) => {
 			const unit = byName.get(name)
 			if (unit === undefined) throw new Error(`${path} misses the ${name} table`)
 			if (unit.offset + unit.size > bytes.byteLength || unit.size % elementSize !== 0) throw new Error(`${path} has a malformed ${name} table`)
 			return new type(bytes.buffer, bytes.byteOffset + unit.offset, unit.size / elementSize)
 		}
 
+		// The libkd tree of the codes or the stars: its points in place, its range, and the boxes of its nodes.
 		const tree = (name: 'codes' | 'stars'): IndexTree => {
 			const header = byName.get(`kdtree_header_${name}`)?.cards
 			if (header === undefined) throw new Error(`${path} misses the ${name} k-d tree`)
@@ -172,15 +176,17 @@ export class AstrometryNetQuadIndex implements QuadIndex {
 			const nodes = Number(header.get('KDT_NNOD'))
 			const type = kdArrayType(header.get('KDT_DATA'))
 			const points = table(`kdtree_data_${name}`, type, type.BYTES_PER_ELEMENT)
-			const range = table(`kdtree_range_${name}`, Float64Array, 8)
+			// A tree stored as doubles holds external coordinates and may have no range: minval 0 and scale 1.
+			const range = type === Float64Array && !byName.has(`kdtree_range_${name}`) ? Float64Array.from({ length: 2 * dimension + 1 }, (_, i) => (i === 2 * dimension ? 1 : 0)) : table(`kdtree_range_${name}`, Float64Array, 8)
 			if (points.length !== count * dimension || range.length < 2 * dimension + 1) throw new Error(`${path} has an inconsistent ${name} k-d tree`)
+			if (endian === undefined && !plausibleRange(range, dimension, name)) throw new Error(`${path} was written with an unsupported byte order`)
 
 			const levels = Math.round(Math.log2(nodes + 1))
 			if (2 ** levels - 1 !== nodes) throw new Error(`${path} has an unsupported ${name} k-d tree shape`)
 			const linear = header.get('KDT_LINL') === 'T'
-			const lr = linear || !byName.has(`kdtree_lr_${name}`) ? undefined : table(`kdtree_lr_${name}`, Uint32Array, 4)
+			const lr = linear || !byName.has(`kdtree_lr_${name}`) ? undefined : table(`kdtree_lr_${name}`, Int32Array, 4)
 			if (lr !== undefined && lr.length !== 2 ** (levels - 1)) throw new Error(`${path} has an inconsistent ${name} k-d tree`)
-			return { tree: indexTreeBoxes(points, dimension, count, levels, lr, linear), minval: Float64Array.from(range.subarray(0, dimension)), scale: range[2 * dimension] }
+			return { tree: libkdTree(points, dimension, count, levels, lr, linear), minval: Float64Array.from(range.subarray(0, dimension)), scale: range[2 * dimension] }
 		}
 
 		this.indexId = Number(primary.get('INDEXID') ?? 0)
@@ -282,14 +288,30 @@ export class AstrometryNetQuadIndex implements QuadIndex {
 	[Symbol.dispose]() {}
 }
 
-// Builds the node boxes of a libkd tree whose points are in tree order. Its leaves end where lr says (the last point of
-// each leaf), else evenly (KDT_LINL, linear) or by count (Astrometry.net's calculate_R), and every internal node's box
-// is the union of its children's. An empty leaf keeps an inverted box, which no search enters.
-function indexTreeBoxes(points: KdTreeArray, dimension: number, count: number, levels: number, lr: Uint32Array | undefined, linear: boolean): KdTree {
+// Reads a whole file into bytes whose offset is 8-byte aligned, without copying it again when it already is.
+function alignedFileBytes(path: string): Uint8Array {
+	const buffer = fs.readFileSync(path)
+	return buffer.byteOffset % 8 === 0 ? buffer : new Uint8Array(buffer)
+}
+
+// Whether the range of a tree read as little-endian is sensible: finite, with a positive scale, and within the code
+// square [-0.21, 1.21] or the unit cube. A file written in the other byte order gives absurd or non-finite values.
+function plausibleRange(range: Float64Array, dimension: number, name: 'codes' | 'stars') {
+	const limit = name === 'codes' ? 1.25 : 1.0001
+	const low = name === 'codes' ? -0.25 : -1.0001
+	for (let d = 0; d < 2 * dimension; d++) if (!(range[d] >= low && range[d] <= limit)) return false
+	const scale = range[2 * dimension]
+	return Number.isFinite(scale) && scale > 0
+}
+
+// Builds a KdTree over the points of a libkd tree, already in tree order: its leaves end where lr says (the last point
+// of each leaf), else evenly (KDT_LINL, linear) or by count (Astrometry.net's calculate_R), and every internal node's
+// box is the union of its children's. An empty leaf keeps an inverted box, which no search enters.
+export function libkdTree(points: KdTreeArray, dimension: number, count: number, levels: number, lr: Int32Array | undefined, linear: boolean): KdTree {
 	const nodes = 2 ** levels - 1
 	const leaves = 2 ** (levels - 1)
 	const firstLeaf = leaves - 1
-	const leafEnds = new Uint32Array(leaves)
+	const leafEnds = new Int32Array(leaves)
 
 	for (let leaf = 0; leaf < leaves; leaf++) {
 		if (lr !== undefined) leafEnds[leaf] = lr[leaf]

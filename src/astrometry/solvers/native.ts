@@ -264,9 +264,7 @@ class NativeSearch {
 		this.#scaleLower = options.scale?.lower ?? 0
 		this.#scaleUpper = options.scale?.upper ?? Infinity
 
-		// Backbone range in pixels: the index bands seen at the scale range, within 10% of the shorter side and the diagonal.
-		let minBackbone = Infinity
-		let maxBackbone = 0
+		// Indexes whose band, seen at the scale range, fits between 10% of the shorter side and the diagonal.
 		const selected: QuadIndex[] = []
 
 		for (const index of usable) {
@@ -274,8 +272,6 @@ class NativeSearch {
 			const upper = this.#scaleLower > 0 ? index.scaleUpper / this.#scaleLower : Infinity
 			if (upper < 0.1 * Math.min(options.width, options.height) || lower > 2 * this.#fieldRadiusPixels) continue
 			selected.push(index)
-			minBackbone = Math.min(minBackbone, lower)
-			maxBackbone = Math.max(maxBackbone, upper)
 		}
 
 		// Bands of larger quads first: they hold fewer quads made of brighter stars, so a blind search tries them sooner.
@@ -290,12 +286,28 @@ class NativeSearch {
 				this.#searchRegions.set(index, { center: hint.center, radius: Math.min(Math.PI, hint.radius + fieldRadius) })
 			}
 		}
-		minBackbone = Math.max(minBackbone * (1 - this.#tolerance), 0.1 * Math.min(options.width, options.height))
-		maxBackbone = Math.min(maxBackbone * (1 + this.#tolerance), 2 * this.#fieldRadiusPixels)
 		this.enumerators = ([4, 3] as const)
 			.map((size) => ({ size, indexes: this.indexes.filter((index) => index.dimquads === size) }))
 			.filter(({ indexes }) => indexes.length > 0)
-			.map(({ size, indexes }) => ({ enumerator: new FieldQuadEnumerator(field, minBackbone, maxBackbone, this.#tolerance, size), visit: this.#visitor(indexes) }))
+			.map(({ size, indexes }) => {
+				const [minBackbone, maxBackbone] = this.#backboneRange(indexes)
+				return { enumerator: new FieldQuadEnumerator(field, minBackbone, maxBackbone, this.#tolerance, size), visit: this.#visitor(indexes) }
+			})
+	}
+
+	// Backbone range in pixels of a set of indexes: their bands seen at the scale range, widened by the code tolerance
+	// and kept between 10% of the shorter image side and the diagonal.
+	#backboneRange(indexes: readonly QuadIndex[]) {
+		let lower = Infinity
+		let upper = 0
+
+		for (const index of indexes) {
+			lower = Math.min(lower, index.scaleLower / this.#scaleUpper)
+			upper = Math.max(upper, this.#scaleLower > 0 ? index.scaleUpper / this.#scaleLower : Infinity)
+		}
+
+		const { width, height } = this.#options
+		return [Math.max(lower * (1 - this.#tolerance), 0.1 * Math.min(width, height)), Math.min(upper * (1 + this.#tolerance), 2 * this.#fieldRadiusPixels)] as const
 	}
 
 	// Field-pattern visitor over indexes of one pattern size: looks up every labeling in every index whose band admits

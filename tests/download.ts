@@ -66,6 +66,7 @@ const FILES = {
 	'index-4113.fits': ['https://data.astrometry.net/4100/index-4113.fits'],
 	'index-4112.fits': ['https://data.astrometry.net/4100/index-4112.fits'],
 	'index-4111.fits': ['https://data.astrometry.net/4100/index-4111.fits'],
+	'index-4110.fits': ['https://data.astrometry.net/4100/index-4110.fits'],
 } as const
 
 const downloading = new Map<string, Promise<Bun.BunFile>>()
