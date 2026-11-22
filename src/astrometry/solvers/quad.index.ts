@@ -35,8 +35,8 @@ export interface QuadIndex extends Disposable {
 	// Visits every quad whose code lies within tolerance (code units) of code; region, when given, restricts the
 	// search to quads near it. visit may query this or other indexes.
 	readonly searchCodes: (code: QuadCode, tolerance: number, visit: (quad: number) => void, region?: SkyCone) => void
-	// Writes the stars of a quad in canonical A, B, C, D order into out and returns it.
-	readonly quadStars: (quad: number, out: Uint32Array) => Uint32Array
+	// Writes the star ids of a quad in canonical A, B, C, D order into out and returns it; ids may exceed 32 bits.
+	readonly quadStars: (quad: number, out: Float64Array) => Float64Array
 	// Writes the unit vector of a star into out and returns it.
 	readonly starVector: (star: number, out: MutVec3) => MutVec3
 	// Brightness rank of a star within its uniformization cell, 0 for the brightest.

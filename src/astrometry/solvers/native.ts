@@ -238,7 +238,7 @@ class NativeSearch {
 	readonly #distractor: number
 	// Hypotheses already verified, per index object (ids may repeat), as quad and field-star labeling.
 	readonly #tried = new Map<QuadIndex, Set<string>>()
-	readonly #quadStars = new Uint32Array(4)
+	readonly #quadStars = new Float64Array(4)
 	readonly #vectors = new Float64Array(12)
 	readonly #vector: MutVec3 = [0, 0, 0]
 	#solved?: { readonly solution: NativeSolution; readonly index: QuadIndex; readonly logOdds: number; readonly matchCount: number; readonly distractorCount: number; readonly rms: number }
@@ -274,7 +274,8 @@ class NativeSearch {
 			maxBackbone = Math.max(maxBackbone, upper)
 		}
 
-		this.indexes = selected
+		// Bands of larger quads first: they hold fewer quads made of brighter stars, so a blind search tries them sooner.
+		this.indexes = selected.sort((a, b) => b.scaleLower - a.scaleLower)
 		minBackbone = Math.max(minBackbone * (1 - this.#tolerance), 0.1 * Math.min(options.width, options.height))
 		maxBackbone = Math.min(maxBackbone * (1 + this.#tolerance), 2 * this.#fieldRadiusPixels)
 		this.enumerator = new FieldQuadEnumerator(field, minBackbone, maxBackbone, this.#tolerance)

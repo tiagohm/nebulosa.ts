@@ -1,5 +1,6 @@
 import { eraC2s } from '../../astronomy/coordinates/erfa/erfa'
 import { circleToPixels, coordToPixel, pixelToBoundary, pixelToCenter } from '../../astronomy/sky/spatial/healpix'
+import { NumberComparator } from '../../core/util'
 import { type MutVec3, vecAngleUnit } from '../../math/linear-algebra/vec3'
 import type { Angle } from '../../math/units/angle'
 import { canonicalizeQuadCode, insideQuadCircle, type MutQuadCode, type MutQuadStars, QUAD_STARS, quadCode, skyQuadCode, starCoordinates } from './quad.code'
@@ -34,6 +35,12 @@ const MAX_CELL_CANDIDATES = 48
 // Maximum candidate stars cached per cell, brightest first; the usable ones are taken from them as reuse grows.
 const MAX_CACHED_CANDIDATES = 64
 
+// Default largest number of cells built pass after pass over all of them; more are built in groups.
+export const DEFAULT_QUAD_MAX_PASS_MAJOR_CELLS = 65536
+
+// Nested HEALPix levels of a cell group: a group is the 4^6 = 4096 cells that share a parent six levels up.
+const QUAD_CELL_GROUP_LEVELS = 6
+
 // Options of a band.
 export interface QuadBandOptions {
 	// Shortest backbone AB, radians.
@@ -52,6 +59,10 @@ export interface QuadBandOptions {
 	readonly dedup?: Angle
 	// Only cells in this cone receive quads; undefined for every cell holding a kept star.
 	readonly region?: SkyCone
+	// Only these nested cells, at the NSIDE of quadCellNside(scaleLower), receive quads; overrides region.
+	readonly cells?: readonly number[]
+	// Largest number of cells built pass after pass over all of them; more are built group by group.
+	readonly maxPassMajorCells?: number
 }
 
 // One built band: the kept stars in brightness order and the quads in creation order.
@@ -64,6 +75,12 @@ export interface QuadBand {
 	readonly nside: number
 	// Side of the uniformization cells, radians.
 	readonly cellSize: Angle
+	// Stars kept per cell and passes, both scaled to the cell size, and the reuse limits and dedup distance (radians) used.
+	readonly starsPerCell: number
+	readonly passes: number
+	readonly maxReuse: number
+	readonly maxLoosenReuse: number
+	readonly dedup: Angle
 	// Unit vectors of the kept stars, 3 per star, brightest first.
 	readonly stars: Float64Array
 	// Index of each kept star in the input list.
@@ -101,26 +118,66 @@ export function buildQuadBand(stars: Float64Array, options: QuadBandOptions): Qu
 
 	const kept = uniformizeStars(stars, nside, Math.min(255, starsPerCell), dedup)
 	const tree = buildKdTree(kept.stars, 3)
-	const cells = region === undefined ? kept.cells : circleToPixels(nside, ...eraC2s(...(region.center as [number, number, number])), Math.min(Math.PI, region.radius))
+	const cells = options.cells !== undefined ? [...options.cells].sort(NumberComparator) : region === undefined ? kept.cells : circleToPixels(nside, ...eraC2s(...(region.center as [number, number, number])), Math.min(Math.PI, region.radius)).sort(NumberComparator)
 	const builder = new CellQuadBuilder(kept.stars, tree, nside, scaleLower, scaleUpper)
 	const reuse = new Uint16Array(kept.sourceIndices.length)
 	const quads: number[] = []
 	const codes: number[] = []
+
+	// Few cells run pass after pass over all of them, as Astrometry.net does. Many cells (a whole-sky band) run the
+	// passes group by group of 4^QUAD_CELL_GROUP_LEVELS nested cells, so the candidate caches and the duplicate set
+	// stay bounded; a quad duplicated across groups is then possible, and harmless.
+	const groupDivisor = cells.length > (options.maxPassMajorCells ?? DEFAULT_QUAD_MAX_PASS_MAJOR_CELLS) ? 4 ** QUAD_CELL_GROUP_LEVELS : Infinity
+	let start = 0
+
+	while (start < cells.length) {
+		let end = start + 1
+		if (groupDivisor !== Infinity) {
+			const group = Math.floor(cells[start] / groupDivisor)
+			while (end < cells.length && Math.floor(cells[end] / groupDivisor) === group) end++
+		} else {
+			end = cells.length
+		}
+
+		buildCellGroup(builder, cells, start, end, passes, reuse, maxReuse, maxLoosenReuse, quads, codes)
+		start = end
+	}
+
+	return {
+		scaleLower,
+		scaleUpper,
+		nside,
+		cellSize,
+		starsPerCell: Math.min(255, starsPerCell),
+		passes,
+		maxReuse,
+		maxLoosenReuse,
+		dedup,
+		stars: kept.stars,
+		sourceIndices: kept.sourceIndices,
+		sweeps: kept.sweeps,
+		quads: Uint32Array.from(quads),
+		codes: Float64Array.from(codes),
+	}
+}
+
+// Runs the passes over cells[start, end), appending the accepted quads and their codes.
+function buildCellGroup(builder: CellQuadBuilder, cells: readonly number[], start: number, end: number, passes: number, reuse: Uint16Array, maxReuse: number, maxLoosenReuse: number, quads: number[], codes: number[]) {
 	const seen = new Set<string>()
-	const active = new Uint8Array(cells.length).fill(1)
+	const active = new Uint8Array(end - start).fill(1)
 
 	for (let pass = 0; pass < passes; pass++) {
 		let any = false
 
-		for (let k = 0; k < cells.length; k++) {
-			if (active[k] === 0) continue
+		for (let k = start; k < end; k++) {
+			if (active[k - start] === 0) continue
 
 			let found = builder.build(cells[k], reuse, maxReuse, seen)
 			if (found === undefined && maxLoosenReuse > maxReuse) found = builder.build(cells[k], reuse, maxLoosenReuse, seen)
 
 			if (found === undefined) {
 				// A cell that cannot form a quad now never will: reuse only grows.
-				active[k] = 0
+				active[k - start] = 0
 				builder.release(cells[k])
 				continue
 			}
@@ -136,7 +193,7 @@ export function buildQuadBand(stars: Float64Array, options: QuadBandOptions): Qu
 		if (!any) break
 	}
 
-	return { scaleLower, scaleUpper, nside, cellSize, stars: kept.stars, sourceIndices: kept.sourceIndices, sweeps: kept.sweeps, quads: Uint32Array.from(quads), codes: Float64Array.from(codes) }
+	for (let k = start; k < end; k++) builder.release(cells[k])
 }
 
 // Kept stars of a band.

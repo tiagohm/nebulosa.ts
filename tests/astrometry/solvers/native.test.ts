@@ -1,11 +1,16 @@
 import { describe, expect, spyOn, test } from 'bun:test'
+import fs from 'fs'
+import os from 'os'
+import { join } from 'path'
 import { nativeNearbyPlateSolve, nativePlateSolve, nativeSolutionHeader } from '../../../src/astrometry/solvers/native'
 import { fitLinearTanWcs, fitSimilarityTanWcs, type TanWcs, tanPixelToSky, tanSkyToPixel } from '../../../src/astrometry/solvers/native.fit'
 import * as tweak from '../../../src/astrometry/solvers/native.tweak'
 import { radiusOfRelevanceSq, verifyStarLists } from '../../../src/astrometry/solvers/native.verify'
 import type { Parity } from '../../../src/astrometry/solvers/platesolver'
+import { buildQuadBand } from '../../../src/astrometry/solvers/quad.builder'
 import type { QuadIndex } from '../../../src/astrometry/solvers/quad.index'
 import { catalogStarVectors, EphemeralQuadIndex } from '../../../src/astrometry/solvers/quad.index.ephemeral'
+import { encodeQuadIndexTile, NebulosaQuadIndex, quadIndexTileFileName, quadIndexTilesFromBand } from '../../../src/astrometry/solvers/quad.index.file'
 import { tanProject, tanUnproject } from '../../../src/astrometry/wcs/fits.wcs'
 import * as sipFit from '../../../src/astrometry/wcs/sip.fit'
 import { eraC2s, eraS2c } from '../../../src/astronomy/coordinates/erfa/erfa'
@@ -261,6 +266,32 @@ describe('solve', () => {
 		const result = await nativePlateSolve(stars, indexes, { width, height })
 		expect(result).toBeDefined()
 		expectSolution(result!.header, truth, width, height)
+	})
+
+	test('blind field over tiled index files', async () => {
+		const directory = fs.mkdtempSync(join(os.tmpdir(), 'nqi-solve-'))
+
+		try {
+			const indexes = [0.14, 0.2, 0.28, 0.4].map((fraction) => {
+				const band = buildQuadBand(sky.vectors, { scaleLower: fraction * shortSide, scaleUpper: fraction * shortSide * Math.SQRT2 })
+				const paths = quadIndexTilesFromBand(band, { tileNside: 16, jitter: ASEC2RAD, epoch: 2000, magnitudes: sky.magnitudes }).map((tile) => {
+					const path = join(directory, quadIndexTileFileName(tile))
+					fs.writeFileSync(path, encodeQuadIndexTile(tile))
+					return path
+				})
+				return new NebulosaQuadIndex(paths)
+			})
+
+			const truth = wcsOf(ra + 0.005, dec - 0.004, scale, 5.1, 'FLIPPED', width, height)
+			const stars = detect(sky, truth, { seed: 15, width, height, limit: 13, missing: 0.1, distractors: 0.1 })
+			const result = await nativePlateSolve(stars, indexes, { width, height })
+			for (const index of indexes) index[Symbol.dispose]()
+			expect(result).toBeDefined()
+			expect(result!.indexId.startsWith('nqi:')).toBeTrue()
+			expectSolution(result!.header, truth, width, height)
+		} finally {
+			fs.rmSync(directory, { recursive: true, force: true })
+		}
 	})
 
 	test('distorted field gains a SIP solution with reverse terms', async () => {

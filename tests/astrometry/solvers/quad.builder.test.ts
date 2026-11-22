@@ -115,7 +115,7 @@ test('the ephemeral index finds its own quads by code and its stars by cone', ()
 	const index = EphemeralQuadIndex.fromVectors(stars, { scaleLower: 0.25 * DEG2RAD, scaleUpper: 0.35 * DEG2RAD, region })
 	expect(index.quadCount).toBeGreaterThan(50)
 
-	const out = new Uint32Array(4)
+	const out = new Float64Array(4)
 	const code = quadCode()
 	const vectors = [0, 1, 2, 3].map(() => [0, 0, 0] as [number, number, number])
 
@@ -134,4 +134,21 @@ test('the ephemeral index finds its own quads by code and its stars by cone', ()
 		inside++
 	})
 	expect(inside).toBeGreaterThan(0)
+})
+
+test('grouped passes build the same kind of band as passes over all cells', () => {
+	const stars = randomStars(5, 6000, 1, -0.4, 6 * DEG2RAD)
+	const options = { scaleLower: 0.25 * DEG2RAD, scaleUpper: 0.35 * DEG2RAD }
+	const all = buildQuadBand(stars, options)
+	const grouped = buildQuadBand(stars, { ...options, maxPassMajorCells: 0 })
+	expect(grouped.quads).toEqual(buildQuadBand(stars, { ...options, maxPassMajorCells: 0 }).quads)
+	expect(grouped.quads.length).toBeGreaterThan(0.9 * all.quads.length)
+	expect(grouped.quads.length).toBeLessThan(1.1 * all.quads.length)
+
+	const code = quadCode()
+	const star = (i: number): [number, number, number] => [grouped.stars[grouped.quads[i] * 3], grouped.stars[grouped.quads[i] * 3 + 1], grouped.stars[grouped.quads[i] * 3 + 2]]
+	for (let q = 0; q < grouped.quads.length / 4; q++) {
+		expect(skyQuadCode(star(q * 4), star(q * 4 + 1), star(q * 4 + 2), star(q * 4 + 3), code)).toBeTrue()
+		for (let i = 0; i < 4; i++) expect(code[i]).toBeCloseTo(grouped.codes[q * 4 + i], 12)
+	}
 })

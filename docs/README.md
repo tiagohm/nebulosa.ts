@@ -6431,7 +6431,7 @@ console.log(toDeg(distanceToTile(36, 2, center.rightAscension, center.declinatio
 
 Plate solving finds where an image points without trusting the mount: the pattern of the detected stars is recognized in a star catalog. The method is the geometric hashing of Astrometry.net (Lang et al. 2010). Four stars form a quad; the similarity that carries its backbone pair A and B to (0, 0) and (1, 1) carries the other two stars to a 4-number code that does not change with position, rotation, or scale, so a quad of the image and the same quad in an index of catalog quads share a code. Each code match is a hypothesis of the image's position, scale, rotation, and parity, and it is accepted only when a Bayesian test against all the other stars of the field gives odds of at least 1e9 that the stars are where the catalog puts them, instead of being a chance alignment. The accepted solution is refined star by star, optionally with a SIP distortion (see [SIP Distortion Fitting](#sip-distortion-fitting)).
 
-This solver runs in TypeScript, in process, from a detected star list (see [Star Detection](#star-detection)); unlike [ASTAP Plate Solving](#astap-plate-solving), [Local Astrometry.net Plate Solving](#local-astrometrynet-plate-solving), and [Native libastrometry Plate Solving](#native-libastrometry-plate-solving), it needs no external program or native library. The codes are computed exactly as Astrometry.net computes them, with north as the first code axis and east as the second. A quad index covers one band of quad sizes, and a field is solvable when the indexes hold quads of roughly 10 % to 100 % of its width. `EphemeralQuadIndex` builds a band in memory from a star list brightest first, keeping a few bright stars per sky cell. `nativeNearbyPlateSolve` builds such bands from any [Star Catalog Interface and Spatial Query](#star-catalog-interface-and-spatial-query) around a position hint, with a star density matched to the image, so a catalog without quads, such as an [HNSKY Tiled Catalog](#hnsky-tiled-catalog), serves a hinted solve; it needs a position and a scale. An in-memory index covers only the cone it was built for, so a blind solve needs indexes that cover the whole sky. The result is a TAN or TAN-SIP header referenced at the image center and its [Plate Solution](#plate-solution), or `undefined` when the search ends without a match. The search is CPU work that yields between blocks of stars, so a signal or timeout can stop it.
+This solver runs in TypeScript, in process, from a detected star list (see [Star Detection](#star-detection)); unlike [ASTAP Plate Solving](#astap-plate-solving), [Local Astrometry.net Plate Solving](#local-astrometrynet-plate-solving), and [Native libastrometry Plate Solving](#native-libastrometry-plate-solving), it needs no external program or native library. The codes are computed exactly as Astrometry.net computes them, with north as the first code axis and east as the second. A quad index covers one band of quad sizes, and a field is solvable when the indexes hold quads of roughly 10 % to 100 % of its width. `EphemeralQuadIndex` builds a band in memory from a star list brightest first, keeping a few bright stars per sky cell. `nativeNearbyPlateSolve` builds such bands from any [Star Catalog Interface and Spatial Query](#star-catalog-interface-and-spatial-query) around a position hint, with a star density matched to the image, so a catalog without quads, such as an [HNSKY Tiled Catalog](#hnsky-tiled-catalog), serves a hinted solve; it needs a position and a scale. An in-memory index covers only the cone it was built for, so a blind solve needs indexes that cover the whole sky, such as [Quad Index Files](#quad-index-files). The result is a TAN or TAN-SIP header referenced at the image center and its [Plate Solution](#plate-solution), or `undefined` when the search ends without a match. The search is CPU work that yields between blocks of stars, so a signal or timeout can stop it.
 
 ```ts
 import { nativeNearbyPlateSolve, nativePlateSolve } from 'nebulosa/src/astrometry/solvers/native'
@@ -6677,6 +6677,37 @@ const solution = plateSolutionFrom(header)!
 console.log(toDeg(solution.rightAscension), toDeg(solution.declination)) // 83.8221 -5.3911 — image center, degrees
 console.log(toArcsec(solution.scale), toArcmin(solution.width), toArcmin(solution.height), toArcmin(solution.radius)) // 1.8 30 24 19.2093727
 console.log(toDeg(solution.orientation), solution.parity) // 180 FLIPPED — a negative CD determinant
+```
+
+### Quad Index Files
+
+A blind solve must recognize the field anywhere on the sky, so its quads are built once, ahead of time, from a deep catalog and stored, as Astrometry.net does with its index files. Each file holds one band of quad sizes. Because the number of quads grows with the inverse square of the quad size, a band of small quads covers the sky in hundreds of tiles: HEALPix nested cells of a coarser grid, each owning the quads whose backbone midpoint lies in it, plus its stars and the few stars of neighboring tiles its quads borrow. A solver near a hint then reads only the tiles around it. The quad codes are those of [Built-in Plate Solving](#built-in-plate-solving), stored with the stars' positions, magnitudes, and optional proper motions at the file's epoch.
+
+The `.nqi` format is flat: its sections map directly onto typed arrays, with no parsing, and `NebulosaQuadIndex` serves the tiles of one band as a quad index, loading each tile when the search first touches it and releasing the least recently used ones beyond a memory budget. Files are mapped into memory where the runtime can, and read whole otherwise (Bun has no memory mapping on Windows). `buildQuadIndexTile` builds one tile from the stars of its cone, so a generator can read a catalog tile by tile; the reuse limit of a star then applies per tile. Positions are carried by proper motion to a requested epoch when the files have proper motions.
+
+```ts
+import { nativePlateSolve } from 'nebulosa/src/astrometry/solvers/native'
+import { buildQuadBand } from 'nebulosa/src/astrometry/solvers/quad.builder'
+import { buildQuadIndexTile, decodeQuadIndexTile, encodeQuadIndexTile, NebulosaQuadIndex, quadIndexTileCone, quadIndexTileFileName, quadIndexTilesFromBand, verifyQuadIndexTile } from 'nebulosa/src/astrometry/solvers/quad.index.file'
+import { arcsec, deg } from 'nebulosa/src/math/units/angle'
+
+// vectors: Float64Array — catalog stars as unit vectors (3 per star), brightest first; magnitudes: Float64Array.
+// A band of quads from 8' to 11.3', split into the tiles of a HEALPix NSIDE 8 grid (768 tiles over the sky).
+const band = buildQuadBand(vectors, { scaleLower: deg(8 / 60), scaleUpper: deg((8 / 60) * Math.SQRT2) })
+const tiles = quadIndexTilesFromBand(band, { tileNside: 8, jitter: arcsec(1), epoch: 2000, magnitudes, catalog: 'Gaia DR3' })
+
+// Or one tile at a time: the catalog stars of the cone of tile 42 (starsOfCone, magnitudesOfCone) build that tile only.
+const cone = quadIndexTileCone(8, 42, deg((8 / 60) * Math.SQRT2))
+const tile = buildQuadIndexTile({ vectors: starsOfCone, magnitudes: magnitudesOfCone }, { scaleLower: deg(8 / 60), scaleUpper: deg((8 / 60) * Math.SQRT2) }, 8, 42, { jitter: arcsec(1), epoch: 2000 })
+
+// The bytes of a file, named after its band and tile (such as nqi-480-8-0042.nqi), checked, and read back without copying.
+const bytes = encodeQuadIndexTile(tiles[0])
+await Bun.write(`index/${quadIndexTileFileName(tiles[0])}`, bytes)
+console.log(verifyQuadIndexTile(bytes), decodeQuadIndexTile(bytes).quadStars.length / 4) // true, quads in the tile
+
+// The tiles of the band as one quad index, its stars carried to 2026.0, for a blind solve.
+using index = new NebulosaQuadIndex(paths, { epoch: 2026 })
+const solution = await nativePlateSolve(stars, [index], { width: 4144, height: 2822 })
 ```
 
 ### SIP Distortion Fitting

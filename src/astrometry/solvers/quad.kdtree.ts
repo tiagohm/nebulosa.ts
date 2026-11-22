@@ -23,7 +23,7 @@ export interface KdTree<T extends KdTreeArray = KdTreeArray> {
 	readonly levels: number
 	// Points in tree order.
 	readonly points: T
-	// Caller's point index of each tree position.
+	// Caller's point index of each tree position; empty for a tree read back from a file, whose order is the caller's.
 	readonly indices: Uint32Array
 	// Lower corner of each node's bounding box.
 	readonly lower: T

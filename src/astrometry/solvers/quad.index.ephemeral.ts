@@ -78,7 +78,7 @@ export class EphemeralQuadIndex implements QuadIndex {
 	}
 
 	// Writes the kept-star ids of a quad in canonical A, B, C, D order into out and returns it.
-	readonly quadStars = (quad: number, out: Uint32Array) => {
+	readonly quadStars = (quad: number, out: Float64Array) => {
 		const quads = this.#band.quads
 		out[0] = quads[quad * 4]
 		out[1] = quads[quad * 4 + 1]
