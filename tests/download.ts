@@ -105,6 +105,10 @@ export async function download(name: FileName) {
 	return file
 }
 
+export function downloadAll(...names: FileName[]) {
+	return Promise.all(names.map(download))
+}
+
 export async function downloadPerTag(tag: FileTag) {
 	const files = Object.keys(FILES).filter((name) => FILES[name as FileName].includes(tag as never))
 	return await Promise.all(files.map((name) => download(name as never)))

@@ -7,7 +7,8 @@ import { insideQuadCircle, type MutQuadCode, quadCode } from './quad.code'
 // pixels and reordered round-robin over a coarse grid so that a bright cluster cannot fill the first quads
 // (Astrometry.net's uniformize.py). Quads are enumerated in depth order, as Astrometry.net's solver does: every
 // quad of the first n stars is tried before star n + 1 enters, either as the newest backbone star B or as the
-// newest inner star C, so no quad is tried twice and the brightest, most reliable stars decide first. A backbone
+// newest inner star C, so no quad is tried twice and the brightest, most reliable stars decide first; triangles
+// (three-star patterns of some Astrometry.net indexes) are enumerated the same way without D. A backbone
 // pair is kept only when its length lies in the pixel range of the indexes, and C and D must lie in the circle of
 // diameter AB widened by the code tolerance.
 
@@ -84,8 +85,8 @@ export function prepareSolverField(stars: readonly DetectedStar[], width: number
 	return { count, x, y, flux, sourceIndices, width, height }
 }
 
-// Receives one field quad: star indices A, B, C, D, the backbone length in pixels and the code. Returns true to stop
-// the enumeration. The code array is reused between calls.
+// Receives one field quad: star indices A, B, C, D (D is -1 for a triangle), the backbone length in pixels and the
+// code. Returns true to stop the enumeration. The code array is reused between calls.
 export type FieldQuadVisitor = (a: number, b: number, c: number, d: number, backbone: number, code: MutQuadCode) => boolean
 
 // Enumerates the quads of a prepared field in depth order, star block by star block.
@@ -102,12 +103,14 @@ export class FieldQuadEnumerator {
 	// Number of stars already entered.
 	#entered = 0
 
-	// minBackbone and maxBackbone bound |AB| in pixels; tolerance is the code tolerance.
+	// minBackbone and maxBackbone bound |AB| in pixels; tolerance is the code tolerance; size is 4 for quads or 3
+	// for triangles, whose D is passed as -1.
 	constructor(
 		readonly field: SolverField,
 		minBackbone: number,
 		maxBackbone: number,
 		tolerance: number,
+		readonly size: 3 | 4 = 4,
 	) {
 		this.#count = field.count
 		this.#minSq = minBackbone * minBackbone
@@ -142,6 +145,12 @@ export class FieldQuadEnumerator {
 
 				for (let c = 0; c < n; c++) {
 					if (c === a || !this.#inside(pair, a, c)) continue
+
+					if (this.size === 3) {
+						if (visit(a, n, c, -1, Math.sqrt(this.#scaleSq(a, n)), this.#code)) return true
+						continue
+					}
+
 					const cx = this.#code[0]
 					const cy = this.#code[1]
 
@@ -163,6 +172,12 @@ export class FieldQuadEnumerator {
 					if (this.#state[a * this.#count + b] !== 1) continue
 					const pair = a * this.#count + b
 					if (!this.#inside(pair, a, n)) continue
+
+					if (this.size === 3) {
+						if (visit(a, b, n, -1, Math.sqrt(this.#scaleSq(a, b)), this.#code)) return true
+						continue
+					}
+
 					const cx = this.#code[0]
 					const cy = this.#code[1]
 

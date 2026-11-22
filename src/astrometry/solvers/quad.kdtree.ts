@@ -1,13 +1,14 @@
 // Static, implicit k-d tree for fixed-radius searches over small-dimensional points (quad codes, unit vectors).
 // The tree is balanced by count: the node covering positions [lo, hi) splits at mid = lo + floor((hi - lo) / 2)
 // along its widest axis, and the children of node k are 2k + 1 and 2k + 2, so no pointers or split values are
-// stored, only the bounding box of every node. Points are permuted into leaf order on build, and indices maps a
+// stored, only the bounding box of every node. A tree read from elsewhere may state where each leaf ends instead
+// (leafEnds), so that the same search serves trees split by value. Points are permuted into leaf order on build, and indices maps a
 // tree position back to the caller's point index. The storage type of the points (float or unsigned 16-bit
 // quantized codes) is kept for the boxes, so a tree can be written to and read from a flat file unchanged.
 // Building copies the points once; a search allocates only a traversal stack of 4·(levels + 1) integers.
 
 // Typed arrays a tree can store its points and boxes in.
-export type KdTreeArray = Float64Array | Float32Array | Uint16Array
+export type KdTreeArray = Float64Array | Float32Array | Uint32Array | Uint16Array
 
 // Default maximum number of points in a leaf.
 export const DEFAULT_KD_TREE_LEAF_SIZE = 16
@@ -29,6 +30,9 @@ export interface KdTree<T extends KdTreeArray = KdTreeArray> {
 	readonly lower: T
 	// Upper corner of each node's bounding box.
 	readonly upper: T
+	// Last point of each leaf, for a tree whose nodes are not split by count (a libkd tree split at its median
+	// value); undefined for the trees built here.
+	readonly leafEnds?: Uint32Array
 }
 
 // Number of levels for count points with at most leafSize points per leaf.
@@ -173,7 +177,13 @@ export function searchKdTree(tree: KdTree, query: ArrayLike<number>, radius: num
 		if (boxDistanceSq > radiusSq) continue
 
 		if (level === levels - 1) {
-			for (let p = lo; p < hi; p++) {
+			// A tree split by value (Astrometry.net's) states where each leaf ends instead.
+			const leafEnds = tree.leafEnds
+			const leaf = node - (2 ** (levels - 1) - 1)
+			const first = leafEnds === undefined ? lo : leaf === 0 ? 0 : leafEnds[leaf - 1] + 1
+			const end = leafEnds === undefined ? hi : leafEnds[leaf] + 1
+
+			for (let p = first; p < end; p++) {
 				const offset = p * dimension
 				let distanceSq = 0
 

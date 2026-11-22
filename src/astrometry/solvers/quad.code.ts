@@ -7,7 +7,9 @@ import type { Vec3 } from '../../math/linear-algebra/vec3'
 // sky z is the gnomonic projection around the normalized midpoint of A and B with the north offset as the real
 // part and the east offset as the imaginary part, the axis order Astrometry.net's star_coords produces, so a
 // quad yields the same code here and in its index files. A mirror image swaps x and y of every code point.
-// The canonical form keeps mean(cx, dx) <= 1/2 and cx <= dx. Codes are dimensionless; projections are radians.
+// The canonical form keeps mean(cx, dx) <= 1/2 and cx <= dx. Astrometry.net's widest indexes use three-star patterns
+// (DIMQUADS = 3), whose code is (cx, cy) alone with cx <= 1/2; the last two components are then unused. Codes are
+// dimensionless; projections are radians.
 
 // Number of stars in a quad.
 export const QUAD_STARS = 4
@@ -36,7 +38,7 @@ export type MutQuadCode = [number, number, number, number]
 // A read-only quad code (cx, cy, dx, dy).
 export type QuadCode = Readonly<MutQuadCode>
 
-// Star indices of a quad in code order (A, B, C, D).
+// Star indices of a quad in code order (A, B, C, D); D is -1 for a three-star pattern (a triangle).
 export type MutQuadStars = [number, number, number, number]
 
 // Read-only star indices of a quad in code order (A, B, C, D).
@@ -175,7 +177,7 @@ export interface QuadCodeVariant {
 // Enumerates the labelings of a field quad whose code can match a canonical index code within tolerance, as
 // Astrometry.net's try_all_codes: the given and the swapped backbone (v -> 1 - v), both orders of C and D, and,
 // when parity is unknown, the mirrored code of each. A labeling is kept when cx <= 1/2 + m, cx <= dx + m and
-// mean(cx, dx) <= 1/2 + m, with m = 1.5·tolerance. The code is the field code of stars (A, B, C, D); parity
+// mean(cx, dx) <= 1/2 + m, with m = 1.5·tolerance. A triangle (stars[3] = -1) has no D and keeps cx <= 1/2 + m only. The code is the field code of stars (A, B, C, D); parity
 // selects the normal (false), mirrored (true) or both (undefined) codes. visit is called once per labeling;
 // its arguments are reused between calls and must not be retained.
 export function forEachQuadCodeVariant(code: QuadCode, stars: QuadStars, tolerance: number, parity: boolean | undefined, visit: (variant: QuadCodeVariant) => void) {
@@ -207,6 +209,12 @@ function forEachBackbone(code: QuadCode, stars: QuadStars, margin: number, flipp
 
 // Tries both orders of C and D under the canonical-form margins.
 function forEachInnerOrder(code: QuadCode, a: number, b: number, c: number, d: number, margin: number, flipped: boolean, visit: (variant: QuadCodeVariant) => void) {
+	if (d < 0) {
+		// A triangle: one inner star, so the canonical form only bounds cx.
+		if (code[0] <= 0.5 + margin) emitVariant(code[0], code[1], 0, 0, a, b, c, -1, Infinity, flipped, visit)
+		return
+	}
+
 	emitVariant(code[0], code[1], code[2], code[3], a, b, c, d, margin, flipped, visit)
 	emitVariant(code[2], code[3], code[0], code[1], a, b, d, c, margin, flipped, visit)
 }

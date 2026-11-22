@@ -30,6 +30,8 @@ export interface QuadIndex extends Disposable {
 	readonly epoch: number
 	// Region with quads and stars; undefined for the whole sky.
 	readonly coverage?: SkyCone
+	// Stars per pattern: 4 for quads, 3 for the triangles of some Astrometry.net indexes.
+	readonly dimquads: 3 | 4
 	// Side of the uniformization cells, radians: reference stars are spread with a bounded count per cell of this size.
 	readonly cellSize: Angle
 	// Visits every quad whose code lies within tolerance (code units) of code; region, when given, restricts the

@@ -595,6 +595,7 @@ export class NebulosaQuadIndex implements QuadIndex {
 	readonly jitter: Angle
 	readonly epoch: number
 	readonly cellSize: Angle
+	readonly dimquads = 4
 	readonly #files: TileFile[]
 	readonly #byTile = new Map<number, number>()
 	readonly #nside: number

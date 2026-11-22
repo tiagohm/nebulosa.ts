@@ -374,6 +374,7 @@ describe('solve', () => {
 			jitter: real.jitter,
 			epoch: real.epoch,
 			cellSize: real.cellSize,
+			dimquads: real.dimquads,
 			searchCodes: real.searchCodes,
 			quadStars: real.quadStars,
 			starVector: real.starVector,
@@ -399,6 +400,7 @@ describe('solve', () => {
 			jitter: real.jitter,
 			epoch: real.epoch,
 			cellSize: real.cellSize,
+			dimquads: real.dimquads,
 			searchCodes: (code, tolerance, visit, region) => {
 				if (region !== undefined) regions.push(region.radius)
 				real.searchCodes(code, tolerance, visit)

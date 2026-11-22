@@ -7,7 +7,7 @@ import { type MutVec3, vecAngleUnit } from '../../math/linear-algebra/vec3'
 import type { Angle } from '../../math/units/angle'
 import { DEC_TAN, RA_TAN } from '../wcs/fits.wcs'
 import { inverseSipIntoFitsHeader, sipModelIntoFitsHeader } from '../wcs/sip.fit'
-import { FieldQuadEnumerator, prepareSolverField, type SolverField } from './native.field'
+import { FieldQuadEnumerator, type FieldQuadVisitor, prepareSolverField, type SolverField } from './native.field'
 import { fitSimilarityTanWcs, type TanWcs, tanWcsScale } from './native.fit'
 import { type NativeSolution, nativeSolutionCone, projectNativeSolution, tweakSolution, verificationSigma2 } from './native.tweak'
 import { DEFAULT_DISTRACTOR_FRACTION, LOG_ODDS_ACCEPT, LOG_ODDS_TUNE, verifyHypothesis } from './native.verify'
@@ -117,8 +117,9 @@ export async function nativePlateSolve(stars: readonly DetectedStar[], indexes: 
 
 	const block = Math.max(1, options.depthBlock ?? DEFAULT_NATIVE_DEPTH_BLOCK)
 
-	while (!search.enumerator.done) {
-		if (search.enumerator.advance(block, search.visit)) break
+	// Quads and triangles are enumerated side by side, block by block, for the indexes of each pattern size.
+	while (search.enumerators.some(({ enumerator }) => !enumerator.done)) {
+		if (search.enumerators.some(({ enumerator, visit }) => !enumerator.done && enumerator.advance(block, visit))) break
 		checkLimits(signal, deadline)
 		await yieldToEventLoop()
 		checkLimits(signal, deadline)
@@ -225,7 +226,8 @@ function nearbyPositions(center: MutVec3, radius: Angle, fieldRadius: Angle): Ne
 // State of one search: the field, the usable indexes, the hint and the best accepted hypothesis.
 class NativeSearch {
 	readonly indexes: readonly QuadIndex[]
-	readonly enumerator: FieldQuadEnumerator
+	// One enumerator per pattern size among the indexes, with the visitor of the indexes of that size.
+	readonly enumerators: readonly { readonly enumerator: FieldQuadEnumerator; readonly visit: FieldQuadVisitor }[]
 	readonly #field: SolverField
 	readonly #options: NativePlateSolveOptions
 	readonly #tolerance: number
@@ -290,16 +292,25 @@ class NativeSearch {
 		}
 		minBackbone = Math.max(minBackbone * (1 - this.#tolerance), 0.1 * Math.min(options.width, options.height))
 		maxBackbone = Math.min(maxBackbone * (1 + this.#tolerance), 2 * this.#fieldRadiusPixels)
-		this.enumerator = new FieldQuadEnumerator(field, minBackbone, maxBackbone, this.#tolerance)
+		this.enumerators = ([4, 3] as const)
+			.map((size) => ({ size, indexes: this.indexes.filter((index) => index.dimquads === size) }))
+			.filter(({ indexes }) => indexes.length > 0)
+			.map(({ size, indexes }) => ({ enumerator: new FieldQuadEnumerator(field, minBackbone, maxBackbone, this.#tolerance, size), visit: this.#visitor(indexes) }))
 	}
 
-	// Field quad visitor: looks up every labeling in every index whose band admits the backbone. Returns true once solved.
-	readonly visit = (a: number, b: number, c: number, d: number, backbone: number, code: MutQuadCode) => {
+	// Field-pattern visitor over indexes of one pattern size: looks up every labeling in every index whose band admits
+	// the backbone. Returns true once solved.
+	#visitor(indexes: readonly QuadIndex[]): FieldQuadVisitor {
+		return (a, b, c, d, backbone, code) => this.#visit(indexes, a, b, c, d, backbone, code)
+	}
+
+	// Looks up the labelings of one field pattern in the given indexes.
+	#visit(indexes: readonly QuadIndex[], a: number, b: number, c: number, d: number, backbone: number, code: MutQuadCode) {
 		forEachQuadCodeVariant(code, [a, b, c, d], this.#tolerance, this.#codeParity, (variant) => {
 			if (this.#solved !== undefined) return
 			const stars = [variant.stars[0], variant.stars[1], variant.stars[2], variant.stars[3]] as const
 
-			for (const index of this.indexes) {
+			for (const index of indexes) {
 				if (this.#solved !== undefined) return
 				if (backbone * this.#scaleUpper < index.scaleLower * (1 - this.#tolerance) || backbone * this.#scaleLower > index.scaleUpper * (1 + this.#tolerance)) continue
 				index.searchCodes(variant.code, this.#tolerance, (quad) => this.#hit(index, quad, stars, backbone), this.#searchRegions.get(index))
@@ -309,7 +320,7 @@ class NativeSearch {
 		return this.#solved !== undefined
 	}
 
-	// Filters, fits and verifies one code hit.
+	// Filters, fits and verifies one code hit; fieldStars[3] is -1 for a triangle.
 	#hit(index: QuadIndex, quad: number, fieldStars: readonly [number, number, number, number], backbone: number) {
 		if (this.#solved !== undefined) return
 
@@ -321,10 +332,11 @@ class NativeSearch {
 		tried.add(key)
 
 		const field = this.#field
-		const stars = index.quadStars(quad, this.#quadStars)
-		const vectors = this.#vectors
+		const size = fieldStars[3] < 0 ? 3 : 4
+		const stars = index.quadStars(quad, this.#quadStars).subarray(0, size)
+		const vectors = this.#vectors.subarray(0, size * 3)
 
-		for (let i = 0; i < 4; i++) {
+		for (let i = 0; i < size; i++) {
 			index.starVector(stars[i], this.#vector)
 			vectors[i * 3] = this.#vector[0]
 			vectors[i * 3 + 1] = this.#vector[1]
@@ -337,10 +349,10 @@ class NativeSearch {
 		if (backboneScale < this.#scaleLower * (1 - this.#tolerance) || backboneScale > this.#scaleUpper * (1 + this.#tolerance)) return
 
 		const crpix = [(field.width + 1) / 2, (field.height + 1) / 2] as const
-		const x = fieldStars.map((s) => field.x[s])
-		const y = fieldStars.map((s) => field.y[s])
+		const x = fieldStars.slice(0, size).map((s) => field.x[s])
+		const y = fieldStars.slice(0, size).map((s) => field.y[s])
 		const parity = this.#options.parity === undefined ? undefined : this.#options.parity === 'FLIPPED'
-		const fit = fitSimilarityTanWcs({ count: 4, x, y, vectors }, parity, crpix)
+		const fit = fitSimilarityTanWcs({ count: size, x, y, vectors }, parity, crpix)
 		if (fit === undefined) return
 
 		const scale = tanWcsScale(fit.wcs)
@@ -366,7 +378,7 @@ class NativeSearch {
 			quadRadiusSq,
 			gamma: 1,
 			sigma2: verificationSigma2(this.#pixelError, index, fit.wcs),
-			quadFieldStars: fieldStars,
+			quadFieldStars: fieldStars.slice(0, size),
 			quadIndexStars: stars,
 			binSize: index.cellSize / scale,
 			distractorFraction: this.#distractor,
@@ -408,7 +420,7 @@ class NativeSearch {
 		const solution = plateSolutionFrom(header)
 		if (solution === undefined) throw new PlateSolveError('failed', 'the native solver produced an invalid WCS')
 
-		return { header, solution, logOdds: solved.logOdds, matchCount: solved.matchCount, distractorCount: solved.distractorCount, rms: solved.rms, indexId: solved.index.id, verifications: this.#verifications, depth: this.enumerator.entered }
+		return { header, solution, logOdds: solved.logOdds, matchCount: solved.matchCount, distractorCount: solved.distractorCount, rms: solved.rms, indexId: solved.index.id, verifications: this.#verifications, depth: Math.max(...this.enumerators.map(({ enumerator }) => enumerator.entered)) }
 	}
 }
 

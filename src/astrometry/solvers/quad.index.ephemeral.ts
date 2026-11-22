@@ -38,6 +38,7 @@ export class EphemeralQuadIndex implements QuadIndex {
 	readonly epoch: number
 	readonly coverage?: SkyCone
 	readonly cellSize: Angle
+	readonly dimquads = 4
 	readonly #band: QuadBand
 	readonly #codes: KdTree<Float64Array>
 	readonly #stars: KdTree<Float64Array>
