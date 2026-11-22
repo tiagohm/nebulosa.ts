@@ -121,8 +121,10 @@ export async function catalogStarVectors(catalog: StarCatalog, cone: SkyCone, ep
 
 // Options of catalogQuadIndexStars.
 export interface CatalogQuadIndexStarsOptions {
-	// Epoch the positions are carried to by proper motion, Julian year; undefined keeps each entry's epoch.
+	// Epoch the positions are carried to by proper motion, Julian year; undefined uses the first entry's epoch.
 	readonly epoch?: number
+	// Faintest magnitude streamed; entries without a magnitude are then left out.
+	readonly magnitudeMax?: number
 	// NSIDE of the cells that bound the stars kept, with perCell.
 	readonly nside?: number
 	// Brightest stars kept per cell of nside; undefined keeps every star.
@@ -133,7 +135,8 @@ export interface CatalogQuadIndexStarsOptions {
 export interface CatalogQuadIndexStars extends QuadIndexStars {
 	// Magnitude of each star, NaN when the catalog has none.
 	readonly magnitudes: Float64Array
-	// Epoch of the positions, Julian year: the requested one, else the first entry's; undefined when unknown.
+	// Epoch the positions were carried to, Julian year: the requested one, else the first entry's; undefined when no
+	// entry states one. Entries without proper motion or epoch stay where the catalog puts them.
 	readonly epoch?: number
 }
 
@@ -153,18 +156,20 @@ function KeptStarComparator(a: KeptStar, b: KeptStar) {
 
 // Streams a catalog cone into the stars of a quad index (quadIndexTilesFromBand, buildQuadIndexTile): unit vectors
 // brightest first with their magnitudes, and their proper motions (dα/dt, dδ/dt, radians per year) when any entry has
-// one. With nside and perCell only the brightest perCell stars of each HEALPix cell are kept as the stream goes, so a
-// cone as wide as the whole sky needs memory for the kept stars only. Entries without a magnitude sort last.
+// one. Positions are carried by proper motion to one epoch, the requested one or else the first entry's, so a catalog
+// whose entries have different epochs gives positions of a single epoch. With nside and perCell only the brightest
+// perCell stars of each HEALPix cell are kept as the stream goes, so a cone as wide as the whole sky needs memory for the
+// kept stars only. Entries without a magnitude sort last.
 export async function catalogQuadIndexStars(catalog: StarCatalog, cone: SkyCone, options: CatalogQuadIndexStarsOptions = {}): Promise<CatalogQuadIndexStars> {
-	const { epoch, nside, perCell } = options
+	const { nside, perCell, magnitudeMax } = options
 	const [centerRA, centerDEC] = eraC2s(cone.center[0], cone.center[1], cone.center[2])
 	const bounded = nside !== undefined && perCell !== undefined && perCell > 0
 	const byCell = new Map<number, KeptStar[]>()
-	let entryEpoch: number | undefined
+	let epoch = options.epoch
 	let moving = false
 
-	for await (const entry of catalog.streamRegion({ kind: 'cone', centerRA, centerDEC, radius: Math.min(Math.PI, cone.radius) })) {
-		entryEpoch ??= entry.epoch
+	for await (const entry of catalog.streamRegion({ kind: 'cone', centerRA, centerDEC, radius: Math.min(Math.PI, cone.radius), magnitudeMax })) {
+		epoch ??= entry.epoch
 		let ra = entry.rightAscension
 		let dec = entry.declination
 
@@ -208,5 +213,5 @@ export async function catalogQuadIndexStars(catalog: StarCatalog, cone: SkyCone,
 		}
 	}
 
-	return { vectors, magnitudes, properMotions, epoch: epoch ?? entryEpoch }
+	return { vectors, magnitudes, properMotions, epoch }
 }

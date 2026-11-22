@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test'
 import { catalogQuadIndexStars, catalogStarVectors } from '../../../src/astrometry/solvers/quad.index.ephemeral'
 import { eraC2s, eraS2c } from '../../../src/astronomy/coordinates/erfa/erfa'
 import { coordToPixel } from '../../../src/astronomy/sky/spatial/healpix'
+import type { StarCatalog, StarCatalogConeQuery, StarCatalogEntry } from '../../../src/catalogs/stars/catalog'
 import { HnskyCatalog } from '../../../src/catalogs/stars/hnsky'
 import { deg } from '../../../src/math/units/angle'
 import { downloadAll } from '../../download'
@@ -43,4 +44,35 @@ test('keeps only the brightest stars of each cell when bounded', async () => {
 	expect(bounded.magnitudes.length).toBe(expected.length)
 	expect([...bounded.magnitudes]).toEqual(expected)
 	expect(bounded.magnitudes.length).toBeLessThan(all.magnitudes.length)
+})
+
+test('carries proper motions to one epoch and returns them', async () => {
+	const pm = 1e-6 // radians per year
+	const entries: StarCatalogEntry[] = [
+		{ rightAscension: deg(161), declination: deg(-59.6), magnitude: 5, epoch: 2016, pmRA: pm, pmDEC: -pm },
+		{ rightAscension: deg(161.1), declination: deg(-59.5), magnitude: 6, epoch: 2000, pmRA: 2 * pm, pmDEC: 0 },
+		{ rightAscension: deg(161.2), declination: deg(-59.7), magnitude: 7 },
+		{ rightAscension: deg(161.3), declination: deg(-59.8), magnitude: 20, epoch: 2000 },
+	]
+	const stub = { streamRegion: (query: StarCatalogConeQuery) => entries.filter((entry) => query.magnitudeMax === undefined || (entry.magnitude ?? Infinity) <= query.magnitudeMax) } as unknown as StarCatalog
+	const position = (stars: Float64Array, i: number) => eraC2s(stars[i * 3], stars[i * 3 + 1], stars[i * 3 + 2])
+
+	// Without a requested epoch, every star goes to the first entry's epoch (2016).
+	const first = await catalogQuadIndexStars(stub, cone)
+	expect(first.epoch).toBe(2016)
+	expect(first.properMotions).toBeDefined()
+	expect(position(first.vectors, 0)[0]).toBeCloseTo(deg(161), 12)
+	expect(position(first.vectors, 1)[0]).toBeCloseTo(deg(161.1) + 2 * pm * 16, 12)
+	expect(first.properMotions![2]).toBeCloseTo(2 * pm, 15)
+	// A star without epoch or proper motion stays where the catalog puts it.
+	expect(position(first.vectors, 2)[0]).toBeCloseTo(deg(161.2), 12)
+
+	// A requested epoch moves every star with proper motion to it.
+	const later = await catalogQuadIndexStars(stub, cone, { epoch: 2026 })
+	expect(later.epoch).toBe(2026)
+	expect(position(later.vectors, 0)[0]).toBeCloseTo(deg(161) + pm * 10, 12)
+	expect(position(later.vectors, 0)[1]).toBeCloseTo(deg(-59.6) - pm * 10, 12)
+
+	// The magnitude limit is passed to the catalog.
+	expect((await catalogQuadIndexStars(stub, cone, { magnitudeMax: 10 })).magnitudes.length).toBe(3)
 })
