@@ -10,12 +10,13 @@ import { DEC_TAN, DEC_TAN_SIP, RA_TAN, RA_TAN_SIP } from './fits.wcs'
 // pixel pairs. Solves separable weighted least-squares for the A and B polynomials in centered pixel
 // coordinates (u = x − CRPIX1, v = y − CRPIX2) via column-scaled QR, with iterative sigma clipping,
 // condition-number and spatial-distribution guards, and rich residual diagnostics. Also writes the
-// fitted model back into a FITS header and evaluates/applies the correction. All coordinates are pixels.
+// fitted model back into a FITS header, evaluates/applies the correction, and fits the reverse AP and BP
+// polynomials of a forward model on a pixel grid, written into a header beside it. All coordinates are pixels.
 
 // Minimum supported SIP polynomial total order.
 const MIN_SIP_ORDER = 2
 // Maximum supported SIP polynomial total order.
-const MAX_SIP_ORDER = 5
+export const MAX_SIP_ORDER = 5
 // Default maximum sigma-clipping iterations.
 const DEFAULT_MAX_ITERATIONS = 5
 // Default sigma-clip threshold in robust-scatter units.
@@ -486,6 +487,7 @@ export function sipModelIntoFitsHeader(sipModel: SipModel, header: FitsHeader) {
 // A fitted reverse SIP model: AP and BP map corrected offsets (U, V) back to raw pixel offsets (u, v) as
 // u = U + AP(U, V) and v = V + BP(U, V), with every term of total degree 0..order.
 export interface InverseSipModel {
+	// Total polynomial order of AP and BP.
 	readonly order: number
 	// AP coefficients keyed by 'AP_p_q'.
 	readonly AP: SipCoefficientMap

@@ -3,9 +3,10 @@ import fs from 'fs'
 import os from 'os'
 import { join } from 'path'
 import { nativeNearbyPlateSolve, nativePlateSolve, nativeSolutionHeader } from '../../../src/astrometry/solvers/native'
+import { prepareSolverField } from '../../../src/astrometry/solvers/native.field'
 import { fitLinearTanWcs, fitSimilarityTanWcs, type TanWcs, tanPixelToSky, tanSkyToPixel } from '../../../src/astrometry/solvers/native.fit'
 import * as tweak from '../../../src/astrometry/solvers/native.tweak'
-import { radiusOfRelevanceSq, verifyStarLists } from '../../../src/astrometry/solvers/native.verify'
+import { radiusOfRelevanceSq, verifyHypothesis, verifyStarLists } from '../../../src/astrometry/solvers/native.verify'
 import type { Parity } from '../../../src/astrometry/solvers/platesolver'
 import { buildQuadBand } from '../../../src/astrometry/solvers/quad.builder'
 import type { QuadIndex } from '../../../src/astrometry/solvers/quad.index'
@@ -437,6 +438,9 @@ describe('solve', () => {
 	})
 
 	test('nearby tiling of a wide hint at a pole stays bounded', async () => {
+		// A few bright stars keep each of the hundreds of position searches short.
+		const stars = detect(sky, wcsOf(ra, dec, scale, 0.3, 'NORMAL', width, height), { seed: 18, width, height, limit: 13 }).slice(0, 8)
+
 		for (const declination of [Math.PI / 2, deg(89.9), -Math.PI / 2]) {
 			let queries = 0
 			const catalog = {
@@ -447,12 +451,123 @@ describe('solve', () => {
 			} as unknown as StarCatalog
 
 			const started = performance.now()
-			const result = await nativeNearbyPlateSolve([], catalog, { width, height, rightAscension: 1, declination, radius: 5 * DEG2RAD, scale: { lower: scale * 0.9, upper: scale * 1.1 } })
+			const result = await nativeNearbyPlateSolve(stars, catalog, { width, height, rightAscension: 1, declination, radius: 5 * DEG2RAD, scale: { lower: scale * 0.9, upper: scale * 1.1 } })
 			expect(result).toBeUndefined()
-			// About 100 field-sized positions cover a 5° cap, tried at three densities.
+			// About 100 field-sized positions cover a 5° cap, tried at up to three densities.
 			expect(queries).toBeGreaterThan(100)
 			expect(queries).toBeLessThan(1500)
 			expect(performance.now() - started).toBeLessThan(20000)
+
+			// A field of fewer than 4 stars cannot solve, so the catalog is never read.
+			queries = 0
+			expect(await nativeNearbyPlateSolve(stars.slice(0, 3), catalog, { width, height, rightAscension: 1, declination, radius: 5 * DEG2RAD, scale: { lower: scale * 0.9, upper: scale * 1.1 } })).toBeUndefined()
+			expect(queries).toBe(0)
+		}
+	})
+
+	test('the refinement leaves the quad stars out of its verification', () => {
+		const truth = wcsOf(ra, dec, scale, 0.6, 'NORMAL', width, height)
+		const field = prepareSolverField(detect(sky, truth, { seed: 21, width, height, limit: 13 }), width, height)
+		const [index] = indexesFor(sky, shortSide, [0.2])
+		// Four index stars and the field stars under them stand for the matched quad.
+		const quadFieldStars: number[] = []
+		const quadIndexStars: number[] = []
+		const pixel: [number, number] = [0, 0]
+		const v: MutVec3 = [0, 0, 0]
+
+		index.starsInCone({ center: truth.crval, radius: 0.5 * DEG2RAD }, (star) => {
+			if (quadFieldStars.length === 4 || !tanSkyToPixel(truth, index.starVector(star, v), pixel)) return
+			for (let i = 0; i < field.count; i++) {
+				if (!quadFieldStars.includes(i) && (field.x[i] - pixel[0]) ** 2 + (field.y[i] - pixel[1]) ** 2 < 1) {
+					quadFieldStars.push(i)
+					quadIndexStars.push(star)
+					return
+				}
+			}
+		})
+
+		expect(quadFieldStars.length).toBe(4)
+		const input = { field, index, wcs: truth, quadX: width / 2, quadY: height / 2, quadRadiusSq: 200 ** 2, pixelError: 1, sipOrder: 0 }
+		const counted = tweak.tweakSolution(input).verification
+		const excluded = tweak.tweakSolution({ ...input, quadFieldStars, quadIndexStars }).verification
+		for (const star of quadFieldStars) expect(excluded.testStars.includes(star)).toBeFalse()
+		for (const star of quadIndexStars) expect(excluded.refStars.includes(star)).toBeFalse()
+		// Four free matches, worth several nats each, would otherwise count toward acceptance.
+		expect(counted.logOdds - excluded.logOdds).toBeGreaterThan(10)
+	})
+
+	test('a quad star reached under another id is left out of the references', () => {
+		const truth = wcsOf(ra, dec, scale, 0.6, 'NORMAL', width, height)
+		const field = prepareSolverField(detect(sky, truth, { seed: 22, width, height, limit: 13 }), width, height)
+		const [real] = indexesFor(sky, shortSide, [0.2])
+		// Every star is reachable under a second id, as a tiled index reaches a margin star under its home tile's id.
+		const offset = 2 ** 32
+		const twin: QuadIndex = {
+			id: real.id,
+			scaleLower: real.scaleLower,
+			scaleUpper: real.scaleUpper,
+			jitter: real.jitter,
+			epoch: real.epoch,
+			cellSize: real.cellSize,
+			dimquads: real.dimquads,
+			searchCodes: real.searchCodes,
+			quadStars: real.quadStars,
+			starVector: (star, out) => real.starVector(star % offset, out),
+			starSweep: (star) => real.starSweep(star % offset),
+			starsInCone: (cone, visit) => real.starsInCone(cone, (star) => visit(star + offset)),
+			[Symbol.dispose]: () => {},
+		}
+		const quad: number[] = []
+		real.starsInCone({ center: truth.crval, radius: 0.2 * DEG2RAD }, (star) => quad.length < 4 && quad.push(star))
+
+		const solution = { wcs: truth }
+		const verification = verifyHypothesis({
+			field,
+			index: twin,
+			project: (vector, out) => tweak.projectNativeSolution(solution, vector, out),
+			cone: tweak.nativeSolutionCone(solution, width, height),
+			quadX: width / 2,
+			quadY: height / 2,
+			quadRadiusSq: 200 ** 2,
+			gamma: 0,
+			sigma2: 1,
+			quadIndexStars: quad,
+			binSize: real.cellSize / scale,
+		})
+		for (const star of quad) expect(verification.refStars.includes(star + offset)).toBeFalse()
+	})
+
+	test('an abort stops a long block within a time slice', async () => {
+		const other = syntheticSky(99, ra, dec, 2 * DEG2RAD, 400)
+		const stars = detect(other, wcsOf(ra, dec, scale, 0.3, 'NORMAL', width, height), { seed: 8, width, height, limit: 13 })
+		const indexes = indexesFor(sky, shortSide, [0.14, 0.2, 0.28, 0.4, 0.56])
+		const started = performance.now()
+		// One block holds every star, so only the time slices can let the abort in.
+		await expect(nativePlateSolve(stars, indexes, { width, height, depthBlock: 1000 }, AbortSignal.timeout(300))).rejects.toMatchObject({ code: 'aborted' })
+		expect(performance.now() - started).toBeLessThan(3000)
+	})
+
+	test('an unsupported SIP order is refused and a zero timeout uses the default', async () => {
+		await expect(nativePlateSolve([], [], { width, height, sipOrder: 6 })).rejects.toThrow('SIP order')
+		await expect(nativePlateSolve([], [], { width, height, sipOrder: 2.5 })).rejects.toThrow('SIP order')
+		expect(await nativePlateSolve([], [], { width, height, timeout: 0 })).toBeUndefined()
+	})
+
+	test('an index whose coverage only meets the hint cone widened by the field radius is searched', async () => {
+		const truth = wcsOf(ra, dec, scale, 0.8, 'NORMAL', width, height)
+		const stars = detect(sky, truth, { seed: 17, width, height, limit: 13 })
+		// Coverage 0.6° north of the field center with a 0.4° radius: it overlaps the field (0.56° half diagonal) but not the 0.1° hint.
+		const region = { center: eraS2c(ra, dec + 0.6 * DEG2RAD), radius: 0.4 * DEG2RAD }
+		const result = await nativePlateSolve(stars, indexesFor(sky, shortSide, [0.2, 0.28, 0.4], region), { width, height, scale: { lower: scale * 0.9, upper: scale * 1.1 }, rightAscension: ra, declination: dec, radius: 0.1 * DEG2RAD, sipOrder: 0 })
+		expect(result).toBeDefined()
+		expectSolution(result!.header, truth, width, height)
+	})
+
+	test('a solution at or next to a pole writes a header of the same orientation', () => {
+		// Exactly at a pole, rounded onto it (z = 1), and 2.5 mas from it (below the RA threshold of eraC2s).
+		for (const crval of [[0, 0, 1], eraS2c(1, Math.PI / 2 - 1e-11), eraS2c(1, Math.PI / 2 - 1.2e-8), [0, 0, -1], eraS2c(2.5, -Math.PI / 2 + 1e-11)] as MutVec3[]) {
+			const truth: TanWcs = { ...wcsOf(0, 0, scale, 0.7, 'NORMAL', width, height), crval }
+			expectSolution(nativeSolutionHeader({ wcs: truth }, width, height), truth, width, height, 0.01 * ASEC2RAD)
 		}
 	})
 
@@ -475,6 +590,11 @@ describe('solve', () => {
 		const result = await nativeNearbyPlateSolve(stars, catalog, { width, height, rightAscension: ra, declination: dec, radius: 0.5 * DEG2RAD, scale: { lower: scale * 0.95, upper: scale * 1.05 } })
 		expect(result).toBeDefined()
 		expectSolution(result!.header, truth, width, height)
+
+		// A scale range open at 0 sizes the bands at its upper end instead of building cells of zero size.
+		const open = await nativeNearbyPlateSolve(stars, catalog, { width, height, rightAscension: ra, declination: dec, radius: 0.5 * DEG2RAD, scale: { lower: 0, upper: scale * 1.05 }, timeout: 60000 })
+		expect(open).toBeDefined()
+		expectSolution(open!.header, truth, width, height)
 	})
 })
 

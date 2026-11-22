@@ -6,12 +6,13 @@ import type { FitsHeader } from '../../io/formats/fits/fits'
 import { type MutVec3, vecAngleUnit } from '../../math/linear-algebra/vec3'
 import type { Angle } from '../../math/units/angle'
 import { DEC_TAN, RA_TAN } from '../wcs/fits.wcs'
-import { inverseSipIntoFitsHeader, sipModelIntoFitsHeader } from '../wcs/sip.fit'
+import { inverseSipIntoFitsHeader, MAX_SIP_ORDER, sipModelIntoFitsHeader } from '../wcs/sip.fit'
 import { FieldQuadEnumerator, type FieldQuadVisitor, prepareSolverField, type SolverField } from './native.field'
 import { fitSimilarityTanWcs, type TanWcs, tanWcsScale } from './native.fit'
 import { type NativeSolution, nativeSolutionCone, projectNativeSolution, tweakSolution, verificationSigma2 } from './native.tweak'
 import { DEFAULT_DISTRACTOR_FRACTION, LOG_ODDS_ACCEPT, LOG_ODDS_TUNE, verifyHypothesis } from './native.verify'
 import { type Parity, type PlateSolution, PlateSolveError, type PlateSolveOptions, plateSolutionFrom } from './platesolver'
+import { healpixCellSize, quadCellNside } from './quad.builder'
 import { DEFAULT_QUAD_CODE_TOLERANCE, forEachQuadCodeVariant, type MutQuadCode } from './quad.code'
 import type { QuadIndex, SkyCone } from './quad.index'
 import { catalogStarVectors, EphemeralQuadIndex } from './quad.index.ephemeral'
@@ -19,16 +20,20 @@ import { catalogStarVectors, EphemeralQuadIndex } from './quad.index.ephemeral'
 // Native plate solver: blind or hinted astrometric calibration of detected stars against QuadIndex sources,
 // after Astrometry.net (Lang et al. 2010). The field quads are enumerated brightest first; each canonical labeling
 // of a quad looks up matching index quads by code; every hit passes cheap scale, region and parity filters,
-// becomes a similarity TAN hypothesis and is verified by the Bayesian log-odds against the index stars. The first
-// hypothesis whose odds reach 1e9 is refined over individual stars, with an optional SIP distortion, and returned
-// as a FITS TAN or TAN-SIP header referenced at the image center, with its PlateSolution. nativeNearbyPlateSolve
+// becomes a similarity TAN hypothesis and is verified by the Bayesian log-odds against the index stars other than
+// those of the quad. A hypothesis whose odds reach 1e6 is refined over individual stars, with an optional SIP
+// distortion, and the first whose odds then reach 1e9, the quad's stars still left out, is returned as a FITS TAN
+// or TAN-SIP header referenced at the image center, with its PlateSolution. nativeNearbyPlateSolve
 // builds the indexes in memory from a star catalog around a position hint, with star densities matched to the
-// image after ASTAP and Watney. The search is synchronous between blocks of stars and yields to the event loop
-// between them, so the caller's signal and timeout can stop it. Pixels are FITS 1-based internally; angles are
-// radians.
+// image after ASTAP and Watney. The search runs in slices of at most NATIVE_TIME_SLICE milliseconds or one block of
+// stars and yields to the event loop between them, so the caller's signal and timeout can stop it. Pixels are FITS
+// 1-based internally; angles are radians.
 
 // Default stars entered per enumeration block, between yields and limit checks.
 export const DEFAULT_NATIVE_DEPTH_BLOCK = 10
+
+// Longest synchronous run of the enumeration between yields to the event loop, milliseconds.
+const NATIVE_TIME_SLICE = 50
 
 // Default centroid error of the field stars, pixels (Astrometry.net's verify_pix).
 export const DEFAULT_NATIVE_PIXEL_ERROR = 1
@@ -50,7 +55,7 @@ export interface NativePlateSolveOptions extends PlateSolveOptions {
 	readonly scale?: { readonly lower: Angle; readonly upper: Angle }
 	// Expected parity; undefined tries both.
 	readonly parity?: Parity
-	// Final SIP order, 0 or 1 for a linear TAN solution.
+	// Final SIP order, an integer from 0 to MAX_SIP_ORDER; 0 or 1 for a linear TAN solution.
 	readonly sipOrder?: number
 	// Maximum field stars used.
 	readonly maxStars?: number
@@ -105,10 +110,17 @@ function yieldToEventLoop() {
 	})
 }
 
+// Throws when a SIP order cannot be fitted, which would otherwise silently give a linear solution.
+function checkSipOrder(sipOrder: number | undefined) {
+	if (sipOrder !== undefined && !(Number.isInteger(sipOrder) && sipOrder >= 0 && sipOrder <= MAX_SIP_ORDER)) throw new Error(`the SIP order must be an integer from 0 to ${MAX_SIP_ORDER}`)
+}
+
 // Solves detected stars (zero-based centroids) against the given indexes. Resolves undefined when the search
-// ends without a solution; rejects with PlateSolveError on abort or timeout.
+// ends without a solution; rejects with PlateSolveError on abort or timeout (a timeout of 0 or undefined uses
+// DEFAULT_NATIVE_TIMEOUT), and with an Error for an unsupported SIP order.
 export async function nativePlateSolve(stars: readonly DetectedStar[], indexes: readonly QuadIndex[], options: NativePlateSolveOptions, signal?: AbortSignal): Promise<NativePlateSolveResult | undefined> {
-	const deadline = performance.now() + (options.timeout ?? DEFAULT_NATIVE_TIMEOUT)
+	const deadline = performance.now() + (options.timeout || DEFAULT_NATIVE_TIMEOUT)
+	checkSipOrder(options.sipOrder)
 	checkLimits(signal, deadline)
 
 	const field = prepareSolverField(stars, options.width, options.height, options.maxStars)
@@ -117,9 +129,9 @@ export async function nativePlateSolve(stars: readonly DetectedStar[], indexes: 
 
 	const block = Math.max(1, options.depthBlock ?? DEFAULT_NATIVE_DEPTH_BLOCK)
 
-	// Quads and triangles are enumerated side by side, block by block, for the indexes of each pattern size.
+	// Quads and triangles are enumerated side by side, slice by slice, for the indexes of each pattern size.
 	while (search.enumerators.some(({ enumerator }) => !enumerator.done)) {
-		if (search.enumerators.some(({ enumerator, visit }) => !enumerator.done && enumerator.advance(block, visit))) break
+		if (search.enumerators.some(({ enumerator, visit }) => !enumerator.done && enumerator.advance(block, visit, performance.now() + NATIVE_TIME_SLICE))) break
 		checkLimits(signal, deadline)
 		await yieldToEventLoop()
 		checkLimits(signal, deadline)
@@ -130,9 +142,12 @@ export async function nativePlateSolve(stars: readonly DetectedStar[], indexes: 
 
 // Options of a nearby solve over a star catalog: a complete position hint and a scale are required.
 export interface NativeNearbyPlateSolveOptions extends NativePlateSolveOptions {
+	// ICRS right ascension and declination of the expected image center, radians.
 	readonly rightAscension: Angle
 	readonly declination: Angle
+	// Radius around the hint that holds the image center, radians, positive.
 	readonly radius: Angle
+	// Plate-scale range, radians per pixel; upper is positive and lower may be 0.
 	readonly scale: { readonly lower: Angle; readonly upper: Angle }
 	// Quad bands as fractions of the shorter image side: the first band starts at the first value and each band is
 	// sqrt(2) wide. Default [0.2, 0.28, 0.4].
@@ -147,37 +162,53 @@ const DEFAULT_NEARBY_BAND_FRACTIONS = [0.2, 0.2 * Math.SQRT2, 0.4]
 // Density factors tried in turn: the image density, then one sqrt(2) step denser and sparser (Watney's density offsets).
 const NEARBY_DENSITY_FACTORS = [1, Math.SQRT2, Math.SQRT1_2]
 
-// Number of search positions above which the hint cone is tiled instead of searched at once.
+// Hint radius, in field radii, up to which the hint cone is searched at once instead of tiled.
 const NEARBY_SINGLE_CONE_FIELDS = 3
 
 // Solves detected stars around a position hint with quads built in memory from a star catalog. The hint cone is
 // searched at once when it spans at most three field radii, else it is tiled with field-sized positions ordered
-// by distance from the hint. Resolves undefined when no position solves.
+// by distance from the hint. The bands are sized at the geometric mean of the scale range, or at its upper end when
+// its lower end is 0; a density factor whose bands would repeat those of an earlier one is skipped. Resolves
+// undefined when no position solves, at once when the field has fewer than 4 usable stars.
 export async function nativeNearbyPlateSolve(stars: readonly DetectedStar[], catalog: StarCatalog, options: NativeNearbyPlateSolveOptions, signal?: AbortSignal): Promise<NativePlateSolveResult | undefined> {
 	const started = performance.now()
-	const timeout = options.timeout ?? DEFAULT_NATIVE_TIMEOUT
-	const scale = Math.sqrt(options.scale.lower * options.scale.upper)
+	const timeout = options.timeout || DEFAULT_NATIVE_TIMEOUT
+	checkSipOrder(options.sipOrder)
+	checkLimits(signal, started + timeout)
+
+	const field = prepareSolverField(stars, options.width, options.height, options.maxStars)
+	if (field.count < 4) return undefined
+
+	const scale = options.scale.lower > 0 ? Math.sqrt(options.scale.lower * options.scale.upper) : options.scale.upper
 	const shortSide = Math.min(options.width, options.height) * scale
 	const fieldRadius = (Math.hypot(options.width, options.height) / 2) * options.scale.upper
 	const fractions = options.bandFractions ?? DEFAULT_NEARBY_BAND_FRACTIONS
 	const bands = fractions.map((fraction) => [fraction * shortSide, fraction * shortSide * Math.SQRT2] as const)
-	const field = prepareSolverField(stars, options.width, options.height, options.maxStars)
 	const longestQuad = Math.max(...bands.map((band) => band[1]))
 	const fieldArea = options.width * options.height * scale * scale
 	const positions = nearbyPositions(eraS2c(options.rightAscension, options.declination), options.radius, fieldRadius)
 
+	// Stars per cell of each band for each density factor, without the factors whose bands an earlier one already built.
+	const densities: (readonly number[])[] = []
 	for (const factor of NEARBY_DENSITY_FACTORS) {
+		const perCell = bands.map(([scaleLower]) => Math.max(4, Math.min(16, (factor * field.count * scaleLower * scaleLower) / fieldArea)))
+		const built = perCell.map((count, i) => effectiveStarsPerCell(count, bands[i][0]))
+		if (!densities.some((other) => other.every((count, i) => effectiveStarsPerCell(count, bands[i][0]) === built[i]))) densities.push(perCell)
+	}
+
+	// A single position queries its cone once for every density.
+	let single: Float64Array | undefined
+
+	for (const perCell of densities) {
 		for (const position of positions) {
 			checkLimits(signal, started + timeout)
 			// The catalog cone covers the position, one field radius around it for the quads near its edge, and the longest quad.
 			const cone = { center: position.center, radius: position.radius + fieldRadius + longestQuad }
-			const vectors = await catalogStarVectors(catalog, cone, options.epoch)
-			const indexes = bands.map(([scaleLower, scaleUpper]) => {
-				const starsPerCell = Math.max(4, Math.min(16, (factor * field.count * scaleLower * scaleLower) / fieldArea))
-				return EphemeralQuadIndex.fromVectors(vectors, { scaleLower, scaleUpper, starsPerCell, region: { center: position.center, radius: position.radius + fieldRadius }, id: `nearby:${scaleLower}` })
-			})
+			const vectors = positions.length === 1 ? (single ??= await catalogStarVectors(catalog, cone, options.epoch)) : await catalogStarVectors(catalog, cone, options.epoch)
+			const indexes = bands.map(([scaleLower, scaleUpper], i) => EphemeralQuadIndex.fromVectors(vectors, { scaleLower, scaleUpper, starsPerCell: perCell[i], region: { center: position.center, radius: position.radius + fieldRadius }, id: `nearby:${scaleLower}` }))
 			const [ra, dec] = eraC2s(position.center[0], position.center[1], position.center[2])
-			const remaining = timeout - (performance.now() - started)
+			checkLimits(signal, started + timeout)
+			const remaining = Math.max(Number.EPSILON, timeout - (performance.now() - started))
 			const result = await nativePlateSolve(stars, indexes, { ...options, rightAscension: ra, declination: dec, radius: position.radius + fieldRadius, timeout: remaining }, signal)
 			if (result !== undefined) return result
 		}
@@ -186,9 +217,17 @@ export async function nativeNearbyPlateSolve(stars: readonly DetectedStar[], cat
 	return undefined
 }
 
+// Stars per cell a band of minimum scaleLower radians keeps for a requested count per scaleLower-sized cell, as
+// buildQuadBand scales it to its HEALPix cells.
+function effectiveStarsPerCell(starsPerCell: number, scaleLower: Angle) {
+	return Math.min(255, Math.max(1, Math.round(starsPerCell * (healpixCellSize(quadCellNside(scaleLower)) / scaleLower) ** 2)))
+}
+
 // A search position of the nearby solve.
 interface NearbyPosition {
+	// ICRS unit vector of the position.
 	readonly center: MutVec3
+	// Radius of the image centers it serves, radians.
 	readonly radius: Angle
 }
 
@@ -240,7 +279,8 @@ class NativeSearch {
 	readonly #fieldRadiusPixels: number
 	readonly #pixelError: number
 	readonly #distractor: number
-	// Hypotheses already verified, per index object (ids may repeat), as quad and field-star labeling.
+	// Hypotheses already verified in the current field pattern, per index object (ids may repeat), as quad and
+	// field-star labeling: only the mirrored twin of a labeling can repeat, and only within one pattern.
 	readonly #tried = new Map<QuadIndex, Set<string>>()
 	readonly #quadStars = new Float64Array(4)
 	readonly #vectors = new Float64Array(12)
@@ -248,6 +288,7 @@ class NativeSearch {
 	#solved?: { readonly solution: NativeSolution; readonly index: QuadIndex; readonly logOdds: number; readonly matchCount: number; readonly distractorCount: number; readonly rms: number }
 	#verifications = 0
 
+	// Prepares the search of a field over the indexes whose band and coverage can serve it under the options.
 	constructor(field: SolverField, indexes: readonly QuadIndex[], options: NativePlateSolveOptions) {
 		this.#field = field
 		this.#options = options
@@ -258,11 +299,13 @@ class NativeSearch {
 		this.#fieldRadiusPixels = Math.hypot(options.width, options.height) / 2
 		this.#pixelError = options.pixelError ?? DEFAULT_NATIVE_PIXEL_ERROR
 		this.#distractor = options.distractorFraction ?? DEFAULT_DISTRACTOR_FRACTION
-
-		const hint = this.#hint
-		const usable = indexes.filter((index) => hint === undefined || index.coverage === undefined || vecAngleUnit(index.coverage.center, hint.center) <= index.coverage.radius + hint.radius)
 		this.#scaleLower = options.scale?.lower ?? 0
 		this.#scaleUpper = options.scale?.upper ?? Infinity
+
+		// The quads of the field lie up to a field radius from its center, which lies in the hint cone, so an index is
+		// usable when its coverage reaches the hint cone widened by the field radius.
+		const hint = this.#hint
+		const usable = indexes.filter((index) => hint === undefined || index.coverage === undefined || vecAngleUnit(index.coverage.center, hint.center) <= index.coverage.radius + hint.radius + this.#fieldRadiusOnSky(index))
 
 		// Indexes whose band, seen at the scale range, fits between 10% of the shorter side and the diagonal.
 		const selected: QuadIndex[] = []
@@ -277,13 +320,10 @@ class NativeSearch {
 		// Bands of larger quads first: they hold fewer quads made of brighter stars, so a blind search tries them sooner.
 		this.indexes = selected.sort((a, b) => b.scaleLower - a.scaleLower)
 
-		// The quads of the field lie up to a field radius from its center, which lies in the hint cone: widen the code
-		// search by the field radius, or by ten times the longest quad of a band when the scale is unknown (a band serves
-		// fields up to about ten times its quads).
+		// The code search of each index covers the hint cone widened by the field radius.
 		if (hint !== undefined) {
 			for (const index of this.indexes) {
-				const fieldRadius = Number.isFinite(this.#scaleUpper) ? this.#fieldRadiusPixels * this.#scaleUpper : 10 * index.scaleUpper
-				this.#searchRegions.set(index, { center: hint.center, radius: Math.min(Math.PI, hint.radius + fieldRadius) })
+				this.#searchRegions.set(index, { center: hint.center, radius: Math.min(Math.PI, hint.radius + this.#fieldRadiusOnSky(index)) })
 			}
 		}
 		this.enumerators = ([4, 3] as const)
@@ -293,6 +333,14 @@ class NativeSearch {
 				const [minBackbone, maxBackbone] = this.#backboneRange(indexes)
 				return { enumerator: new FieldQuadEnumerator(field, minBackbone, maxBackbone, this.#tolerance, size), visit: this.#visitor(indexes) }
 			})
+	}
+
+	// Largest field radius on the sky, radians, at which an index can solve the field: at the upper scale when known,
+	// else at the scale that makes the longest quad of its band the shortest backbone enumerated (10% of the shorter side).
+	#fieldRadiusOnSky(index: QuadIndex) {
+		if (Number.isFinite(this.#scaleUpper)) return this.#fieldRadiusPixels * this.#scaleUpper
+		const { width, height } = this.#options
+		return (this.#fieldRadiusPixels * index.scaleUpper * (1 + this.#tolerance)) / (0.1 * Math.min(width, height))
 	}
 
 	// Backbone range in pixels of a set of indexes: their bands seen at the scale range, widened by the code tolerance
@@ -318,6 +366,8 @@ class NativeSearch {
 
 	// Looks up the labelings of one field pattern in the given indexes.
 	#visit(indexes: readonly QuadIndex[], a: number, b: number, c: number, d: number, backbone: number, code: MutQuadCode) {
+		for (const tried of this.#tried.values()) tried.clear()
+
 		forEachQuadCodeVariant(code, [a, b, c, d], this.#tolerance, this.#codeParity, (variant) => {
 			if (this.#solved !== undefined) return
 			const stars = [variant.stars[0], variant.stars[1], variant.stars[2], variant.stars[3]] as const
@@ -398,7 +448,9 @@ class NativeSearch {
 
 		if (verification.logOdds < LOG_ODDS_TUNE) return
 
-		const tweak = tweakSolution({ field, index, wcs: fit.wcs, quadX, quadY, quadRadiusSq, pixelError: this.#pixelError, sipOrder: this.#options.sipOrder ?? DEFAULT_NATIVE_SIP_ORDER, distractorFraction: this.#distractor })
+		// The quad's own stars stay out of every later verification, as in the first one, so the tweak cannot buy odds
+		// with the stars the hypothesis was fitted to.
+		const tweak = tweakSolution({ field, index, wcs: fit.wcs, quadX, quadY, quadRadiusSq, quadFieldStars: fieldStars.slice(0, size), quadIndexStars: Float64Array.from(stars), pixelError: this.#pixelError, sipOrder: this.#options.sipOrder ?? DEFAULT_NATIVE_SIP_ORDER, distractorFraction: this.#distractor })
 		let final = tweak.verification
 
 		if (final.logOdds >= LOG_ODDS_ACCEPT) {
@@ -436,10 +488,15 @@ class NativeSearch {
 	}
 }
 
-// Writes a native solution as a FITS TAN or TAN-SIP header in ICRS, degrees, with the image size.
+// Writes a native solution as a FITS TAN or TAN-SIP header in ICRS, degrees, with the image size. CRVAL1 is the
+// right ascension that orients the tangent plane of the solution: 270° where native.fit takes the pole basis (a
+// tangent point whose z is exactly ±1), else that of the tangent point; LONPOLE is written as 180° so that a reader
+// keeps that orientation even when CRVAL2 rounds to ±90°.
 export function nativeSolutionHeader(solution: NativeSolution, width: number, height: number): FitsHeader {
 	const wcs: TanWcs = solution.wcs
-	const [ra, dec] = eraC2s(wcs.crval[0], wcs.crval[1], wcs.crval[2])
+	const [x, y, z] = wcs.crval
+	const ra = z === 1 || z === -1 || (x === 0 && y === 0) ? 1.5 * Math.PI : Math.atan2(y, x)
+	const dec = Math.atan2(z, Math.hypot(x, y))
 	const header: FitsHeader = {
 		CTYPE1: RA_TAN,
 		CTYPE2: DEC_TAN,
@@ -447,6 +504,7 @@ export function nativeSolutionHeader(solution: NativeSolution, width: number, he
 		CUNIT2: 'deg',
 		CRVAL1: (((ra % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI)) * RAD2DEG,
 		CRVAL2: dec * RAD2DEG,
+		LONPOLE: 180,
 		CRPIX1: wcs.crpix1,
 		CRPIX2: wcs.crpix2,
 		CD1_1: wcs.cd11 * RAD2DEG,

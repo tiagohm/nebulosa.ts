@@ -142,9 +142,12 @@ export interface CatalogQuadIndexStars extends QuadIndexStars {
 
 // One streamed catalog star kept for the result.
 interface KeptStar {
+	// Magnitude, Infinity when the catalog has none.
 	readonly magnitude: number
+	// ICRS right ascension and declination at the result epoch, radians; the declination within [-PI/2, PI/2].
 	readonly ra: Angle
 	readonly dec: Angle
+	// Proper motion dα/dt and dδ/dt, radians per year, 0 when unknown.
 	readonly pmRA: number
 	readonly pmDEC: number
 }
@@ -177,6 +180,12 @@ export async function catalogQuadIndexStars(catalog: StarCatalog, cone: SkyCone,
 			const years = epoch - entry.epoch
 			if (entry.pmRA !== undefined) ra += entry.pmRA * years
 			if (entry.pmDEC !== undefined) dec += entry.pmDEC * years
+
+			// A star carried over a pole comes down on the other side of it (HEALPix refuses a declination beyond it).
+			if (dec > Math.PI / 2 || dec < -Math.PI / 2) {
+				dec = Math.sign(dec) * Math.PI - dec
+				ra += Math.PI
+			}
 		}
 
 		if (entry.pmRA !== undefined || entry.pmDEC !== undefined) moving = true

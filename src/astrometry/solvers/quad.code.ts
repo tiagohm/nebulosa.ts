@@ -194,7 +194,7 @@ export function forEachQuadCodeVariant(code: QuadCode, stars: QuadStars, toleran
 // Scratch state of forEachQuadCodeVariant; reused between calls.
 const VARIANT_FLIPPED = quadCode()
 const VARIANT_BACKBONE = quadCode()
-const VARIANT: QuadCodeVariant = { code: quadCode(), stars: [0, 0, 0, 0], flipped: false }
+const VARIANT: { code: MutQuadCode; stars: MutQuadStars; flipped: boolean } = { code: quadCode(), stars: [0, 0, 0, 0], flipped: false }
 
 // Tries both backbone orientations of a code.
 function forEachBackbone(code: QuadCode, stars: QuadStars, margin: number, flipped: boolean, visit: (variant: QuadCodeVariant) => void) {
@@ -223,7 +223,7 @@ function forEachInnerOrder(code: QuadCode, a: number, b: number, c: number, d: n
 function emitVariant(cx: number, cy: number, dx: number, dy: number, a: number, b: number, c: number, d: number, margin: number, flipped: boolean, visit: (variant: QuadCodeVariant) => void) {
 	if (cx > 0.5 + margin || cx > dx + margin || (cx + dx) / 2 > 0.5 + margin) return
 
-	const variant = VARIANT as { code: MutQuadCode; stars: MutQuadStars; flipped: boolean }
+	const variant = VARIANT
 	variant.code[0] = cx
 	variant.code[1] = cy
 	variant.code[2] = dx

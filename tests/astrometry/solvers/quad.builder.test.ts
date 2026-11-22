@@ -4,7 +4,7 @@ import { insideQuadCircle, type MutQuadCode, QUAD_CODE_MAX, QUAD_CODE_MIN, quadC
 import { EphemeralQuadIndex } from '../../../src/astrometry/solvers/quad.index.ephemeral'
 import { eraC2s, eraS2c } from '../../../src/astronomy/coordinates/erfa/erfa'
 import { coordToPixel } from '../../../src/astronomy/sky/spatial/healpix'
-import { DEG2RAD } from '../../../src/core/constants'
+import { ASEC2RAD, DEG2RAD } from '../../../src/core/constants'
 import { vecAngleUnit } from '../../../src/math/linear-algebra/vec3'
 import { mulberry32 } from '../../../src/math/numerical/random'
 
@@ -107,6 +107,23 @@ test('dedup drops a star near a brighter kept one', () => {
 	const far = eraS2c(0.51, 0.5)
 	const band = buildQuadBand(Float64Array.from([...center, ...near, ...far]), { scaleLower: 0.001, scaleUpper: 0.0015, dedup: 1e-5 })
 	expect([...band.sourceIndices]).toEqual([0, 2])
+})
+
+test('dedup below the bucket precision limit drops every near companion', () => {
+	// 2000 stars over the sky, each followed by a fainter companion 0.5" away: with a 1" dedup, no companion survives.
+	const random = mulberry32(7)
+	const vectors = new Float64Array(4000 * 3)
+
+	for (let i = 0; i < 2000; i++) {
+		const ra = random() * 2 * Math.PI
+		const dec = Math.asin(2 * random() - 1)
+		vectors.set(eraS2c(ra, dec), i * 6)
+		vectors.set(eraS2c(ra + (0.5 * ASEC2RAD) / Math.cos(dec), dec), i * 6 + 3)
+	}
+
+	const band = buildQuadBand(vectors, { scaleLower: 5 * DEG2RAD, scaleUpper: 5 * DEG2RAD * Math.SQRT2, starsPerCell: 100, dedup: ASEC2RAD })
+	expect(band.sourceIndices.length).toBe(2000)
+	for (const index of band.sourceIndices) expect(index % 2).toBe(0)
 })
 
 test('the ephemeral index finds its own quads by code and its stars by cone', () => {

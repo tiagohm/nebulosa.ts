@@ -189,6 +189,48 @@ describe('NebulosaQuadIndex', () => {
 		fs.writeFileSync(path, encodeQuadIndexTile(other))
 		expect(() => new NebulosaQuadIndex([paths[0], path])).toThrow('belongs to another band')
 	})
+
+	test('a damaged header throws when a section is loaded instead of hanging a search', () => {
+		const bytes = encodeQuadIndexTile(tiles[0])
+		const view = new DataView(bytes.buffer)
+		const write = (name: string, patch: (copy: DataView) => void) => {
+			const copy = bytes.slice()
+			patch(new DataView(copy.buffer))
+			const path = join(DIR, `${name}.nqi`)
+			fs.writeFileSync(path, copy)
+			return path
+		}
+
+		// Zero levels: the search would never reach a leaf.
+		using levels = new NebulosaQuadIndex([write('levels', (copy) => copy.setUint32(108, 0, true))])
+		expect(() => levels.searchCodes([0.3, 0.4, 0.5, 0.2], 0.01, () => {})).toThrow('inconsistent quad code tree')
+		expect(() => decodeQuadIndexTile(fs.readFileSync(join(DIR, 'levels.nqi')))).toThrow('inconsistent quad code tree')
+
+		// A star section claiming 1.5 GB: refused against the file size before anything that large is allocated.
+		for (let i = 0; i < view.getUint32(116, true); i++) {
+			const entry = 128 + i * 24
+			if (view.getUint32(entry, true) !== 1) continue
+			using huge = new NebulosaQuadIndex([write('huge', (copy) => copy.setUint32(entry + 16, 1.5 * 2 ** 30, true))])
+			expect(() => huge.starVector(0, [0, 0, 0])).toThrow('out of bounds')
+		}
+
+		// Cell offsets past the stars: a cone query would read past them.
+		const cellOffsets = tiles[0].cellOffsets
+		using offsets = new NebulosaQuadIndex([
+			write('offsets', (copy) => {
+				for (let i = 0; i < copy.getUint32(116, true); i++) {
+					const entry = 128 + i * 24
+					if (copy.getUint32(entry, true) === 5) copy.setUint32(copy.getUint32(entry + 8, true) + (cellOffsets.length - 1) * 4, 0xffffffff, true)
+				}
+			}),
+		])
+		expect(() => offsets.starVector(0, [0, 0, 0])).toThrow('inconsistent cell offsets')
+
+		// A file shorter than its header.
+		const short = join(DIR, 'short.nqi')
+		fs.writeFileSync(short, bytes.subarray(0, 100))
+		expect(() => new NebulosaQuadIndex([short])).toThrow('truncated')
+	})
 })
 
 // Tile id of a global star id, through the tile order of the paths.

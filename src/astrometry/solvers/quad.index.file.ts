@@ -9,16 +9,18 @@ import type { QuadIndex, SkyCone } from './quad.index'
 import { buildKdTree, type KdTree, searchKdTree } from './quad.kdtree'
 
 // Nebulosa Quad Index (.nqi): one band of quads, or one HEALPix tile of it, in a flat little-endian file that is read
-// without parsing. A 512-byte header holds the band, the builder parameters, the provenance and a table of up to 16
+// without parsing. A 512-byte header holds the band, the builder parameters, the provenance and a table of up to 14
 // sections, each aligned to 64 bytes so that it maps directly onto a typed array: the reference stars as float32
 // unit vectors (own stars, sorted by uniformization cell, then the margin stars that the quads of the tile borrow from
 // neighboring tiles), their magnitudes and brightness sweeps, the occupied cells with the offsets of their stars, the
 // optional proper motions and catalog source ids, the quads, and their codes quantized to 16 bits in the leaf order of
 // a pointer-free k-d tree whose node boxes follow. A tile owns the quads whose backbone midpoint lies in it, so the
 // tiles of a band hold every quad once. NebulosaQuadIndex serves a set of tiles of one band as a QuadIndex: tile ids
-// live in the high bits of quad and star ids. Files are mapped where the runtime can (Bun cannot on Windows, where the
-// sections are read); the code sections of a tile stay loaded once touched, since a blind search visits every tile,
-// and its star sections are released least recently used first beyond a byte budget. Angles are radians, epochs Julian years, magnitudes in millimag.
+// live in the high bits of quad and star ids. Files are mapped privately where the runtime can, and their sections
+// read otherwise (Bun has no mmap on Windows, and its mmap needs write access to the file); the code sections of a
+// tile stay loaded once touched, since a blind search visits every tile, and its star sections are released least
+// recently used first beyond a byte budget. The header counts are checked against the sections when they are loaded,
+// so a damaged file throws instead of hanging a search. Angles are radians, epochs Julian years, magnitudes in millimag.
 
 // File signature, 8 bytes.
 export const QUAD_INDEX_MAGIC = 'NEBQIDX\0'
@@ -160,8 +162,8 @@ function cellOf(x: number, y: number, z: number, nside: number) {
 export function quadIndexTilesFromBand(band: QuadBand, options: QuadIndexTileOptions): QuadIndexTile[] {
 	const { nside } = band
 	const tileNside = options.tileNside
-	if (nside > QUAD_INDEX_MAX_NSIDE) throw new Error(`the band NSIDE ${nside} exceeds ${QUAD_INDEX_MAX_NSIDE}`)
-	if (tileNside > nside) throw new Error('the tile NSIDE must not exceed the band NSIDE')
+	if (!(nside <= QUAD_INDEX_MAX_NSIDE)) throw new Error(`the band NSIDE ${nside} exceeds ${QUAD_INDEX_MAX_NSIDE}`)
+	if (!(tileNside <= nside)) throw new Error('the tile NSIDE must not exceed the band NSIDE')
 
 	const starCount = band.sweeps.length
 	const starCells = new Float64Array(starCount)
@@ -309,7 +311,9 @@ export function quadIndexTileFileName(tile: Pick<QuadIndexTile, 'scaleLower' | '
 
 // One section to write: its kind and bytes.
 interface SectionData {
+	// Section kind (STAR_XYZ...KD_UPPER).
 	readonly kind: number
+	// Bytes of the section.
 	readonly data: ArrayBufferView
 }
 
@@ -381,8 +385,11 @@ export function encodeQuadIndexTile(tile: QuadIndexTile): Uint8Array {
 
 // Location of a section in a file.
 interface SectionEntry {
+	// CRC32 of the section bytes.
 	readonly crc: number
+	// Offset of the section from the start of the file, bytes.
 	readonly offset: number
+	// Length of the section, bytes.
 	readonly length: number
 }
 
@@ -468,9 +475,7 @@ export function decodeQuadIndexTile(bytes: Uint8Array): QuadIndexTile {
 		return new type(bytes.buffer, bytes.byteOffset + entry.offset, entry.length / elementSize)
 	}
 
-	const points = section(QUAD_CODES, Uint16Array, 2, true)
-
-	return {
+	const tile: QuadIndexTile = {
 		...header,
 		stars: section(STAR_XYZ, Float32Array, 4, true),
 		magnitudes: section(STAR_MAGNITUDE, Int16Array, 2, true),
@@ -480,8 +485,13 @@ export function decodeQuadIndexTile(bytes: Uint8Array): QuadIndexTile {
 		properMotions: section(STAR_PROPER_MOTION, Float32Array, 4, false),
 		sources: section(STAR_SOURCE, BigUint64Array, 8, false),
 		quadStars: header.wide ? section(QUAD_STARS_SECTION, Uint32Array, 4, true) : section(QUAD_STARS_SECTION, Uint16Array, 2, true),
-		codes: { dimension: 4, count: header.quadCount, levels: header.levels, points, indices: new Uint32Array(0), lower: section(KD_LOWER, Uint16Array, 2, true), upper: section(KD_UPPER, Uint16Array, 2, true) },
+		codes: { dimension: 4, count: header.quadCount, levels: header.levels, points: section(QUAD_CODES, Uint16Array, 2, true), indices: new Uint32Array(0), lower: section(KD_LOWER, Uint16Array, 2, true), upper: section(KD_UPPER, Uint16Array, 2, true) },
 	}
+
+	checkTileCodes('quad index tile', header, tile.codes, tile.quadStars)
+	checkTileStars('quad index tile', header, tile.stars, tile.sweeps, tile.cellIds, tile.cellOffsets, tile.properMotions)
+	if (tile.magnitudes.length !== header.starCount || (tile.sources !== undefined && tile.sources.length !== header.starCount)) throw new Error('quad index tile has an inconsistent star count')
+	return tile
 }
 
 // Whether every section of a file matches its CRC32. Meant for generators and tests, not for every open.
@@ -503,18 +513,24 @@ export interface NebulosaQuadIndexOptions {
 	readonly maxLoadedBytes?: number
 }
 
-// Code sections of a tile, kept once read: every code search of a blind solve visits every tile.
+/// Code sections of a tile, kept once read: every code search of a blind solve visits every tile.
 interface TileCodes {
+	// Code tree over the quantized codes, in file order.
 	readonly tree: KdTree<Uint16Array>
+	// Local star ids of each quad, 4 per quad, in code-tree order.
 	readonly quadStars: Uint16Array | Uint32Array
 }
 
 // Star sections of a tile, loaded under the byte budget of the index.
 interface TileStars {
+	// Unit vectors, 3 per star, own stars first.
 	readonly stars: Float32Array
+	// Brightness rank of each star within its uniformization cell.
 	readonly sweeps: Uint8Array
+	// Occupied cells, ascending, and the offset of their first own star (one more entry than cells).
 	readonly cellIds: Uint32Array
 	readonly cellOffsets: Uint32Array
+	// Proper motion dα/dt and dδ/dt per star, radians per year.
 	readonly properMotions?: Float32Array
 	// Bytes the sections hold.
 	readonly bytes: number
@@ -522,23 +538,38 @@ interface TileStars {
 
 // A file of the set: its path, header and loaded sections.
 interface TileFile {
+	// Path of the file.
 	readonly path: string
+	// Header decoded when the index was opened.
 	readonly header: ReturnType<typeof decodeQuadIndexHeader>
-	// Whole-file mapping, where the runtime maps files.
+	// Whole-file private mapping, where the runtime could map the file.
 	mapped?: Uint8Array
+	// Whether mapping failed, so the sections are read instead.
+	unmapped?: boolean
+	// Loaded code and star sections.
 	codes?: TileCodes
 	stars?: TileStars
 }
 
-// Whether files are memory mapped: Bun has no mmap on Windows, where the sections are read instead.
-const MMAP_SUPPORTED = process.platform !== 'win32'
+// Maps a file privately (a write to a view never reaches the file), or undefined where the runtime cannot: Bun has no
+// mmap on Windows, and its mmap opens the file for writing, which a read-only file or mount refuses. The caller then
+// reads the file, which reports the real error when the file cannot be read at all.
+export function mapQuadIndexFile(path: string): Uint8Array | undefined {
+	if (process.platform === 'win32') return undefined
 
-// Reads the header bytes of a file.
+	try {
+		return Bun.mmap(path, { shared: false })
+	} catch {
+		return undefined
+	}
+}
+
+// Reads the header bytes of a file. Throws when the file is shorter than a header.
 function readHeaderBytes(path: string) {
 	const fd = fs.openSync(path, 'r')
 	try {
 		const bytes = new Uint8Array(HEADER_SIZE)
-		fs.readSync(fd, bytes, 0, HEADER_SIZE, 0)
+		if (fs.readSync(fd, bytes, 0, HEADER_SIZE, 0) !== HEADER_SIZE) throw new Error(`${path} has a truncated quad index header`)
 		return bytes
 	} finally {
 		fs.closeSync(fd)
@@ -548,43 +579,80 @@ function readHeaderBytes(path: string) {
 // Element constructor of a section view.
 type SectionType<T> = new (buffer: ArrayBufferLike, offset: number, length: number) => T
 
-// Reads sections of a file as typed views: views of the file mapping where files are mapped, else one read buffer per
-// section. A missing optional section is undefined; a missing required or out-of-bounds one throws.
-function readSections(file: TileFile, requests: readonly (readonly [number, SectionType<ArrayBufferView>, number, boolean])[]): (ArrayBufferView | undefined)[] {
-	const entries = requests.map(([kind, , elementSize, required]) => {
-		const entry = file.header.sections.get(kind)
+// Reads sections of one file as typed views: views of its private mapping where it maps, else one read buffer per
+// section, checked against the file size before it is allocated. close releases the file descriptor of the reads.
+class TileSectionReader {
+	readonly #file: TileFile
+	readonly #mapped?: Uint8Array
+	#fd?: number
+	#size = 0
+
+	// Maps the file on first use, remembering a failure so that later loads read it.
+	constructor(file: TileFile) {
+		if (file.mapped === undefined && file.unmapped !== true) {
+			file.mapped = mapQuadIndexFile(file.path)
+			file.unmapped = file.mapped === undefined
+		}
+
+		this.#file = file
+		this.#mapped = file.mapped
+	}
+
+	// Typed view of a section: undefined when an optional one is missing; throws for a missing required, malformed or out-of-bounds one.
+	read<T>(kind: number, type: SectionType<T>, elementSize: number, required: true): T
+	read<T>(kind: number, type: SectionType<T>, elementSize: number, required: false): T | undefined
+	read<T>(kind: number, type: SectionType<T>, elementSize: number, required: boolean): T | undefined {
+		const { path, header } = this.#file
+		const entry = header.sections.get(kind)
+
 		if (entry === undefined) {
-			if (required) throw new Error(`${file.path} misses quad index section ${kind}`)
+			if (required) throw new Error(`${path} misses quad index section ${kind}`)
 			return undefined
 		}
-		if (entry.length % elementSize !== 0) throw new Error(`${file.path} has a malformed quad index section ${kind}`)
-		return entry
-	})
 
-	if (MMAP_SUPPORTED) {
-		file.mapped ??= Bun.mmap(file.path)
-		const mapped = file.mapped
-		return requests.map(([kind, type, elementSize], i) => {
-			const entry = entries[i]
-			if (entry === undefined) return undefined
-			if (entry.offset + entry.length > mapped.byteLength) throw new Error(`${file.path} quad index section ${kind} is out of bounds`)
+		if (entry.length % elementSize !== 0) throw new Error(`${path} has a malformed quad index section ${kind}`)
+		const mapped = this.#mapped
+
+		if (mapped !== undefined) {
+			if (entry.offset + entry.length > mapped.byteLength) throw new Error(`${path} quad index section ${kind} is out of bounds`)
 			return new type(mapped.buffer, mapped.byteOffset + entry.offset, entry.length / elementSize)
-		})
+		}
+
+		if (this.#fd === undefined) {
+			this.#fd = fs.openSync(path, 'r')
+			this.#size = fs.fstatSync(this.#fd).size
+		}
+
+		// The size check comes first so that a damaged length never allocates more than the file holds.
+		if (entry.offset + entry.length > this.#size) throw new Error(`${path} quad index section ${kind} is out of bounds`)
+		const bytes = new Uint8Array(entry.length)
+		if (fs.readSync(this.#fd, bytes, 0, entry.length, entry.offset) !== entry.length) throw new Error(`${path} quad index section ${kind} is out of bounds`)
+		return new type(bytes.buffer, 0, entry.length / elementSize)
 	}
 
-	const fd = fs.openSync(file.path, 'r')
-
-	try {
-		return requests.map(([kind, type, elementSize], i) => {
-			const entry = entries[i]
-			if (entry === undefined) return undefined
-			const bytes = new Uint8Array(entry.length)
-			if (fs.readSync(fd, bytes, 0, entry.length, entry.offset) !== entry.length) throw new Error(`${file.path} quad index section ${kind} is out of bounds`)
-			return new type(bytes.buffer, 0, entry.length / elementSize)
-		})
-	} finally {
-		fs.closeSync(fd)
+	// Closes the file descriptor of the reads, if one was opened.
+	close() {
+		if (this.#fd !== undefined) fs.closeSync(this.#fd)
+		this.#fd = undefined
 	}
+}
+
+// Throws unless the code tree and quad stars of a tile agree with its header: a tree whose levels or counts exceed
+// its sections reads past them, prunes nothing, and with zero levels never ends its search.
+function checkTileCodes(path: string, header: QuadIndexTileHeader, tree: KdTree<Uint16Array>, quadStars: Uint16Array | Uint32Array) {
+	const { levels, quadCount } = header
+	const nodes = 2 ** levels - 1
+	if (!(Number.isInteger(levels) && levels >= 1 && levels <= 32) || tree.lower.length !== nodes * 4 || tree.upper.length !== nodes * 4) throw new Error(`${path} has an inconsistent quad code tree`)
+	if (tree.points.length !== quadCount * 4 || quadStars.length !== quadCount * 4) throw new Error(`${path} has an inconsistent quad count`)
+}
+
+// Throws unless the star sections of a tile agree with its header: cell offsets past the stars, or decreasing, would
+// make a cone query read past them for up to billions of steps.
+function checkTileStars(path: string, header: QuadIndexTileHeader, stars: Float32Array, sweeps: Uint8Array, cellIds: Uint32Array, cellOffsets: Uint32Array, properMotions: Float32Array | undefined) {
+	const { starCount, ownStarCount, cellCount } = header
+	if (!(ownStarCount <= starCount) || stars.length !== starCount * 3 || sweeps.length !== starCount || (properMotions !== undefined && properMotions.length !== starCount * 2)) throw new Error(`${path} has an inconsistent star count`)
+	if (cellIds.length !== cellCount || cellOffsets.length !== cellCount + 1 || cellOffsets[cellCount] > ownStarCount) throw new Error(`${path} has inconsistent cell offsets`)
+	for (let k = 0; k < cellCount; k++) if (cellOffsets[k] > cellOffsets[k + 1]) throw new Error(`${path} has inconsistent cell offsets`)
 }
 
 // QuadIndex over the tile files of one band.
@@ -604,10 +672,13 @@ export class NebulosaQuadIndex implements QuadIndex {
 	readonly #maxLoadedBytes: number
 	// Tile ordinals with loaded star sections, least recently used first.
 	readonly #loaded = new Set<number>()
+	// Tile ordinals touching each search region object, released with the region.
+	readonly #covers = new WeakMap<SkyCone, readonly number[]>()
 	#loadedBytes = 0
 
 	// files are tile files of one band: same band limits, NSIDE and tiling. Throws when they differ or a header is invalid.
 	constructor(paths: readonly string[], options: NebulosaQuadIndexOptions = {}) {
+		// The band parameters come from the first file; without one there is nothing to read them from.
 		if (paths.length === 0) throw new Error('a quad index needs at least one file')
 		this.#files = paths.map((path) => ({ path, header: decodeQuadIndexHeader(readHeaderBytes(path)) }))
 		const first = this.#files[0].header
@@ -642,20 +713,18 @@ export class NebulosaQuadIndex implements QuadIndex {
 		const file = this.#files[ordinal]
 		if (file.codes !== undefined) return file.codes
 
-		const { header } = file
-		const [quadStars, points, lower, upper] = readSections(file, [
-			[QUAD_STARS_SECTION, header.wide ? Uint32Array : Uint16Array, header.wide ? 4 : 2, true],
-			[QUAD_CODES, Uint16Array, 2, true],
-			[KD_LOWER, Uint16Array, 2, true],
-			[KD_UPPER, Uint16Array, 2, true],
-		])
+		const { header, path } = file
+		const reader = new TileSectionReader(file)
 
-		file.codes = {
-			tree: { dimension: 4, count: header.quadCount, levels: header.levels, points: points as Uint16Array, indices: new Uint32Array(0), lower: lower as Uint16Array, upper: upper as Uint16Array },
-			quadStars: quadStars as Uint16Array | Uint32Array,
+		try {
+			const quadStars = header.wide ? reader.read(QUAD_STARS_SECTION, Uint32Array, 4, true) : reader.read(QUAD_STARS_SECTION, Uint16Array, 2, true)
+			const tree: KdTree<Uint16Array> = { dimension: 4, count: header.quadCount, levels: header.levels, points: reader.read(QUAD_CODES, Uint16Array, 2, true), indices: new Uint32Array(0), lower: reader.read(KD_LOWER, Uint16Array, 2, true), upper: reader.read(KD_UPPER, Uint16Array, 2, true) }
+			checkTileCodes(path, header, tree, quadStars)
+			file.codes = { tree, quadStars }
+			return file.codes
+		} finally {
+			reader.close()
 		}
-
-		return file.codes
 	}
 
 	// Star sections of a tile, loading them and releasing the least recently used beyond the byte budget.
@@ -668,16 +737,24 @@ export class NebulosaQuadIndex implements QuadIndex {
 			return file.stars
 		}
 
-		const [stars, sweeps, cellIds, cellOffsets, properMotions] = readSections(file, [
-			[STAR_XYZ, Float32Array, 4, true],
-			[STAR_SWEEP, Uint8Array, 1, true],
-			[CELL_IDS, Uint32Array, 4, true],
-			[CELL_OFFSETS, Uint32Array, 4, true],
-			[STAR_PROPER_MOTION, Float32Array, 4, false],
-		])
+		const reader = new TileSectionReader(file)
+		let loaded: TileStars
 
-		const bytes = stars!.byteLength + sweeps!.byteLength + cellIds!.byteLength + cellOffsets!.byteLength + (properMotions?.byteLength ?? 0)
-		file.stars = { stars: stars as Float32Array, sweeps: sweeps as Uint8Array, cellIds: cellIds as Uint32Array, cellOffsets: cellOffsets as Uint32Array, properMotions: properMotions as Float32Array | undefined, bytes }
+		try {
+			const stars = reader.read(STAR_XYZ, Float32Array, 4, true)
+			const sweeps = reader.read(STAR_SWEEP, Uint8Array, 1, true)
+			const cellIds = reader.read(CELL_IDS, Uint32Array, 4, true)
+			const cellOffsets = reader.read(CELL_OFFSETS, Uint32Array, 4, true)
+			const properMotions = reader.read(STAR_PROPER_MOTION, Float32Array, 4, false)
+			checkTileStars(file.path, file.header, stars, sweeps, cellIds, cellOffsets, properMotions)
+			const bytes = stars.byteLength + sweeps.byteLength + cellIds.byteLength + cellOffsets.byteLength + (properMotions?.byteLength ?? 0)
+			loaded = { stars, sweeps, cellIds, cellOffsets, properMotions, bytes }
+		} finally {
+			reader.close()
+		}
+
+		file.stars = loaded
+		const { bytes } = loaded
 		this.#loaded.add(ordinal)
 		this.#loadedBytes += bytes
 
@@ -693,15 +770,21 @@ export class NebulosaQuadIndex implements QuadIndex {
 		return file.stars
 	}
 
-	// Tile ordinals touching a cone, or all of them.
-	#ordinals(region?: SkyCone) {
+	// Tile ordinals touching a cone, or all of them. The cover of a cone object is kept, since a solve passes the same
+	// region to every code search of an index.
+	#ordinals(region?: SkyCone): Iterable<number> {
 		if (region === undefined || this.#tileNside === 0) return this.#files.keys()
+		const cached = this.#covers.get(region)
+		if (cached !== undefined) return cached
+
 		const [ra, dec] = eraC2s(region.center[0], region.center[1], region.center[2])
 		const ordinals: number[] = []
 		for (const tile of circleToPixels(this.#tileNside, ra, dec, Math.min(Math.PI, region.radius))) {
 			const ordinal = this.#byTile.get(tile)
 			if (ordinal !== undefined) ordinals.push(ordinal)
 		}
+
+		this.#covers.set(region, ordinals)
 		return ordinals
 	}
 
@@ -840,7 +923,7 @@ export function quadIndexTileCone(tileNside: number, tileId: number, scaleUpper:
 // tile gets no quad.
 export function buildQuadIndexTile(stars: QuadIndexStars, band: Omit<QuadBandOptions, 'region' | 'cells'>, tileNside: number, tileId: number, options: Omit<QuadIndexTileOptions, 'tileNside' | 'tiles' | 'magnitudes' | 'properMotions' | 'sources'>): QuadIndexTile | undefined {
 	const nside = quadCellNside(band.scaleLower)
-	if (tileNside > nside) throw new Error('the tile NSIDE must not exceed the band NSIDE')
+	if (!(tileNside <= nside)) throw new Error('the tile NSIDE must not exceed the band NSIDE')
 	const perTile = tileNside === 0 ? 12 * nside * nside : (nside / tileNside) ** 2
 	const first = tileNside === 0 ? 0 : tileId * perTile
 	const cells = Array.from({ length: perTile }, (_, i) => first + i)

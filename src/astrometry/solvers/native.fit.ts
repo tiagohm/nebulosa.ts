@@ -27,7 +27,9 @@ export interface TanWcs {
 
 // A fitted WCS and the weighted mean squared residual of the fit, radians².
 export interface TanWcsFit {
+	// Fitted WCS.
 	readonly wcs: TanWcs
+	// Weighted mean squared tangent-plane residual of the pairs, radians².
 	readonly residual: number
 	// Whether the fit is mirrored (negative CD determinant).
 	readonly flipped: boolean

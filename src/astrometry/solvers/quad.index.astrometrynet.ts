@@ -1,9 +1,11 @@
 import fs from 'fs'
 import { ASEC2RAD } from '../../core/constants'
+import { FITS_BLOCK_SIZE as FITS_BLOCK, FITS_HEADER_CARD_SIZE as FITS_CARD } from '../../io/formats/fits/fits'
 import { type MutVec3, vecAngleUnit } from '../../math/linear-algebra/vec3'
 import type { Angle } from '../../math/units/angle'
 import type { QuadCode } from './quad.code'
 import type { QuadIndex, SkyCone } from './quad.index'
+import { mapQuadIndexFile } from './quad.index.file'
 import { type KdTree, type KdTreeArray, searchKdTree } from './quad.kdtree'
 
 // Reader of Astrometry.net index files (the 4100 and 5200 series and indexes built by its build-index), served as a
@@ -15,13 +17,9 @@ import { type KdTree, type KdTreeArray, searchKdTree } from './quad.kdtree'
 // vectors), plus the brightness sweep of each star. libkd stores its points in tree order with the same implicit node
 // numbering as quad.kdtree but splits at median values, so the data are searched in place with the stored leaf ends
 // (lr): only the bounding box of every node is computed on open. The codes follow Astrometry.net's convention, which quad.code reproduces bit for
-// bit. Positions are taken at J2000.0 unless told otherwise; angles are radians.
-
-// FITS block size, bytes.
-const FITS_BLOCK = 2880
-
-// FITS card size, bytes.
-const FITS_CARD = 80
+// bit. The HDU sizes, tree shapes and leaf ends read from the file are checked before use, so a damaged file throws
+// instead of hanging. Positions are taken at J2000.0 unless told otherwise; the jitter is the file's JITTER when it
+// states one; angles are radians.
 
 // ENDIAN value of a file written on a little-endian machine.
 const LITTLE_ENDIAN = '04:03:02:01'
@@ -34,8 +32,11 @@ export const DEFAULT_ASTROMETRY_NET_INDEX_EPOCH = 2000
 
 // One HDU of a FITS file: its header cards and the location of its data.
 interface FitsUnit {
+	// Header values by keyword, the first card of a keyword winning.
 	readonly cards: ReadonlyMap<string, string>
+	// Offset of the data from the start of the file, bytes.
 	readonly offset: number
+	// Size of the data, bytes, without the block padding.
 	readonly size: number
 }
 
@@ -83,6 +84,8 @@ function readFitsUnits(bytes: Uint8Array): FitsUnit[] {
 			for (let n = 1; n <= naxis; n++) size *= Number(cards.get(`NAXIS${n}`) ?? 0)
 		}
 		size += Number(cards.get('PCOUNT') ?? 0)
+		// A negative or non-integer size would move the walk backwards or nowhere, and it would never end.
+		if (!(Number.isSafeInteger(size) && size >= 0)) throw new Error('invalid FITS data size')
 		units.push({ cards, offset, size })
 		offset += Math.ceil(size / FITS_BLOCK) * FITS_BLOCK
 	}
@@ -110,6 +113,7 @@ function kdArrayType(type: string | undefined): (new (buffer: ArrayBufferLike, o
 
 // A libkd tree read from an index: its points in place, the range mapping them to external units, and computed boxes.
 interface IndexTree {
+	// Tree over the stored points, with the leaf ends of the file.
 	readonly tree: KdTree
 	// External minimum per dimension; external = minval + internal / scale.
 	readonly minval: Float64Array
@@ -134,21 +138,23 @@ export class AstrometryNetQuadIndex implements QuadIndex {
 	readonly #stars: IndexTree
 	readonly #sweeps: Uint8Array
 
-	// Opens an index file, mapping it where the runtime can (not on Windows, where it is read whole). Throws on a file
-	// that is not an index, has an unsupported layout, or was written on a big-endian machine. A file without the ENDIAN
-	// keyword is read as little-endian when its code and star ranges are plausible in that order.
+	// Opens an index file, mapping it privately where the runtime can, else reading it whole (on Windows, or for a file
+	// the runtime cannot map, such as a read-only one). Throws on a file that is not an index, has an unsupported or
+	// inconsistent layout, or was written on a big-endian machine. A file without the ENDIAN keyword is read as
+	// little-endian when its code and star ranges are plausible in that order.
 	constructor(
 		readonly path: string,
 		options: AstrometryNetQuadIndexOptions = {},
 	) {
-		const bytes = process.platform === 'win32' ? alignedFileBytes(path) : Bun.mmap(path)
+		const bytes = mapQuadIndexFile(path) ?? alignedFileBytes(path)
 		const units = readFitsUnits(bytes)
 		const primary = units[0]?.cards
 		if (primary?.get('AN_FILE') !== 'QUAD') throw new Error(`${path} is not an Astrometry.net index`)
 		const endian = primary.get('ENDIAN')
 		if (endian !== undefined && endian !== LITTLE_ENDIAN) throw new Error(`${path} was written with an unsupported byte order`)
 
-		const dimquads = Number(primary.get('DIMQUADS'))
+		// Astrometry.net's quadfile reads a missing DIMQUADS as 4.
+		const dimquads = Number(primary.get('DIMQUADS') ?? 4)
 		if (dimquads !== 3 && dimquads !== 4) throw new Error(`${path} has unsupported patterns of ${dimquads} stars`)
 
 		// Extensions by the name of their first column.
@@ -176,16 +182,19 @@ export class AstrometryNetQuadIndex implements QuadIndex {
 			const nodes = Number(header.get('KDT_NNOD'))
 			const type = kdArrayType(header.get('KDT_DATA'))
 			const points = table(`kdtree_data_${name}`, type, type.BYTES_PER_ELEMENT)
-			// A tree stored as doubles holds external coordinates and may have no range: minval 0 and scale 1.
-			const range = type === Float64Array && !byName.has(`kdtree_range_${name}`) ? Float64Array.from({ length: 2 * dimension + 1 }, (_, i) => (i === 2 * dimension ? 1 : 0)) : table(`kdtree_range_${name}`, Float64Array, 8)
+			// A tree stored as doubles holds external coordinates, as libkd converts no double data: its range, when there
+			// is one, only bounds them (with a zero scale), so minval 0 and scale 1.
+			const double = type === Float64Array
+			const range = double ? Float64Array.from({ length: 2 * dimension + 1 }, (_, i) => (i === 2 * dimension ? 1 : 0)) : table(`kdtree_range_${name}`, Float64Array, 8)
 			if (points.length !== count * dimension || range.length < 2 * dimension + 1) throw new Error(`${path} has an inconsistent ${name} k-d tree`)
-			if (endian === undefined && !plausibleRange(range, dimension, name)) throw new Error(`${path} was written with an unsupported byte order`)
+			if (endian === undefined && !double && !plausibleRange(range, dimension, name)) throw new Error(`${path} was written with an unsupported byte order`)
 
+			// A tree without nodes has no leaf level, so a search would never end.
 			const levels = Math.round(Math.log2(nodes + 1))
-			if (2 ** levels - 1 !== nodes) throw new Error(`${path} has an unsupported ${name} k-d tree shape`)
+			if (!(nodes >= 1) || 2 ** levels - 1 !== nodes) throw new Error(`${path} has an unsupported ${name} k-d tree shape`)
 			const linear = header.get('KDT_LINL') === 'T'
 			const lr = linear || !byName.has(`kdtree_lr_${name}`) ? undefined : table(`kdtree_lr_${name}`, Int32Array, 4)
-			if (lr !== undefined && lr.length !== 2 ** (levels - 1)) throw new Error(`${path} has an inconsistent ${name} k-d tree`)
+			if (lr !== undefined && !validLeafEnds(lr, 2 ** (levels - 1), count)) throw new Error(`${path} has an inconsistent ${name} k-d tree`)
 			return { tree: libkdTree(points, dimension, count, levels, lr, linear), minval: Float64Array.from(range.subarray(0, dimension)), scale: range[2 * dimension] }
 		}
 
@@ -194,7 +203,9 @@ export class AstrometryNetQuadIndex implements QuadIndex {
 		this.scaleLower = Number(primary.get('SCALE_L'))
 		this.scaleUpper = Number(primary.get('SCALE_U'))
 		this.dimquads = dimquads
-		this.jitter = options.jitter ?? DEFAULT_ASTROMETRY_NET_INDEX_JITTER
+		// build-index -j writes the star jitter, arcseconds, into the header of the star tree (util/starkd.c).
+		const fileJitter = Number(byName.get('kdtree_header_stars')?.cards.get('JITTER') ?? 0)
+		this.jitter = options.jitter ?? (fileJitter > 0 ? fileJitter * ASEC2RAD : DEFAULT_ASTROMETRY_NET_INDEX_JITTER)
 		this.epoch = options.epoch ?? DEFAULT_ASTROMETRY_NET_INDEX_EPOCH
 		this.#quads = table('quads', Uint32Array, 4)
 		this.#codes = tree('codes')
@@ -302,6 +313,19 @@ function plausibleRange(range: Float64Array, dimension: number, name: 'codes' | 
 	for (let d = 0; d < 2 * dimension; d++) if (!(range[d] >= low && range[d] <= limit)) return false
 	const scale = range[2 * dimension]
 	return Number.isFinite(scale) && scale > 0
+}
+
+// Whether libkd leaf ends (the last point of each leaf) describe leaves count points split into: one per leaf,
+// non-decreasing, within [-1, count - 1] and ending at the last point. Others would read past the points or loop
+// over billions of positions.
+function validLeafEnds(lr: Int32Array, leaves: number, count: number) {
+	if (lr.length !== leaves || lr[leaves - 1] !== count - 1) return false
+	let previous = -1
+	for (let leaf = 0; leaf < leaves; leaf++) {
+		if (lr[leaf] < previous) return false
+		previous = lr[leaf]
+	}
+	return true
 }
 
 // Builds a KdTree over the points of a libkd tree, already in tree order: its leaves end where lr says (the last point

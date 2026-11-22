@@ -219,3 +219,83 @@ describe('byte order', () => {
 		expect(() => new AstrometryNetQuadIndex(withEndian("ENDIAN  = '01:02:03:04'"))).toThrow('unsupported byte order')
 	})
 })
+
+describe('damaged and unusual files', () => {
+	const DIR = fs.mkdtempSync(join(os.tmpdir(), 'an-index-'))
+	afterAll(() => fs.rmSync(DIR, { recursive: true, force: true }))
+
+	// A copy of index-4116 changed by patch, which receives the header card offsets (by keyword) and the data offset of
+	// the HDU whose first column is table, or of the HDU at that ordinal.
+	function patched(name: string, table: string | number, patch: (bytes: Uint8Array, cards: ReadonlyMap<string, number>, end: number, data: number) => void) {
+		const bytes = new Uint8Array(fs.readFileSync('data/index-4116.fits'))
+		const decoder = new TextDecoder('latin1')
+		let offset = 0
+
+		for (let hdu = 0; offset < bytes.length; hdu++) {
+			const cards = new Map<string, number>()
+			let end = -1
+
+			for (; end < 0; offset += 2880) {
+				for (let i = 0; i < 2880 && end < 0; i += 80) {
+					const key = decoder.decode(bytes.subarray(offset + i, offset + i + 8)).trim()
+					if (key === 'END') end = offset + i
+					else if (!cards.has(key)) cards.set(key, offset + i)
+				}
+			}
+
+			const value = (key: string) =>
+				cards.has(key)
+					? decoder
+							.decode(bytes.subarray(cards.get(key)! + 10, cards.get(key)! + 80))
+							.split('/')[0]
+							.replaceAll("'", '')
+							.trim()
+					: undefined
+
+			if (hdu === table || value('TTYPE1') === table) {
+				patch(bytes, cards, end, offset)
+				const path = join(DIR, `${name}.fits`)
+				fs.writeFileSync(path, bytes)
+				return path
+			}
+
+			let size = 0
+			const naxis = Number(value('NAXIS') ?? 0)
+			if (naxis > 0) size = Math.abs(Number(value('BITPIX'))) / 8
+			for (let n = 1; n <= naxis; n++) size *= Number(value(`NAXIS${n}`))
+			offset += Math.ceil((size + Number(value('PCOUNT') ?? 0)) / 2880) * 2880
+		}
+
+		throw new Error(`no ${table} HDU`)
+	}
+
+	// Writes a card over an existing one, or over END (moving END one card down).
+	function card(key: string, value: string) {
+		return (bytes: Uint8Array, cards: ReadonlyMap<string, number>, end: number) => {
+			const at = cards.get(key)
+			bytes.set(new TextEncoder().encode(`${key.padEnd(8)}= ${value.padStart(20)}`.padEnd(80)), at ?? end)
+			if (at === undefined) bytes.set(new TextEncoder().encode('END'.padEnd(80)), end + 80)
+		}
+	}
+
+	test('a negative data size throws instead of walking back forever', () => {
+		expect(() => new AstrometryNetQuadIndex(patched('naxis', 1, card('NAXIS2', '-240')))).toThrow('invalid FITS data size')
+	})
+
+	test('a tree without nodes or with leaf ends past its points throws instead of hanging a search', () => {
+		expect(() => new AstrometryNetQuadIndex(patched('nnod', 'kdtree_header_stars', card('KDT_NNOD', '0')))).toThrow('k-d tree shape')
+		expect(() => new AstrometryNetQuadIndex(patched('lr', 'kdtree_lr_stars', (bytes, _, __, data) => new DataView(bytes.buffer).setInt32(data, 0x7fffffff, true)))).toThrow('inconsistent stars k-d tree')
+	})
+
+	test('the star jitter the file states is used', () => {
+		const jittered = new AstrometryNetQuadIndex(patched('jitter', 'kdtree_header_stars', card('JITTER', '3.0')))
+		expect(toArcsec(jittered.jitter)).toBeCloseTo(3, 12)
+		expect(toArcsec(index.jitter)).toBeCloseTo(1, 12)
+	})
+
+	test('a file without DIMQUADS is read as quads, as Astrometry.net does', () => {
+		const path = patched('dimquads', 0, (bytes, cards) => bytes.set(new TextEncoder().encode('COMMENT'.padEnd(80)), cards.get('DIMQUADS')))
+		// index-4116 holds triangles, so read as quads its codes have the wrong dimension.
+		expect(() => new AstrometryNetQuadIndex(path)).toThrow('codes of an unexpected dimension')
+	})
+})

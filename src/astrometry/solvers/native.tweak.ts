@@ -11,7 +11,9 @@ import type { QuadIndex, SkyCone } from './quad.index'
 // each step weights the pairs by the sigmoid of their log-odds, moves the variance center to their centroid and
 // refits the linear TAN WCS with CRPIX fixed at the image center. A SIP distortion of the requested order is then
 // fitted on the final pairs, alternating with the linear refit on SIP-corrected pixels, and its reverse
-// polynomials are fitted for readers that do not invert the forward ones. Pixels are FITS 1-based.
+// polynomials are fitted for readers that do not invert the forward ones. As in Astrometry.net's verify_hit, the
+// stars of the matched quad never count in the log-odds, since the hypothesis was fitted to them; they join the
+// fits as fully weighted pairs. Pixels are FITS 1-based.
 
 // Default number of annealing steps.
 export const DEFAULT_TWEAK_STEPS = 20
@@ -25,15 +27,26 @@ const SIP_ITERATIONS = 3
 // Log-odds above which a match weighs fully (Astrometry.net's verify_logodds_to_weight).
 const FULL_WEIGHT_LOG_ODDS = 40
 
+// Fixed-point iterations of the SIP inversion of projectNativeSolution.
+const SIP_INVERSION_ITERATIONS = 20
+
+// Change of both pixel offsets below which the SIP inversion has converged, pixels.
+const SIP_INVERSION_TOLERANCE = 1e-6
+
 // A native solution: the linear TAN WCS and an optional SIP distortion with its reverse polynomials.
 export interface NativeSolution {
+	// Linear TAN WCS, CRPIX at the image center.
 	readonly wcs: TanWcs
+	// Forward SIP distortion from raw to corrected pixels, relative to the CRPIX of wcs.
 	readonly sip?: SipModel
+	// Reverse SIP polynomials of sip, when they could be fitted.
 	readonly inverseSip?: InverseSipModel
 }
 
 // Maps a unit vector to its FITS pixel under a solution, written to out; false on the far hemisphere or when the
-// SIP inversion diverges.
+// SIP inversion diverges. With a SIP distortion, the raw pixel is found by fixed-point iteration from the linear
+// one, stopping when both offsets change by less than SIP_INVERSION_TOLERANCE or after SIP_INVERSION_ITERATIONS
+// steps, in which case the last iterate is returned.
 export function projectNativeSolution(solution: NativeSolution, v: Vec3, out: [number, number]) {
 	if (!tanSkyToPixel(solution.wcs, v, out)) return false
 	const { sip, wcs } = solution
@@ -45,12 +58,12 @@ export function projectNativeSolution(solution: NativeSolution, v: Vec3, out: [n
 	let u = U
 	let w = V
 
-	for (let i = 0; i < 20; i++) {
+	for (let i = 0; i < SIP_INVERSION_ITERATIONS; i++) {
 		const { dx, dy } = evaluateSipCorrection(wcs.crpix1 + u, wcs.crpix2 + w, sip, header)
 		const nextU = U - dx
 		const nextV = V - dy
 		if (!Number.isFinite(nextU) || !Number.isFinite(nextV)) return false
-		const converged = Math.abs(nextU - u) < 1e-6 && Math.abs(nextV - w) < 1e-6
+		const converged = Math.abs(nextU - u) < SIP_INVERSION_TOLERANCE && Math.abs(nextV - w) < SIP_INVERSION_TOLERANCE
 		u = nextU
 		w = nextV
 		if (converged) break
@@ -77,7 +90,9 @@ export function nativeSolutionCone(solution: NativeSolution, width: number, heig
 
 // Inputs of tweakSolution.
 export interface TweakInput {
+	// Prepared field stars.
 	readonly field: SolverField
+	// Index of the hypothesis.
 	readonly index: QuadIndex
 	// Similarity WCS of the accepted hypothesis, referenced at the image center.
 	readonly wcs: TanWcs
@@ -85,26 +100,38 @@ export interface TweakInput {
 	readonly quadX: number
 	readonly quadY: number
 	readonly quadRadiusSq: number
+	// Field star indices and index star ids of the matched quad, in the same A, B, C, D order: left out of every
+	// verification and added to every fit with full weight.
+	readonly quadFieldStars?: ArrayLike<number>
+	readonly quadIndexStars?: ArrayLike<number>
 	// Centroid error of the field stars, pixels.
 	readonly pixelError: number
 	// Final SIP order; below 2 keeps the linear WCS.
 	readonly sipOrder: number
+	// Annealing steps, at least 1; DEFAULT_TWEAK_STEPS when absent.
 	readonly steps?: number
+	// Prior fraction of field stars missing from the index.
 	readonly distractorFraction?: number
 }
 
 // A refined solution with its final verification.
 export interface TweakResult {
+	// Refined solution.
 	readonly solution: NativeSolution
+	// Verification of the solution without variance growth, the quad stars left out.
 	readonly verification: VerifyHypothesisResult
 }
 
 // Pairs of a verification: matched field stars and their references, with weights.
 interface MatchPairs {
+	// Number of pairs.
 	readonly count: number
+	// FITS pixel of the field star of each pair.
 	readonly x: Float64Array
 	readonly y: Float64Array
+	// ICRS unit vector of the reference of each pair, 3 per pair.
 	readonly vectors: Float64Array
+	// Weight of each pair in (0, 1].
 	readonly weights: Float64Array
 }
 
@@ -127,15 +154,19 @@ function verifySolution(input: TweakInput, solution: NativeSolution, gamma: numb
 		quadRadiusSq: input.quadRadiusSq,
 		gamma,
 		sigma2: verificationSigma2(input.pixelError, index, solution.wcs),
+		quadFieldStars: input.quadFieldStars,
+		quadIndexStars: input.quadIndexStars,
 		binSize: index.cellSize / scale,
 		distractorFraction: input.distractorFraction ?? DEFAULT_DISTRACTOR_FRACTION,
 	})
 }
 
-// Collects the matches of the best prefix of a verification.
-function matchPairs(verification: VerifyHypothesisResult, field: SolverField, index: QuadIndex): MatchPairs {
+// Collects the matches of the best prefix of a verification, preceded by the quad stars with full weight.
+function matchPairs(verification: VerifyHypothesisResult, input: TweakInput): MatchPairs {
+	const { field, index, quadFieldStars, quadIndexStars } = input
+	const quadCount = quadFieldStars === undefined || quadIndexStars === undefined ? 0 : Math.min(quadFieldStars.length, quadIndexStars.length)
 	const limit = verification.bestIndex + 1
-	let count = 0
+	let count = quadCount
 	for (let i = 0; i < limit; i++) if (verification.theta[i] >= 0) count++
 
 	const x = new Float64Array(count)
@@ -144,6 +175,15 @@ function matchPairs(verification: VerifyHypothesisResult, field: SolverField, in
 	const weights = new Float64Array(count)
 	const vector: MutVec3 = [0, 0, 0]
 	let k = 0
+
+	for (; k < quadCount; k++) {
+		const star = quadFieldStars![k]
+		x[k] = field.x[star]
+		y[k] = field.y[star]
+		index.starVector(quadIndexStars![k], vector)
+		vectors.set(vector, k * 3)
+		weights[k] = 1
+	}
 
 	for (let i = 0; i < limit; i++) {
 		const ref = verification.theta[i]
@@ -163,7 +203,7 @@ function matchPairs(verification: VerifyHypothesisResult, field: SolverField, in
 
 // Refines an accepted hypothesis; returns the solution and its final verification without variance growth.
 export function tweakSolution(input: TweakInput): TweakResult {
-	const { field, index } = input
+	const { field } = input
 	const crpix = [(field.width + 1) / 2, (field.height + 1) / 2] as const
 	const steps = Math.max(1, input.steps ?? DEFAULT_TWEAK_STEPS)
 	let solution: NativeSolution = { wcs: input.wcs }
@@ -172,7 +212,7 @@ export function tweakSolution(input: TweakInput): TweakResult {
 
 	for (let step = 0; step < steps; step++) {
 		const gamma = step === steps - 1 ? 0 : TWEAK_GAMMA_FACTOR ** step
-		const pairs = matchPairs(verifySolution(input, solution, gamma, quadX, quadY), field, index)
+		const pairs = matchPairs(verifySolution(input, solution, gamma, quadX, quadY), input)
 		if (pairs.count < 3) break
 
 		let sw = 0
@@ -198,13 +238,13 @@ export function tweakSolution(input: TweakInput): TweakResult {
 
 // Alternates the linear fit on SIP-corrected pixels and the SIP fit on the residuals of the linear one.
 function fitSolutionSip(input: TweakInput, solution: NativeSolution, crpix: readonly [number, number]): NativeSolution {
-	const { field, index } = input
+	const { field } = input
 	const header = { crpix1: crpix[0], crpix2: crpix[1], width: field.width, height: field.height }
 	const linear: [number, number] = [0, 0]
 	let best = solution
 
 	for (let iteration = 0; iteration < SIP_ITERATIONS; iteration++) {
-		const pairs = matchPairs(verifySolution(input, best, 0, crpix[0], crpix[1]), field, index)
+		const pairs = matchPairs(verifySolution(input, best, 0, crpix[0], crpix[1]), input)
 		if (pairs.count < 3) break
 
 		// Linear refit on pixels corrected by the current distortion.

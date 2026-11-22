@@ -38,12 +38,14 @@ const MATCH_RADIUS_SIGMAS = 5
 export interface VerifyStarListsInput {
 	// Number of test stars, in test order.
 	readonly testCount: number
+	// FITS pixel of each test star.
 	readonly testX: ArrayLike<number>
 	readonly testY: ArrayLike<number>
 	// Positional variance of each test star, pixels².
 	readonly testSigma2: ArrayLike<number>
 	// Number of reference stars, in reference order.
 	readonly refCount: number
+	// FITS pixel of each reference star.
 	readonly refX: ArrayLike<number>
 	readonly refY: ArrayLike<number>
 	// Effective field area, pixels².
@@ -168,7 +170,9 @@ export function radiusOfRelevanceSq(quadRadiusSq: number, area: number, distract
 
 // A field of detected stars in FITS pixels, ordered as they should be tested (brightest first, uniformized).
 export interface VerifyField {
+	// Number of stars.
 	readonly count: number
+	// FITS pixel of each star.
 	readonly x: Float64Array
 	readonly y: Float64Array
 	// Image size, pixels.
@@ -178,7 +182,9 @@ export interface VerifyField {
 
 // Hypothesis-level inputs of verifyHypothesis.
 export interface VerifyHypothesisInput {
+	// Field stars, in test order.
 	readonly field: VerifyField
+	// Index whose stars are the references.
 	readonly index: QuadIndex
 	// Maps a unit vector to its FITS pixel, written to out; false when it cannot.
 	readonly project: (v: Vec3, out: [number, number]) => boolean
@@ -192,12 +198,15 @@ export interface VerifyHypothesisInput {
 	readonly gamma: number
 	// Base positional variance σ0², pixels².
 	readonly sigma2: number
-	// Field star indices and index star ids of the quad, left out of the test.
+	// Field star indices and index star ids of the quad, left out of the test. A reference is left out when its id
+	// is a quad star's or it lies at a quad star's position, since a tiled index may give one star several ids.
 	readonly quadFieldStars?: ArrayLike<number>
 	readonly quadIndexStars?: ArrayLike<number>
 	// Side of the uniformization bins, pixels.
 	readonly binSize: number
+	// Prior fraction of field stars missing from the index.
 	readonly distractorFraction?: number
+	// Bail-out log-odds.
 	readonly bail?: number
 }
 
@@ -218,6 +227,10 @@ export interface VerifyHypothesisResult extends VerifyStarListsResult {
 const VECTOR: MutVec3 = [0, 0, 0]
 const PIXEL: [number, number] = [0, 0]
 
+// Squared chord below which a reference is the same star as a quad star, (1e-9 rad)²: far below any catalog
+// separation, far above the rounding of one float32 vector read twice.
+const SAME_STAR_CHORD_SQ = 1e-18
+
 // Verifies a hypothesis against the reference stars of an index: projects the references that fall in the image,
 // orders them by brightness sweep, applies the radius of relevance and runs the sequential log-odds.
 export function verifyHypothesis(input: VerifyHypothesisInput): VerifyHypothesisResult {
@@ -226,15 +239,34 @@ export function verifyHypothesis(input: VerifyHypothesisInput): VerifyHypothesis
 	const width = field.width
 	const height = field.height
 	const excludedRefs = new Set<number>()
-	if (input.quadIndexStars) for (let i = 0; i < input.quadIndexStars.length; i++) excludedRefs.add(input.quadIndexStars[i])
+	const excludedVectors: number[] = []
+
+	if (input.quadIndexStars) {
+		for (let i = 0; i < input.quadIndexStars.length; i++) {
+			excludedRefs.add(input.quadIndexStars[i])
+			index.starVector(input.quadIndexStars[i], VECTOR)
+			excludedVectors.push(VECTOR[0], VECTOR[1], VECTOR[2])
+		}
+	}
+
 	const excludedTests = new Set<number>()
 	if (input.quadFieldStars) for (let i = 0; i < input.quadFieldStars.length; i++) excludedTests.add(input.quadFieldStars[i])
+
+	// Whether the unit vector v is one of the quad stars.
+	const isQuadStar = (v: Vec3) => {
+		for (let k = 0; k < excludedVectors.length; k += 3) {
+			if ((v[0] - excludedVectors[k]) ** 2 + (v[1] - excludedVectors[k + 1]) ** 2 + (v[2] - excludedVectors[k + 2]) ** 2 < SAME_STAR_CHORD_SQ) return true
+		}
+		return false
+	}
 
 	// References inside the image, ordered by sweep then id.
 	const refs: { star: number; sweep: number; x: number; y: number }[] = []
 	index.starsInCone(input.cone, (star) => {
 		if (excludedRefs.has(star)) return
-		if (!input.project(index.starVector(star, VECTOR), PIXEL)) return
+		const vector = index.starVector(star, VECTOR)
+		if (isQuadStar(vector)) return
+		if (!input.project(vector, PIXEL)) return
 		const x = PIXEL[0]
 		const y = PIXEL[1]
 		if (x < 0.5 || y < 0.5 || x > width + 0.5 || y > height + 0.5) return

@@ -38,6 +38,7 @@ export function prepareSolverField(stars: readonly DetectedStar[], width: number
 	for (const i of order) {
 		if (kept.length >= maxStars) break
 		const star = stars[i]
+		// A detection without a finite centroid can match nothing, yet it would take one of the maxStars places.
 		if (!Number.isFinite(star.x) || !Number.isFinite(star.y)) continue
 		if (kept.some((k) => (stars[k].x - star.x) ** 2 + (stars[k].y - star.y) ** 2 < mergeSq)) continue
 		kept.push(i)
@@ -100,8 +101,14 @@ export class FieldQuadEnumerator {
 	readonly #cos: Float64Array
 	readonly #sin: Float64Array
 	readonly #code: MutQuadCode = quadCode()
-	// Number of stars already entered.
+	// Number of stars already entered, the one in progress included.
 	#entered = 0
+	// Resumable cursor: the star in progress (or next), its phase (0 not started, 1 as backbone star B, 2 as inner
+	// star C) and the two outer loop positions of that phase.
+	#n = 0
+	#phase = 0
+	#i = 0
+	#j = 0
 
 	// minBackbone and maxBackbone bound |AB| in pixels; tolerance is the code tolerance; size is 4 for quads or 3
 	// for triangles, whose D is passed as -1.
@@ -126,72 +133,106 @@ export class FieldQuadEnumerator {
 		return this.#entered
 	}
 
-	// Whether every star has entered.
+	// Whether every quad of every star has been visited.
 	get done() {
-		return this.#entered >= this.#count
+		return this.#n >= this.#count
 	}
 
-	// Enters up to `block` more stars, visiting the quads each new star completes. Returns true when visit stopped.
-	advance(block: number, visit: FieldQuadVisitor) {
-		const end = Math.min(this.#count, this.#entered + block)
+	// Enters up to `block` more stars, visiting the quads each new star completes, and pauses early once
+	// performance.now() passes until (milliseconds): a later call resumes where this one stopped. At least one inner
+	// loop runs per call, so the enumeration always progresses. Returns true when visit stopped.
+	advance(block: number, visit: FieldQuadVisitor, until: number = Infinity) {
+		const count = this.#count
+		let started = 0
 
-		for (let n = this.#entered; n < end; n++) {
-			this.#entered = n + 1
+		while (this.#n < count) {
+			const n = this.#n
 
-			// n as the newest backbone star B.
-			for (let a = 0; a < n; a++) {
-				if (!this.#backbone(a, n)) continue
-				const pair = a * this.#count + n
-
-				for (let c = 0; c < n; c++) {
-					if (c === a || !this.#inside(pair, a, c)) continue
-
-					if (this.size === 3) {
-						if (visit(a, n, c, -1, Math.sqrt(this.#scaleSq(a, n)), this.#code)) return true
-						continue
-					}
-
-					const cx = this.#code[0]
-					const cy = this.#code[1]
-
-					for (let d = c + 1; d < n; d++) {
-						if (d === a || !this.#inside(pair, a, d)) continue
-						const code = this.#code
-						code[2] = code[0]
-						code[3] = code[1]
-						code[0] = cx
-						code[1] = cy
-						if (visit(a, n, c, d, Math.sqrt(this.#scaleSq(a, n)), code)) return true
-					}
-				}
+			if (this.#phase === 0) {
+				if (started >= block) return false
+				started++
+				this.#entered = n + 1
+				this.#phase = 1
+				this.#i = 0
+				this.#j = 0
 			}
 
-			// n as the newest inner star C, with an older D.
-			for (let b = 1; b < n; b++) {
-				for (let a = 0; a < b; a++) {
-					if (this.#state[a * this.#count + b] !== 1) continue
-					const pair = a * this.#count + b
+			// n as the newest backbone star B: #i is A, #j is C.
+			if (this.#phase === 1) {
+				for (; this.#i < n; this.#i++, this.#j = 0) {
+					const a = this.#i
+					if (!this.#backbone(a, n)) continue
+					const pair = a * count + n
+
+					for (; this.#j < n; this.#j++) {
+						const c = this.#j
+						if (c === a || !this.#inside(pair, a, c)) continue
+
+						if (this.size === 3) {
+							if (visit(a, n, c, -1, Math.sqrt(this.#scaleSq(a, n)), this.#code)) return true
+						} else {
+							const cx = this.#code[0]
+							const cy = this.#code[1]
+
+							for (let d = c + 1; d < n; d++) {
+								if (d === a || !this.#inside(pair, a, d)) continue
+								const code = this.#code
+								code[2] = code[0]
+								code[3] = code[1]
+								code[0] = cx
+								code[1] = cy
+								if (visit(a, n, c, d, Math.sqrt(this.#scaleSq(a, n)), code)) return true
+							}
+						}
+
+						if (performance.now() > until) {
+							this.#j = c + 1
+							return false
+						}
+					}
+				}
+
+				this.#phase = 2
+				this.#i = 1
+				this.#j = 0
+			}
+
+			// n as the newest inner star C, with an older D: #i is B, #j is A.
+			for (; this.#i < n; this.#i++, this.#j = 0) {
+				const b = this.#i
+
+				for (; this.#j < b; this.#j++) {
+					const a = this.#j
+					if (this.#state[a * count + b] !== 1) continue
+					const pair = a * count + b
 					if (!this.#inside(pair, a, n)) continue
 
 					if (this.size === 3) {
 						if (visit(a, b, n, -1, Math.sqrt(this.#scaleSq(a, b)), this.#code)) return true
-						continue
+					} else {
+						const cx = this.#code[0]
+						const cy = this.#code[1]
+
+						for (let d = 0; d < n; d++) {
+							if (d === a || d === b || !this.#inside(pair, a, d)) continue
+							const code = this.#code
+							code[2] = code[0]
+							code[3] = code[1]
+							code[0] = cx
+							code[1] = cy
+							if (visit(a, b, n, d, Math.sqrt(this.#scaleSq(a, b)), code)) return true
+						}
 					}
 
-					const cx = this.#code[0]
-					const cy = this.#code[1]
-
-					for (let d = 0; d < n; d++) {
-						if (d === a || d === b || !this.#inside(pair, a, d)) continue
-						const code = this.#code
-						code[2] = code[0]
-						code[3] = code[1]
-						code[0] = cx
-						code[1] = cy
-						if (visit(a, b, n, d, Math.sqrt(this.#scaleSq(a, b)), code)) return true
+					if (performance.now() > until) {
+						this.#j = a + 1
+						return false
 					}
 				}
 			}
+
+			this.#phase = 0
+			this.#n++
 		}
 
 		return false

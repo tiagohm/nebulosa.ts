@@ -118,7 +118,7 @@ export function buildQuadBand(stars: Float64Array, options: QuadBandOptions): Qu
 
 	const kept = uniformizeStars(stars, nside, Math.min(255, starsPerCell), dedup)
 	const tree = buildKdTree(kept.stars, 3)
-	const cells = options.cells !== undefined ? [...options.cells].sort(NumberComparator) : region === undefined ? kept.cells : circleToPixels(nside, ...eraC2s(...(region.center as [number, number, number])), Math.min(Math.PI, region.radius)).sort(NumberComparator)
+	const cells = options.cells !== undefined ? [...options.cells].sort(NumberComparator) : region === undefined ? kept.cells : circleToPixels(nside, ...eraC2s(...region.center), Math.min(Math.PI, region.radius)).sort(NumberComparator)
 	const builder = new CellQuadBuilder(kept.stars, tree, nside, scaleLower, scaleUpper)
 	const reuse = new Uint16Array(kept.sourceIndices.length)
 	const quads: number[] = []
@@ -198,10 +198,13 @@ function buildCellGroup(builder: CellQuadBuilder, cells: readonly number[], star
 
 // Kept stars of a band.
 interface UniformizedStars {
+	// Unit vectors of the kept stars, 3 per star, brightest first.
 	readonly stars: Float64Array
 	// Cells holding at least one kept star, in increasing order.
 	readonly cells: number[]
+	// Index of each kept star in the input list.
 	readonly sourceIndices: Uint32Array
+	// Brightness rank of each kept star within its cell.
 	readonly sweeps: Uint8Array
 }
 
@@ -241,6 +244,9 @@ function uniformizeStars(stars: Float64Array, nside: number, starsPerCell: numbe
 	return { stars: kept, cells, sourceIndices: Uint32Array.from(sourceIndices), sweeps: Uint8Array.from(sweeps) }
 }
 
+// Smallest bucket side of DedupGrid: 2/2^17, so that the span³ bucket keys stay exact integers below 2^53 (about 3″).
+const DEDUP_MIN_BUCKET = 2 / 2 ** 17
+
 // Spatial hash over unit vectors that refuses a point closer than a chord to an accepted one.
 class DedupGrid {
 	readonly #buckets = new Map<number, number[]>()
@@ -249,11 +255,12 @@ class DedupGrid {
 	// Bucket coordinate span per axis: unit vectors lie in [-1, 1].
 	readonly #span: number
 
-	// chord is the refusal distance between unit vectors, a positive chord length.
+	// chord is the refusal distance between unit vectors, a positive chord length. The buckets are at least that wide,
+	// and never narrower than DEDUP_MIN_BUCKET, since the neighbors searched must cover the chord.
 	constructor(readonly chord: number) {
-		this.#size = chord
+		this.#size = Math.max(chord, DEDUP_MIN_BUCKET)
 		this.#chordSq = chord * chord
-		this.#span = Math.ceil(2 / chord) + 3
+		this.#span = Math.ceil(2 / this.#size) + 3
 	}
 
 	// Accepts and stores the point unless a stored one lies within the chord.
@@ -286,16 +293,21 @@ class DedupGrid {
 
 // A quad accepted for a cell: kept-star indices and code in canonical order.
 interface CellQuad {
+	// Kept-star indices in canonical A, B, C, D order.
 	readonly stars: MutQuadStars
+	// Canonical code.
 	readonly code: MutQuadCode
 }
 
 // Candidate stars of a cell, cached across passes: kept-star ids brightest first, their tangent-plane positions
 // around the cell center, and the backbone state of each pair (0 unknown, 1 valid, 2 invalid).
 interface CellCandidates {
+	// Kept-star ids, brightest first.
 	readonly ids: Uint32Array
+	// Tangent-plane position of each candidate around the cell center, radians.
 	readonly x: Float64Array
 	readonly y: Float64Array
+	// Backbone state of each candidate pair (a, b), a < b, at a · ids.length + b.
 	readonly pairs: Uint8Array
 }
 
