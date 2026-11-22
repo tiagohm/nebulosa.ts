@@ -37,7 +37,8 @@ export interface TanWcsFit {
 function tangentBasis(r: Vec3, east: MutVec3, north: MutVec3) {
 	const norm = Math.hypot(r[0], r[1])
 
-	if (norm === 0) {
+	// The same pole test as starCoordinates, so that projection and deprojection always use one basis.
+	if (r[2] === 1 || r[2] === -1 || norm === 0) {
 		// At a pole star_coords projects onto x and y directly (x/z, y/z at the north pole, -x/z, y/z at the south),
 		// which this basis inverts.
 		east[0] = 1

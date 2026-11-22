@@ -42,6 +42,7 @@ export class EphemeralQuadIndex implements QuadIndex {
 	readonly #codes: KdTree<Float64Array>
 	readonly #stars: KdTree<Float64Array>
 
+	// Indexes a built band: a k-d tree over its codes and one over its stars. Defaults: 1 arcsec jitter, epoch 2000.
 	constructor(band: QuadBand, options: Pick<EphemeralQuadIndexOptions, 'id' | 'jitter' | 'epoch' | 'region'> = {}) {
 		this.#band = band
 		this.id = options.id ?? `ephemeral:${band.scaleLower}`
@@ -70,11 +71,13 @@ export class EphemeralQuadIndex implements QuadIndex {
 		return this.#stars.count
 	}
 
+	// Visits the quads whose code lies within tolerance of code; the whole band is in memory, so no region applies.
 	readonly searchCodes = (code: QuadCode, tolerance: number, visit: (quad: number) => void) => {
 		const tree = this.#codes
 		searchKdTree(tree, code, tolerance, (position) => visit(tree.indices[position]))
 	}
 
+	// Writes the kept-star ids of a quad in canonical A, B, C, D order into out and returns it.
 	readonly quadStars = (quad: number, out: Uint32Array) => {
 		const quads = this.#band.quads
 		out[0] = quads[quad * 4]
@@ -84,6 +87,7 @@ export class EphemeralQuadIndex implements QuadIndex {
 		return out
 	}
 
+	// Writes the unit vector of a kept star into out and returns it.
 	readonly starVector = (star: number, out: MutVec3) => {
 		const stars = this.#band.stars
 		out[0] = stars[star * 3]
@@ -92,13 +96,16 @@ export class EphemeralQuadIndex implements QuadIndex {
 		return out
 	}
 
+	// Brightness rank of a kept star within its uniformization cell.
 	readonly starSweep = (star: number) => this.#band.sweeps[star]
 
+	// Visits the kept stars within the cone, in no particular order.
 	readonly starsInCone = (cone: SkyCone, visit: (star: number) => void) => {
 		const tree = this.#stars
 		searchKdTree(tree, cone.center, 2 * Math.sin(Math.min(Math.PI, cone.radius) / 2), (position) => visit(tree.indices[position]))
 	};
 
+	// Holds no external resource: the arrays are released with the object.
 	[Symbol.dispose]() {}
 }
 

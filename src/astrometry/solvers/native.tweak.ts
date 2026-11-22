@@ -231,7 +231,9 @@ function fitSolutionSip(input: TweakInput, solution: NativeSolution, crpix: read
 			best = { wcs: fit.wcs, sip: sip.model }
 		} catch (e) {
 			if (!(e instanceof SipFitError)) throw e
-			// Too few or badly spread matches for this order: keep the linear solution.
+			// The fit failed for this order. A linear fit made on SIP-corrected pixels is only valid with that SIP,
+			// so a later failure keeps the previous solution; a first failure keeps the linear fit of the raw pixels.
+			if (best.sip !== undefined) break
 			return { wcs: fit.wcs }
 		}
 	}

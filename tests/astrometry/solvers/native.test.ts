@@ -1,10 +1,13 @@
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, spyOn, test } from 'bun:test'
 import { nativeNearbyPlateSolve, nativePlateSolve, nativeSolutionHeader } from '../../../src/astrometry/solvers/native'
 import { fitLinearTanWcs, fitSimilarityTanWcs, type TanWcs, tanPixelToSky, tanSkyToPixel } from '../../../src/astrometry/solvers/native.fit'
+import * as tweak from '../../../src/astrometry/solvers/native.tweak'
 import { radiusOfRelevanceSq, verifyStarLists } from '../../../src/astrometry/solvers/native.verify'
 import type { Parity } from '../../../src/astrometry/solvers/platesolver'
+import type { QuadIndex } from '../../../src/astrometry/solvers/quad.index'
 import { catalogStarVectors, EphemeralQuadIndex } from '../../../src/astrometry/solvers/quad.index.ephemeral'
 import { tanProject, tanUnproject } from '../../../src/astrometry/wcs/fits.wcs'
+import * as sipFit from '../../../src/astrometry/wcs/sip.fit'
 import { eraC2s, eraS2c } from '../../../src/astronomy/coordinates/erfa/erfa'
 import type { StarCatalog, StarCatalogEntry } from '../../../src/catalogs/stars/catalog'
 import { HnskyCatalog } from '../../../src/catalogs/stars/hnsky'
@@ -154,6 +157,18 @@ describe('TAN fit', () => {
 		}
 	})
 
+	test('projection and deprojection agree with the tangent point exactly at a pole', () => {
+		for (const dec of [Math.PI / 2, -Math.PI / 2]) {
+			// eraS2c(1, ±PI/2) has a z of exactly ±1 with tiny nonzero x and y.
+			const wcs = wcsOf(1, dec, 2 * ASEC2RAD, 0.4, 'NORMAL', 2000, 1500)
+			expect(Math.abs(wcs.crval[2])).toBe(1)
+			const pixel: [number, number] = [0, 0]
+			expect(tanSkyToPixel(wcs, tanPixelToSky(wcs, 1700, 200), pixel)).toBeTrue()
+			expect(pixel[0]).toBeCloseTo(1700, 6)
+			expect(pixel[1]).toBeCloseTo(200, 6)
+		}
+	})
+
 	for (const parity of ['NORMAL', 'FLIPPED'] as const) {
 		for (const [ra, dec] of [
 			[0.0001, 0.2],
@@ -272,6 +287,72 @@ describe('solve', () => {
 		expect(await nativePlateSolve(stars, indexes, { ...options, parity: 'NORMAL' })).toBeUndefined()
 	})
 
+	test('a later SIP failure keeps the previous distortion', async () => {
+		const truth = wcsOf(ra, dec, scale, 1.1, 'NORMAL', width, height)
+		const stars = detect(sky, truth, { seed: 6, width, height, limit: 13.5, noise: 0.1, distortion: 6 })
+		const fitSipDistortion = sipFit.fitSipDistortion
+		let calls = 0
+		const spy = spyOn(sipFit, 'fitSipDistortion').mockImplementation((...args: Parameters<typeof fitSipDistortion>) => {
+			if (calls++ === 0) return fitSipDistortion(...args)
+			throw new sipFit.SipFitError('illConditionedFit', 'forced')
+		})
+
+		try {
+			const result = await nativePlateSolve(stars, indexesFor(sky, shortSide), { width, height, scale: { lower: scale * 0.9, upper: scale * 1.1 }, sipOrder: 3 })
+			expect(calls).toBeGreaterThan(1)
+			expect(result!.header.CTYPE1).toBe('RA---TAN-SIP')
+			expect(result!.rms).toBeLessThan(1)
+		} finally {
+			spy.mockRestore()
+		}
+	})
+
+	test('a refinement worse than the hypothesis keeps the hypothesis', async () => {
+		const truth = wcsOf(ra, dec, scale, 0.9, 'NORMAL', width, height)
+		const stars = detect(sky, truth, { seed: 13, width, height, limit: 13, noise: 0.2 })
+		const tweakSolution = tweak.tweakSolution
+		const spy = spyOn(tweak, 'tweakSolution').mockImplementation((input) => {
+			const refined = tweakSolution(input)
+			// A refinement that moved the solution by 50 pixels and verifies badly.
+			return { solution: { wcs: { ...refined.solution.wcs, crpix1: refined.solution.wcs.crpix1 + 50 } }, verification: { ...refined.verification, logOdds: 0 } }
+		})
+
+		try {
+			const result = await nativePlateSolve(stars, indexesFor(sky, shortSide), { width, height, scale: { lower: scale * 0.9, upper: scale * 1.1 } })
+			expect(spy).toHaveBeenCalled()
+			expect(result).toBeDefined()
+			// The four-star similarity extrapolates to the corners within a few arcseconds; the shifted one is 100" off.
+			expectSolution(result!.header, truth, width, height, 15 * ASEC2RAD)
+		} finally {
+			spy.mockRestore()
+		}
+	})
+
+	test('hypotheses of indexes sharing an id are tried for each index', async () => {
+		const truth = wcsOf(ra, dec, scale, 2.2, 'NORMAL', width, height)
+		const stars = detect(sky, truth, { seed: 14, width, height, limit: 13 })
+		const [real] = indexesFor(sky, shortSide, [0.2])
+		// Same quads and id, but no reference stars: every hypothesis it produces fails verification.
+		const empty: QuadIndex = {
+			id: real.id,
+			scaleLower: real.scaleLower,
+			scaleUpper: real.scaleUpper,
+			jitter: real.jitter,
+			epoch: real.epoch,
+			cellSize: real.cellSize,
+			searchCodes: real.searchCodes,
+			quadStars: real.quadStars,
+			starVector: real.starVector,
+			starSweep: real.starSweep,
+			starsInCone: () => {},
+			[Symbol.dispose]: () => {},
+		}
+		expect(empty.id).toBe(real.id)
+		const result = await nativePlateSolve(stars, [empty, real], { width, height, scale: { lower: scale * 0.9, upper: scale * 1.1 }, sipOrder: 0 })
+		expect(result?.indexId).toBe(real.id)
+		expectSolution(result!.header, truth, width, height)
+	})
+
 	test('a field from another sky does not solve', async () => {
 		const other = syntheticSky(99, ra, dec, 2 * DEG2RAD, 400)
 		const truth = wcsOf(ra, dec, scale, 0.3, 'NORMAL', width, height)
@@ -286,6 +367,26 @@ describe('solve', () => {
 		const controller = new AbortController()
 		controller.abort()
 		await expect(nativePlateSolve(stars, indexesFor(sky, shortSide), { width, height }, controller.signal)).rejects.toMatchObject({ code: 'aborted' })
+	})
+
+	test('nearby tiling of a wide hint at a pole stays bounded', async () => {
+		for (const declination of [Math.PI / 2, deg(89.9), -Math.PI / 2]) {
+			let queries = 0
+			const catalog = {
+				queryCone: () => {
+					queries++
+					return []
+				},
+			} as unknown as StarCatalog
+
+			const started = performance.now()
+			const result = await nativeNearbyPlateSolve([], catalog, { width, height, rightAscension: 1, declination, radius: 5 * DEG2RAD, scale: { lower: scale * 0.9, upper: scale * 1.1 } })
+			expect(result).toBeUndefined()
+			// About 100 field-sized positions cover a 5° cap, tried at three densities.
+			expect(queries).toBeGreaterThan(100)
+			expect(queries).toBeLessThan(1500)
+			expect(performance.now() - started).toBeLessThan(20000)
+		}
 	})
 
 	test('nearby over a star catalog', async () => {

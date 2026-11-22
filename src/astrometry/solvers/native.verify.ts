@@ -335,6 +335,7 @@ class PointGrid {
 	// Squared distance of the last nearest() hit.
 	lastDistanceSq = Infinity
 
+	// Buckets count points (x[i], y[i]), pixels, into cells holding about two points each.
 	constructor(
 		readonly x: ArrayLike<number>,
 		readonly y: ArrayLike<number>,
@@ -369,6 +370,7 @@ class PointGrid {
 		}
 	}
 
+	// Index of the cell holding (x, y), clamped to the grid.
 	#cellOf(x: number, y: number) {
 		const cx = Math.max(0, Math.min(this.#nx - 1, Math.floor((x - this.#minX) / this.#cell)))
 		const cy = Math.max(0, Math.min(this.#ny - 1, Math.floor((y - this.#minY) / this.#cell)))

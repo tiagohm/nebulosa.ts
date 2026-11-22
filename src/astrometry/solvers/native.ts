@@ -204,12 +204,14 @@ function nearbyPositions(center: MutVec3, radius: Angle, fieldRadius: Angle): Ne
 	for (let row = -rows; row <= rows; row++) {
 		const dec = dec0 + row * step
 		if (dec > Math.PI / 2 || dec < -Math.PI / 2) continue
-		const cos = Math.max(1e-6, Math.cos(dec))
-		const columns = Math.min(Math.ceil(radius / (step * cos)), Math.ceil(Math.PI / (step * cos)))
+		const cos = Math.cos(dec)
+		// Half the columns needed to span the cone in RA, but never more than the whole circle of this declination
+		// holds, which shrinks to one position at a pole.
+		const columns = Math.max(0, Math.min(Math.ceil(radius / (step * Math.max(cos, 1e-12))), Math.ceil((Math.PI * cos) / step)))
 		const shift = (row & 1) === 0 ? 0 : 0.5
 
 		for (let column = -columns; column <= columns; column++) {
-			const ra = ra0 + ((column + shift) * step) / cos
+			const ra = ra0 + ((column + shift) * step) / Math.max(cos, 1e-12)
 			const point = eraS2c(ra, dec)
 			const distance = vecAngleUnit(point, center)
 			if (distance <= radius + fieldRadius) positions.push({ center: point, distance })
@@ -234,7 +236,8 @@ class NativeSearch {
 	readonly #fieldRadiusPixels: number
 	readonly #pixelError: number
 	readonly #distractor: number
-	readonly #tried = new Set<string>()
+	// Hypotheses already verified, per index object (ids may repeat), as quad and field-star labeling.
+	readonly #tried = new Map<QuadIndex, Set<string>>()
 	readonly #quadStars = new Uint32Array(4)
 	readonly #vectors = new Float64Array(12)
 	readonly #vector: MutVec3 = [0, 0, 0]
@@ -249,7 +252,7 @@ class NativeSearch {
 		this.#codeParity = options.parity === undefined ? undefined : options.parity === 'NORMAL'
 		this.#hint = hintCone(options)
 		this.#fieldRadiusPixels = Math.hypot(options.width, options.height) / 2
-		this.#pixelError = options.pixelError ?? 1
+		this.#pixelError = options.pixelError ?? DEFAULT_NATIVE_PIXEL_ERROR
 		this.#distractor = options.distractorFraction ?? DEFAULT_DISTRACTOR_FRACTION
 
 		const hint = this.#hint
@@ -297,9 +300,12 @@ class NativeSearch {
 	#hit(index: QuadIndex, quad: number, fieldStars: readonly [number, number, number, number], backbone: number) {
 		if (this.#solved !== undefined) return
 
-		const key = `${index.id}:${quad}:${[...fieldStars].sort((p, q) => p - q).join(',')}`
-		if (this.#tried.has(key)) return
-		this.#tried.add(key)
+		// A labeling is a distinct hypothesis: the same stars in another order map the quad with another rotation.
+		const key = `${quad}:${fieldStars[0]},${fieldStars[1]},${fieldStars[2]},${fieldStars[3]}`
+		let tried = this.#tried.get(index)
+		if (tried === undefined) this.#tried.set(index, (tried = new Set()))
+		if (tried.has(key)) return
+		tried.add(key)
 
 		const field = this.#field
 		const stars = index.quadStars(quad, this.#quadStars)
@@ -356,9 +362,18 @@ class NativeSearch {
 		if (verification.logOdds < LOG_ODDS_TUNE) return
 
 		const tweak = tweakSolution({ field, index, wcs: fit.wcs, quadX, quadY, quadRadiusSq, pixelError: this.#pixelError, sipOrder: this.#options.sipOrder ?? DEFAULT_NATIVE_SIP_ORDER, distractorFraction: this.#distractor })
-		solution = tweak.solution
-		const final = tweak.verification
-		if (Math.max(final.logOdds, verification.logOdds) < LOG_ODDS_ACCEPT || final.matchCount < 4) return
+		let final = tweak.verification
+
+		if (final.logOdds >= LOG_ODDS_ACCEPT) {
+			solution = tweak.solution
+		} else if (verification.logOdds >= LOG_ODDS_ACCEPT) {
+			// The refinement made the hypothesis worse than its own verification: keep the unrefined similarity solution.
+			final = verification
+		} else {
+			return
+		}
+
+		if (final.matchCount < 4) return
 
 		let sumSq = 0
 		for (let i = 0; i <= final.bestIndex; i++) {

@@ -192,6 +192,7 @@ class DedupGrid {
 	// Bucket coordinate span per axis: unit vectors lie in [-1, 1].
 	readonly #span: number
 
+	// chord is the refusal distance between unit vectors, a positive chord length.
 	constructor(readonly chord: number) {
 		this.#size = chord
 		this.#chordSq = chord * chord
@@ -259,9 +260,12 @@ class CellQuadBuilder {
 		[0, 0, 0],
 		[0, 0, 0],
 	]
+	// Cell being built.
 	#cell = 0
+	// Candidates of the cell being built.
 	#current: CellCandidates = { ids: new Uint32Array(0), x: new Float64Array(0), y: new Float64Array(0), pairs: new Uint8Array(0) }
 
+	// stars are the kept unit vectors and tree their k-d tree; the band spans [scaleLower, scaleUpper] radians.
 	constructor(
 		readonly stars: Float64Array,
 		readonly tree: KdTree<Float64Array>,
