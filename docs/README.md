@@ -6704,11 +6704,12 @@ console.log(toDeg(solution.orientation), solution.parity) // 180 FLIPPED — a n
 
 A blind solve must recognize the field anywhere on the sky, so its quads are built once, ahead of time, from a deep catalog and stored, as Astrometry.net does with its index files. Each file holds one band of quad sizes. Because the number of quads grows with the inverse square of the quad size, a band of small quads covers the sky in hundreds of tiles: HEALPix nested cells of a coarser grid, each owning the quads whose backbone midpoint lies in it, plus its stars and the few stars of neighboring tiles its quads borrow. A solver near a hint then reads only the tiles around it. The quad codes are those of [Built-in Plate Solving](#built-in-plate-solving), stored with the stars' positions, magnitudes, and optional proper motions at the file's epoch.
 
-The `.nqi` format is flat: its sections map directly onto typed arrays, with no parsing, and `NebulosaQuadIndex` serves the tiles of one band as a quad index, loading each tile when the search first touches it and releasing the least recently used ones beyond a memory budget. Files are mapped into memory where the runtime can, and read whole otherwise (Bun has no memory mapping on Windows). `buildQuadIndexTile` builds one tile from the stars of its cone, so a generator can read a catalog tile by tile; the reuse limit of a star then applies per tile. Positions are carried by proper motion to a requested epoch when the files have proper motions.
+The `.nqi` format is flat: its sections map directly onto typed arrays, with no parsing, and `NebulosaQuadIndex` serves the tiles of one band as a quad index, loading each tile when the search first touches it and releasing the least recently used ones beyond a memory budget. Files are mapped into memory where the runtime can, and read whole otherwise (Bun has no memory mapping on Windows). `buildQuadIndexTile` builds one tile from the stars of its cone, so a generator can read a catalog tile by tile; the reuse limit of a star then applies per tile. `catalogQuadIndexStars` streams those stars from any [Star Catalog Interface and Spatial Query](#star-catalog-interface-and-spatial-query), keeping only the brightest few per cell as it goes, so local ASTAP and HNSKY databases, extracts of Gaia, convert to index files without a download; they have no proper motions, so their positions stay at the database epoch. Positions are carried by proper motion to a requested epoch when the files have proper motions.
 
 ```ts
 import { nativePlateSolve } from 'nebulosa/src/astrometry/solvers/native'
 import { buildQuadBand } from 'nebulosa/src/astrometry/solvers/quad.builder'
+import { catalogQuadIndexStars } from 'nebulosa/src/astrometry/solvers/quad.index.ephemeral'
 import { buildQuadIndexTile, decodeQuadIndexTile, encodeQuadIndexTile, NebulosaQuadIndex, quadIndexTileCone, quadIndexTileFileName, quadIndexTilesFromBand, verifyQuadIndexTile } from 'nebulosa/src/astrometry/solvers/quad.index.file'
 import { arcsec, deg } from 'nebulosa/src/math/units/angle'
 
@@ -6717,9 +6718,11 @@ import { arcsec, deg } from 'nebulosa/src/math/units/angle'
 const band = buildQuadBand(vectors, { scaleLower: deg(8 / 60), scaleUpper: deg((8 / 60) * Math.SQRT2) })
 const tiles = quadIndexTilesFromBand(band, { tileNside: 8, jitter: arcsec(1), epoch: 2000, magnitudes, catalog: 'Gaia DR3' })
 
-// Or one tile at a time: the catalog stars of the cone of tile 42 (starsOfCone, magnitudesOfCone) build that tile only.
+// Or one tile at a time: the stars of the cone of tile 42 in a catalog (such as an ASTAP database), at most 60 per
+// cell of the band's NSIDE 256 (twice the 30 the band keeps), build that tile only, at the catalog's epoch.
 const cone = quadIndexTileCone(8, 42, deg((8 / 60) * Math.SQRT2))
-const tile = buildQuadIndexTile({ vectors: starsOfCone, magnitudes: magnitudesOfCone }, { scaleLower: deg(8 / 60), scaleUpper: deg((8 / 60) * Math.SQRT2) }, 8, 42, { jitter: arcsec(1), epoch: 2000 })
+const coneStars = await catalogQuadIndexStars(catalog, cone, { nside: 256, perCell: 60 })
+const tile = buildQuadIndexTile(coneStars, { scaleLower: deg(8 / 60), scaleUpper: deg((8 / 60) * Math.SQRT2) }, 8, 42, { jitter: arcsec(1), epoch: coneStars.epoch ?? 2000 })
 
 // The bytes of a file, named after its band and tile (such as nqi-480-8-0042.nqi), checked, and read back without copying.
 const bytes = encodeQuadIndexTile(tiles[0])

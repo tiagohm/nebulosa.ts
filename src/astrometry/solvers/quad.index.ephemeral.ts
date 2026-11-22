@@ -1,11 +1,13 @@
 import { eraC2s, eraS2c } from '../../astronomy/coordinates/erfa/erfa'
-import type { StarCatalog, StarCatalogEntry } from '../../catalogs/stars/catalog'
+import { coordToPixel } from '../../astronomy/sky/spatial/healpix'
+import type { StarCatalog } from '../../catalogs/stars/catalog'
 import { ASEC2RAD } from '../../core/constants'
 import type { MutVec3 } from '../../math/linear-algebra/vec3'
 import type { Angle } from '../../math/units/angle'
 import { buildQuadBand, type QuadBand, type QuadBandOptions } from './quad.builder'
 import type { QuadCode } from './quad.code'
 import type { QuadIndex, SkyCone } from './quad.index'
+import type { QuadIndexStars } from './quad.index.file'
 import { buildKdTree, type KdTree, searchKdTree } from './quad.kdtree'
 
 // In-memory QuadIndex built on demand from a star list or any StarCatalog, by the same band builder the index
@@ -114,35 +116,97 @@ export class EphemeralQuadIndex implements QuadIndex {
 // linearly by proper motion from each entry's epoch to epoch (Julian year) when both are known. Entries without
 // a magnitude sort last.
 export async function catalogStarVectors(catalog: StarCatalog, cone: SkyCone, epoch?: number) {
-	const [ra, dec] = eraC2s(cone.center[0], cone.center[1], cone.center[2])
-	const entries = [...(await catalog.queryCone(ra, dec, cone.radius))]
-	entries.sort(StarCatalogEntryMagnitudeComparator)
-	const vectors = new Float64Array(entries.length * 3)
-	const vector: MutVec3 = [0, 0, 0]
+	return (await catalogQuadIndexStars(catalog, cone, { epoch })).vectors
+}
 
-	for (let i = 0; i < entries.length; i++) {
-		const entry = entries[i]
-		let rightAscension = entry.rightAscension
-		let declination = entry.declination
+// Options of catalogQuadIndexStars.
+export interface CatalogQuadIndexStarsOptions {
+	// Epoch the positions are carried to by proper motion, Julian year; undefined keeps each entry's epoch.
+	readonly epoch?: number
+	// NSIDE of the cells that bound the stars kept, with perCell.
+	readonly nside?: number
+	// Brightest stars kept per cell of nside; undefined keeps every star.
+	readonly perCell?: number
+}
+
+// Stars of a catalog cone for building quads, with their epoch.
+export interface CatalogQuadIndexStars extends QuadIndexStars {
+	// Magnitude of each star, NaN when the catalog has none.
+	readonly magnitudes: Float64Array
+	// Epoch of the positions, Julian year: the requested one, else the first entry's; undefined when unknown.
+	readonly epoch?: number
+}
+
+// One streamed catalog star kept for the result.
+interface KeptStar {
+	readonly magnitude: number
+	readonly ra: Angle
+	readonly dec: Angle
+	readonly pmRA: number
+	readonly pmDEC: number
+}
+
+// Orders kept stars brightest first; the sort is stable, so equal magnitudes keep the catalog order.
+function KeptStarComparator(a: KeptStar, b: KeptStar) {
+	return a.magnitude === b.magnitude ? 0 : a.magnitude - b.magnitude
+}
+
+// Streams a catalog cone into the stars of a quad index (quadIndexTilesFromBand, buildQuadIndexTile): unit vectors
+// brightest first with their magnitudes, and their proper motions (dα/dt, dδ/dt, radians per year) when any entry has
+// one. With nside and perCell only the brightest perCell stars of each HEALPix cell are kept as the stream goes, so a
+// cone as wide as the whole sky needs memory for the kept stars only. Entries without a magnitude sort last.
+export async function catalogQuadIndexStars(catalog: StarCatalog, cone: SkyCone, options: CatalogQuadIndexStarsOptions = {}): Promise<CatalogQuadIndexStars> {
+	const { epoch, nside, perCell } = options
+	const [centerRA, centerDEC] = eraC2s(cone.center[0], cone.center[1], cone.center[2])
+	const bounded = nside !== undefined && perCell !== undefined && perCell > 0
+	const byCell = new Map<number, KeptStar[]>()
+	let entryEpoch: number | undefined
+	let moving = false
+
+	for await (const entry of catalog.streamRegion({ kind: 'cone', centerRA, centerDEC, radius: Math.min(Math.PI, cone.radius) })) {
+		entryEpoch ??= entry.epoch
+		let ra = entry.rightAscension
+		let dec = entry.declination
 
 		if (epoch !== undefined && entry.epoch !== undefined) {
 			const years = epoch - entry.epoch
-			if (entry.pmRA !== undefined) rightAscension += entry.pmRA * years
-			if (entry.pmDEC !== undefined) declination += entry.pmDEC * years
+			if (entry.pmRA !== undefined) ra += entry.pmRA * years
+			if (entry.pmDEC !== undefined) dec += entry.pmDEC * years
 		}
 
-		eraS2c(rightAscension, declination, vector)
-		vectors[i * 3] = vector[0]
-		vectors[i * 3 + 1] = vector[1]
-		vectors[i * 3 + 2] = vector[2]
+		if (entry.pmRA !== undefined || entry.pmDEC !== undefined) moving = true
+		const star: KeptStar = { magnitude: entry.magnitude ?? Infinity, ra, dec, pmRA: entry.pmRA ?? 0, pmDEC: entry.pmDEC ?? 0 }
+		const cell = bounded ? coordToPixel(nside, ra, dec) : 0
+		let list = byCell.get(cell)
+		if (list === undefined) byCell.set(cell, (list = []))
+		list.push(star)
+
+		if (bounded && list.length > 4 * perCell) {
+			list.sort(KeptStarComparator)
+			list.length = perCell
+		}
 	}
 
-	return vectors
-}
+	const kept = [...byCell.values()].flatMap((list) => (bounded ? list.sort(KeptStarComparator).slice(0, perCell) : list))
+	kept.sort(KeptStarComparator)
 
-// Orders catalog entries brightest first, entries without a magnitude last.
-function StarCatalogEntryMagnitudeComparator(a: StarCatalogEntry, b: StarCatalogEntry) {
-	if (a.magnitude === undefined) return b.magnitude === undefined ? 0 : 1
-	if (b.magnitude === undefined) return -1
-	return a.magnitude - b.magnitude
+	const n = kept.length
+	const vectors = new Float64Array(n * 3)
+	const magnitudes = new Float64Array(n)
+	const properMotions = moving ? new Float64Array(n * 2) : undefined
+	const vector: MutVec3 = [0, 0, 0]
+
+	for (let i = 0; i < n; i++) {
+		const star = kept[i]
+		eraS2c(star.ra, star.dec, vector)
+		vectors.set(vector, i * 3)
+		magnitudes[i] = star.magnitude === Infinity ? Number.NaN : star.magnitude
+
+		if (properMotions !== undefined) {
+			properMotions[i * 2] = star.pmRA
+			properMotions[i * 2 + 1] = star.pmDEC
+		}
+	}
+
+	return { vectors, magnitudes, properMotions, epoch: epoch ?? entryEpoch }
 }

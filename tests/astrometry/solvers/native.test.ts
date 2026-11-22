@@ -14,7 +14,7 @@ import { encodeQuadIndexTile, NebulosaQuadIndex, quadIndexTileFileName, quadInde
 import { tanProject, tanUnproject } from '../../../src/astrometry/wcs/fits.wcs'
 import * as sipFit from '../../../src/astrometry/wcs/sip.fit'
 import { eraC2s, eraS2c } from '../../../src/astronomy/coordinates/erfa/erfa'
-import type { StarCatalog, StarCatalogEntry } from '../../../src/catalogs/stars/catalog'
+import type { StarCatalog, StarCatalogConeQuery, StarCatalogEntry } from '../../../src/catalogs/stars/catalog'
 import { HnskyCatalog } from '../../../src/catalogs/stars/hnsky'
 import { ASEC2RAD, DEG2RAD } from '../../../src/core/constants'
 import { type DetectedStar, detectStars } from '../../../src/imaging/stars/detector'
@@ -440,7 +440,7 @@ describe('solve', () => {
 		for (const declination of [Math.PI / 2, deg(89.9), -Math.PI / 2]) {
 			let queries = 0
 			const catalog = {
-				queryCone: () => {
+				streamRegion: () => {
 					queries++
 					return []
 				},
@@ -464,7 +464,7 @@ describe('solve', () => {
 		}
 
 		const catalog = {
-			queryCone: (r: number, d: number, radius: number) => entries.filter((entry) => vecAngleUnit(eraS2c(entry.rightAscension, entry.declination), eraS2c(r, d)) <= radius),
+			streamRegion: (query: StarCatalogConeQuery) => entries.filter((entry) => vecAngleUnit(eraS2c(entry.rightAscension, entry.declination), eraS2c(query.centerRA, query.centerDEC)) <= query.radius),
 		} as unknown as StarCatalog
 
 		const vectors = await catalogStarVectors(catalog, { center: eraS2c(ra, dec), radius: 0.1 * DEG2RAD })
