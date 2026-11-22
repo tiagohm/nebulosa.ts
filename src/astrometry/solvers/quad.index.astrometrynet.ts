@@ -1,6 +1,6 @@
 import fs from 'fs'
-import { ASEC2RAD } from '../../core/constants'
-import { FITS_BLOCK_SIZE as FITS_BLOCK, FITS_HEADER_CARD_SIZE as FITS_CARD } from '../../io/formats/fits/fits'
+import { ASEC2RAD, PI } from '../../core/constants'
+import { FITS_BLOCK_SIZE as FITS_BLOCK, FITS_HEADER_CARD_SIZE as FITS_CARD, FitsKeywordReader } from '../../io/formats/fits/fits'
 import { type MutVec3, vecAngleUnit } from '../../math/linear-algebra/vec3'
 import type { Angle } from '../../math/units/angle'
 import type { QuadCode } from './quad.code'
@@ -32,7 +32,8 @@ export const DEFAULT_ASTROMETRY_NET_INDEX_EPOCH = 2000
 
 // One HDU of a FITS file: its header cards and the location of its data.
 interface FitsUnit {
-	// Header values by keyword, the first card of a keyword winning.
+	// Header values by keyword, the first card of a keyword winning: strings without quotes, numbers as written in
+	// decimal, logical values as T or F.
 	readonly cards: ReadonlyMap<string, string>
 	// Offset of the data from the start of the file, bytes.
 	readonly offset: number
@@ -40,20 +41,13 @@ interface FitsUnit {
 	readonly size: number
 }
 
-// Parses the value of a header card: a quoted string without its quotes, else the trimmed token before any comment.
-function cardValue(card: string) {
-	const value = card.slice(10)
-	if (value.trimStart().startsWith("'")) {
-		const start = value.indexOf("'")
-		const end = value.indexOf("'", start + 1)
-		return value.slice(start + 1, end).trimEnd()
-	}
-	return value.split('/')[0].trim()
-}
+// ASCII code of '=', the value indicator of a header card in column 9.
+const VALUE_INDICATOR = 0x3d
 
-// Walks the HDUs of a FITS file held in bytes.
+// Walks the HDUs of a FITS file held in bytes, parsing the value cards of each header with the FITS keyword reader.
 function readFitsUnits(bytes: Uint8Array): FitsUnit[] {
-	const decoder = new TextDecoder('latin1')
+	const buffer = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+	const reader = new FitsKeywordReader()
 	const units: FitsUnit[] = []
 	let offset = 0
 
@@ -63,18 +57,17 @@ function readFitsUnits(bytes: Uint8Array): FitsUnit[] {
 
 		while (!ended) {
 			if (offset + FITS_BLOCK > bytes.byteLength) throw new Error('truncated FITS header')
-			const block = decoder.decode(bytes.subarray(offset, offset + FITS_BLOCK))
-			offset += FITS_BLOCK
 
-			for (let i = 0; i < FITS_BLOCK; i += FITS_CARD) {
-				const card = block.slice(i, i + FITS_CARD)
-				const key = card.slice(0, 8).trim()
+			for (let card = offset; card < offset + FITS_BLOCK; card += FITS_CARD) {
+				const [key, value] = reader.read(buffer, card)
 				if (key === 'END') {
 					ended = true
 					break
 				}
-				if (card[8] === '=' && !cards.has(key)) cards.set(key, cardValue(card))
+				if (bytes[card + 8] === VALUE_INDICATOR && value !== undefined && !cards.has(key)) cards.set(key, typeof value === 'boolean' ? (value ? 'T' : 'F') : String(value))
 			}
+
+			offset += FITS_BLOCK
 		}
 
 		const naxis = Number(cards.get('NAXIS') ?? 0)
@@ -217,7 +210,7 @@ export class AstrometryNetQuadIndex implements QuadIndex {
 		if (this.#sweeps.length !== this.#stars.tree.count) throw new Error(`${path} has a sweep per star missing`)
 
 		const cutNside = Number(byName.get('kdtree_header_stars')?.cards.get('CUTNSIDE') ?? 0)
-		this.cellSize = cutNside > 0 ? Math.sqrt(Math.PI / 3) / cutNside : this.scaleLower
+		this.cellSize = cutNside > 0 ? Math.sqrt(PI / 3) / cutNside : this.scaleLower
 		this.coverage = primary.get('ALLSKY') === 'T' ? undefined : this.#starCoverage()
 	}
 
@@ -287,7 +280,7 @@ export class AstrometryNetQuadIndex implements QuadIndex {
 	readonly starsInCone = (cone: SkyCone, visit: (star: number) => void) => {
 		const { tree, minval, scale } = this.#stars
 		const query = [(cone.center[0] - minval[0]) * scale, (cone.center[1] - minval[1]) * scale, (cone.center[2] - minval[2]) * scale]
-		const chord = 2 * Math.sin(Math.min(Math.PI, cone.radius) / 2)
+		const chord = 2 * Math.sin(Math.min(PI, cone.radius) / 2)
 		const v: MutVec3 = [0, 0, 0]
 		// The quantization of the stored vectors can move a star across the edge; the exact angle decides.
 		searchKdTree(tree, query, chord * scale + 2, (star) => {

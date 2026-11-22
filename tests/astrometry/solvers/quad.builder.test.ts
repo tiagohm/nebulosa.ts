@@ -4,7 +4,7 @@ import { insideQuadCircle, type MutQuadCode, QUAD_CODE_MAX, QUAD_CODE_MIN, quadC
 import { EphemeralQuadIndex } from '../../../src/astrometry/solvers/quad.index.ephemeral'
 import { eraC2s, eraS2c } from '../../../src/astronomy/coordinates/erfa/erfa'
 import { coordToPixel } from '../../../src/astronomy/sky/spatial/healpix'
-import { ASEC2RAD, DEG2RAD } from '../../../src/core/constants'
+import { ASEC2RAD, DEG2RAD, PI, PIOVERTWO, TAU } from '../../../src/core/constants'
 import { vecAngleUnit } from '../../../src/math/linear-algebra/vec3'
 import { mulberry32 } from '../../../src/math/numerical/random'
 
@@ -17,7 +17,7 @@ function randomStars(seed: number, count: number, ra: number, dec: number, radiu
 
 	while (n < count) {
 		const z = 1 - random() * (1 - Math.cos(radius))
-		const phi = random() * 2 * Math.PI
+		const phi = random() * TAU
 		const r = Math.sqrt(1 - z * z)
 		// Rotate the cap around +Z onto the center.
 		const local = [r * Math.cos(phi), r * Math.sin(phi), z]
@@ -32,7 +32,7 @@ function randomStars(seed: number, count: number, ra: number, dec: number, radiu
 
 function rotateToCenter(v: number[], ra: number, dec: number) {
 	// Rotate about Y by (90° - dec), then about Z by ra.
-	const theta = Math.PI / 2 - dec
+	const theta = PIOVERTWO - dec
 	const x1 = v[0] * Math.cos(theta) + v[2] * Math.sin(theta)
 	const z1 = -v[0] * Math.sin(theta) + v[2] * Math.cos(theta)
 	const y1 = v[1]
@@ -42,8 +42,8 @@ function rotateToCenter(v: number[], ra: number, dec: number) {
 test('cells are at least the band minimum wide', () => {
 	for (const size of [0.001, 0.01, 0.05, 0.3]) {
 		const nside = quadCellNside(size)
-		expect(Math.sqrt(Math.PI / 3) / nside).toBeGreaterThanOrEqual(size)
-		expect(Math.sqrt(Math.PI / 3) / nside).toBeLessThan(2 * size)
+		expect(Math.sqrt(PI / 3) / nside).toBeGreaterThanOrEqual(size)
+		expect(Math.sqrt(PI / 3) / nside).toBeLessThan(2 * size)
 	}
 })
 
@@ -115,7 +115,7 @@ test('dedup below the bucket precision limit drops every near companion', () => 
 	const vectors = new Float64Array(4000 * 3)
 
 	for (let i = 0; i < 2000; i++) {
-		const ra = random() * 2 * Math.PI
+		const ra = random() * TAU
 		const dec = Math.asin(2 * random() - 1)
 		vectors.set(eraS2c(ra, dec), i * 6)
 		vectors.set(eraS2c(ra + (0.5 * ASEC2RAD) / Math.cos(dec), dec), i * 6 + 3)
@@ -163,7 +163,7 @@ test('grouped passes build the same kind of band as passes over all cells', () =
 	expect(grouped.quads.length).toBeLessThan(1.1 * all.quads.length)
 
 	const code = quadCode()
-	const star = (i: number): [number, number, number] => [grouped.stars[grouped.quads[i] * 3], grouped.stars[grouped.quads[i] * 3 + 1], grouped.stars[grouped.quads[i] * 3 + 2]]
+	const star = (i: number) => [grouped.stars[grouped.quads[i] * 3], grouped.stars[grouped.quads[i] * 3 + 1], grouped.stars[grouped.quads[i] * 3 + 2]] as const
 	for (let q = 0; q < grouped.quads.length / 4; q++) {
 		expect(skyQuadCode(star(q * 4), star(q * 4 + 1), star(q * 4 + 2), star(q * 4 + 3), code)).toBeTrue()
 		for (let i = 0; i < 4; i++) expect(code[i]).toBeCloseTo(grouped.codes[q * 4 + i], 12)

@@ -1,5 +1,6 @@
 import { eraC2s } from '../../astronomy/coordinates/erfa/erfa'
 import { circleToPixels, coordToPixel, pixelToBoundary, pixelToCenter } from '../../astronomy/sky/spatial/healpix'
+import { PI } from '../../core/constants'
 import { NumberComparator } from '../../core/util'
 import { type MutVec3, vecAngleUnit } from '../../math/linear-algebra/vec3'
 import type { Angle } from '../../math/units/angle'
@@ -95,13 +96,13 @@ export interface QuadBand {
 
 // NSIDE whose cells are at least size wide: the largest power of two not above sqrt(PI/3)/size.
 export function quadCellNside(size: Angle) {
-	const exact = Math.sqrt(Math.PI / 3) / size
+	const exact = Math.sqrt(PI / 3) / size
 	return 2 ** Math.max(0, Math.min(24, Math.floor(Math.log2(Math.max(1, exact)))))
 }
 
 // Side of a HEALPix cell, radians.
 export function healpixCellSize(nside: number) {
-	return Math.sqrt(Math.PI / 3) / nside
+	return Math.sqrt(PI / 3) / nside
 }
 
 // Builds a band from unit vectors (3 per star) ordered brightest first. stars is not mutated.
@@ -118,7 +119,7 @@ export function buildQuadBand(stars: Float64Array, options: QuadBandOptions): Qu
 
 	const kept = uniformizeStars(stars, nside, Math.min(255, starsPerCell), dedup)
 	const tree = buildKdTree(kept.stars, 3)
-	const cells = options.cells !== undefined ? [...options.cells].sort(NumberComparator) : region === undefined ? kept.cells : circleToPixels(nside, ...eraC2s(...region.center), Math.min(Math.PI, region.radius)).sort(NumberComparator)
+	const cells = options.cells !== undefined ? [...options.cells].sort(NumberComparator) : region === undefined ? kept.cells : circleToPixels(nside, ...eraC2s(...region.center), Math.min(PI, region.radius)).sort(NumberComparator)
 	const builder = new CellQuadBuilder(kept.stars, tree, nside, scaleLower, scaleUpper)
 	const reuse = new Uint16Array(kept.sourceIndices.length)
 	const quads: number[] = []
@@ -417,7 +418,7 @@ class CellQuadBuilder {
 			bound = Math.max(bound, vecAngleUnit(center, [Math.cos(lat) * Math.cos(lon), Math.cos(lat) * Math.sin(lon), Math.sin(lat)]))
 		}
 
-		const radius = Math.min(Math.PI, 1.01 * (bound + this.#searchMargin))
+		const radius = Math.min(PI, 1.01 * (bound + this.#searchMargin))
 		const found: number[] = []
 		searchKdTree(this.tree, center, 2 * Math.sin(radius / 2), (position) => found.push(this.tree.indices[position]))
 		found.sort((a, b) => a - b)

@@ -1,6 +1,6 @@
 import { eraC2s, eraS2c } from '../../astronomy/coordinates/erfa/erfa'
 import type { StarCatalog } from '../../catalogs/stars/catalog'
-import { RAD2DEG } from '../../core/constants'
+import { PI, PIOVERTWO, RAD2DEG, TAU } from '../../core/constants'
 import type { DetectedStar } from '../../imaging/stars/detector'
 import type { FitsHeader } from '../../io/formats/fits/fits'
 import { type MutVec3, vecAngleUnit } from '../../math/linear-algebra/vec3'
@@ -15,7 +15,7 @@ import { type Parity, type PlateSolution, PlateSolveError, type PlateSolveOption
 import { healpixCellSize, quadCellNside } from './quad.builder'
 import { DEFAULT_QUAD_CODE_TOLERANCE, forEachQuadCodeVariant, type MutQuadCode } from './quad.code'
 import type { QuadIndex, SkyCone } from './quad.index'
-import { catalogStarVectors, EphemeralQuadIndex } from './quad.index.ephemeral'
+import { type CatalogQuadIndexStars, catalogQuadIndexStars, EphemeralQuadIndex } from './quad.index.ephemeral'
 
 // Native plate solver: blind or hinted astrometric calibration of detected stars against QuadIndex sources,
 // after Astrometry.net (Lang et al. 2010). The field quads are enumerated brightest first; each canonical labeling
@@ -94,7 +94,7 @@ export interface NativePlateSolveResult {
 function hintCone(options: PlateSolveOptions): SkyCone | undefined {
 	const { rightAscension, declination, radius } = options
 	if (rightAscension === undefined || declination === undefined || radius === undefined || !(radius > 0)) return undefined
-	return { center: eraS2c(rightAscension, declination), radius: Math.min(Math.PI, radius) }
+	return { center: eraS2c(rightAscension, declination), radius: Math.min(PI, radius) }
 }
 
 // Throws a PlateSolveError when the signal aborted or the deadline passed.
@@ -197,17 +197,24 @@ export async function nativeNearbyPlateSolve(stars: readonly DetectedStar[], cat
 	}
 
 	// A single position queries its cone once for every density.
-	let single: Float64Array | undefined
+	let single: CatalogQuadIndexStars | undefined
 
 	for (const perCell of densities) {
 		for (const position of positions) {
 			checkLimits(signal, started + timeout)
 			// The catalog cone covers the position, one field radius around it for the quads near its edge, and the longest quad.
 			const cone = { center: position.center, radius: position.radius + fieldRadius + longestQuad }
-			const vectors = positions.length === 1 ? (single ??= await catalogStarVectors(catalog, cone, options.epoch)) : await catalogStarVectors(catalog, cone, options.epoch)
-			const indexes = bands.map(([scaleLower, scaleUpper], i) => EphemeralQuadIndex.fromVectors(vectors, { scaleLower, scaleUpper, starsPerCell: perCell[i], region: { center: position.center, radius: position.radius + fieldRadius }, id: `nearby:${scaleLower}` }))
+			const { vectors, epoch } = positions.length === 1 ? (single ??= await catalogQuadIndexStars(catalog, cone, { epoch: options.epoch })) : await catalogQuadIndexStars(catalog, cone, { epoch: options.epoch })
+			const indexes: EphemeralQuadIndex[] = []
+
+			// Each band is built synchronously, so the limits are checked and the event loop runs between bands.
+			for (const [i, [scaleLower, scaleUpper]] of bands.entries()) {
+				indexes.push(EphemeralQuadIndex.fromVectors(vectors, { scaleLower, scaleUpper, starsPerCell: perCell[i], region: { center: position.center, radius: position.radius + fieldRadius }, id: `nearby:${scaleLower}`, epoch }))
+				await yieldToEventLoop()
+				checkLimits(signal, started + timeout)
+			}
+
 			const [ra, dec] = eraC2s(position.center[0], position.center[1], position.center[2])
-			checkLimits(signal, started + timeout)
 			const remaining = Math.max(Number.EPSILON, timeout - (performance.now() - started))
 			const result = await nativePlateSolve(stars, indexes, { ...options, rightAscension: ra, declination: dec, radius: position.radius + fieldRadius, timeout: remaining }, signal)
 			if (result !== undefined) return result
@@ -243,11 +250,11 @@ function nearbyPositions(center: MutVec3, radius: Angle, fieldRadius: Angle): Ne
 
 	for (let row = -rows; row <= rows; row++) {
 		const dec = dec0 + row * step
-		if (dec > Math.PI / 2 || dec < -Math.PI / 2) continue
+		if (dec > PIOVERTWO || dec < -PIOVERTWO) continue
 		const cos = Math.cos(dec)
 		// Half the columns needed to span the cone in RA, but never more than the whole circle of this declination
 		// holds, which shrinks to one position at a pole.
-		const columns = Math.max(0, Math.min(Math.ceil(radius / (step * Math.max(cos, 1e-12))), Math.ceil((Math.PI * cos) / step)))
+		const columns = Math.max(0, Math.min(Math.ceil(radius / (step * Math.max(cos, 1e-12))), Math.ceil((PI * cos) / step)))
 		const shift = (row & 1) === 0 ? 0 : 0.5
 
 		for (let column = -columns; column <= columns; column++) {
@@ -323,7 +330,7 @@ class NativeSearch {
 		// The code search of each index covers the hint cone widened by the field radius.
 		if (hint !== undefined) {
 			for (const index of this.indexes) {
-				this.#searchRegions.set(index, { center: hint.center, radius: Math.min(Math.PI, hint.radius + this.#fieldRadiusOnSky(index)) })
+				this.#searchRegions.set(index, { center: hint.center, radius: Math.min(PI, hint.radius + this.#fieldRadiusOnSky(index)) })
 			}
 		}
 		this.enumerators = ([4, 3] as const)
@@ -451,16 +458,10 @@ class NativeSearch {
 		// The quad's own stars stay out of every later verification, as in the first one, so the tweak cannot buy odds
 		// with the stars the hypothesis was fitted to.
 		const tweak = tweakSolution({ field, index, wcs: fit.wcs, quadX, quadY, quadRadiusSq, quadFieldStars: fieldStars.slice(0, size), quadIndexStars: Float64Array.from(stars), pixelError: this.#pixelError, sipOrder: this.#options.sipOrder ?? DEFAULT_NATIVE_SIP_ORDER, distractorFraction: this.#distractor })
-		let final = tweak.verification
-
-		if (final.logOdds >= LOG_ODDS_ACCEPT) {
-			solution = tweak.solution
-		} else if (verification.logOdds >= LOG_ODDS_ACCEPT) {
-			// The refinement made the hypothesis worse than its own verification: keep the unrefined similarity solution.
-			final = verification
-		} else {
-			return
-		}
+		const accepted = acceptedVerification(verification.logOdds, tweak.verification.logOdds)
+		if (accepted === undefined) return
+		if (accepted === 'refined') solution = tweak.solution
+		const final = accepted === 'refined' ? tweak.verification : verification
 
 		if (final.matchCount < 4) return
 
@@ -488,6 +489,15 @@ class NativeSearch {
 	}
 }
 
+// Which verification accepts a hypothesis, from the log-odds of its own verification and of its refinement: the
+// refined one when it reaches LOG_ODDS_ACCEPT, else the unrefined one when the refinement made a hypothesis that had
+// reached it worse, else none.
+export function acceptedVerification(hypothesisLogOdds: number, refinedLogOdds: number): 'refined' | 'hypothesis' | undefined {
+	if (refinedLogOdds >= LOG_ODDS_ACCEPT) return 'refined'
+	if (hypothesisLogOdds >= LOG_ODDS_ACCEPT) return 'hypothesis'
+	return undefined
+}
+
 // Writes a native solution as a FITS TAN or TAN-SIP header in ICRS, degrees, with the image size. CRVAL1 is the
 // right ascension that orients the tangent plane of the solution: 270° where native.fit takes the pole basis (a
 // tangent point whose z is exactly ±1), else that of the tangent point; LONPOLE is written as 180° so that a reader
@@ -495,14 +505,14 @@ class NativeSearch {
 export function nativeSolutionHeader(solution: NativeSolution, width: number, height: number): FitsHeader {
 	const wcs: TanWcs = solution.wcs
 	const [x, y, z] = wcs.crval
-	const ra = z === 1 || z === -1 || (x === 0 && y === 0) ? 1.5 * Math.PI : Math.atan2(y, x)
+	const ra = z === 1 || z === -1 || (x === 0 && y === 0) ? 1.5 * PI : Math.atan2(y, x)
 	const dec = Math.atan2(z, Math.hypot(x, y))
 	const header: FitsHeader = {
 		CTYPE1: RA_TAN,
 		CTYPE2: DEC_TAN,
 		CUNIT1: 'deg',
 		CUNIT2: 'deg',
-		CRVAL1: (((ra % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI)) * RAD2DEG,
+		CRVAL1: (((ra % TAU) + TAU) % TAU) * RAD2DEG,
 		CRVAL2: dec * RAD2DEG,
 		LONPOLE: 180,
 		CRPIX1: wcs.crpix1,

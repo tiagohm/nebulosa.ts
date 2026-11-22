@@ -7,6 +7,7 @@ import { flipQuadCodeParity, forEachQuadCodeVariant, planarQuadCode, quadCode, s
 import { AstrometryNetQuadIndex, libkdTree } from '../../../src/astrometry/solvers/quad.index.astrometrynet'
 import { searchKdTree } from '../../../src/astrometry/solvers/quad.kdtree'
 import { eraS2c } from '../../../src/astronomy/coordinates/erfa/erfa'
+import { PI } from '../../../src/core/constants'
 import { readImageFromJpeg } from '../../../src/imaging/model/image'
 import { detectStars } from '../../../src/imaging/stars/detector'
 import { type MutVec3, vecAngleUnit } from '../../../src/math/linear-algebra/vec3'
@@ -27,7 +28,7 @@ describe('index-4116', () => {
 		expect(index.scaleUpper).toBeCloseTo(0.197803981893, 11)
 		expect(index.coverage).toBeUndefined()
 		// CUTNSIDE = 7.
-		expect(index.cellSize).toBeCloseTo(Math.sqrt(Math.PI / 3) / 7, 12)
+		expect(index.cellSize).toBeCloseTo(Math.sqrt(PI / 3) / 7, 12)
 	})
 
 	test('every stored code is the code of its stars, as quad.code computes it', () => {

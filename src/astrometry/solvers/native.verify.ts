@@ -1,3 +1,4 @@
+import { TAU } from '../../core/constants'
 import type { MutVec3, Vec3 } from '../../math/linear-algebra/vec3'
 import type { QuadIndex, SkyCone } from './quad.index'
 
@@ -103,7 +104,7 @@ export function verifyStarLists(input: VerifyStarListsInput): VerifyStarListsRes
 		let logF = -Infinity
 
 		if (nearest >= 0) {
-			logF = Math.log((1 - distractor) / (2 * Math.PI * sigma2 * refCount)) - grid.lastDistanceSq / (2 * sigma2)
+			logF = Math.log((1 - distractor) / (TAU * sigma2 * refCount)) - grid.lastDistanceSq / (2 * sigma2)
 		}
 
 		if (logF < logD) {
@@ -116,7 +117,9 @@ export function verifyStarLists(input: VerifyStarListsInput): VerifyStarListsRes
 			let j = 0
 			for (; j < old; j++) if (theta[j] >= 0) muj++
 			let switched = logF + (logDistractor(distractor, muj, refCount, logBackground) - refLogForeground[nearest])
-			for (; j < i; j++) {
+			// Each later distractor loses the old owner from its match count: muj counts the matches before it without the
+			// old owner, so the walk starts after the owner (verify.c starts at it, which counts the owner once too many).
+			for (j = old + 1; j < i; j++) {
 				if (theta[j] < 0) switched += logDistractor(distractor, muj, refCount, logBackground) - logDistractor(distractor, muj + 1, refCount, logBackground)
 				else muj++
 			}
@@ -165,7 +168,7 @@ export function verifyStarLists(input: VerifyStarListsInput): VerifyStarListsRes
 // Radius of relevance squared, pixels²: beyond it a Gaussian peak of variance σ0²·(1 + r²/Q²) no longer beats the
 // uniform background (Astrometry.net's verify_get_ror2).
 export function radiusOfRelevanceSq(quadRadiusSq: number, area: number, distractorFraction: number, refCount: number, sigma2: number) {
-	return quadRadiusSq * Math.max(1, (area * (1 - distractorFraction)) / (4 * Math.PI * refCount * sigma2) - 1)
+	return quadRadiusSq * Math.max(1, (area * (1 - distractorFraction)) / (2 * TAU * refCount * sigma2) - 1)
 }
 
 // A field of detected stars in FITS pixels, ordered as they should be tested (brightest first, uniformized).

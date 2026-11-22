@@ -1,7 +1,7 @@
 import { eraC2s, eraS2c } from '../../astronomy/coordinates/erfa/erfa'
 import { coordToPixel } from '../../astronomy/sky/spatial/healpix'
 import type { StarCatalog } from '../../catalogs/stars/catalog'
-import { ASEC2RAD } from '../../core/constants'
+import { ASEC2RAD, PI, PIOVERTWO } from '../../core/constants'
 import type { MutVec3 } from '../../math/linear-algebra/vec3'
 import type { Angle } from '../../math/units/angle'
 import { buildQuadBand, type QuadBand, type QuadBandOptions } from './quad.builder'
@@ -105,7 +105,7 @@ export class EphemeralQuadIndex implements QuadIndex {
 	// Visits the kept stars within the cone, in no particular order.
 	readonly starsInCone = (cone: SkyCone, visit: (star: number) => void) => {
 		const tree = this.#stars
-		searchKdTree(tree, cone.center, 2 * Math.sin(Math.min(Math.PI, cone.radius) / 2), (position) => visit(tree.indices[position]))
+		searchKdTree(tree, cone.center, 2 * Math.sin(Math.min(PI, cone.radius) / 2), (position) => visit(tree.indices[position]))
 	};
 
 	// Holds no external resource: the arrays are released with the object.
@@ -171,7 +171,7 @@ export async function catalogQuadIndexStars(catalog: StarCatalog, cone: SkyCone,
 	let epoch = options.epoch
 	let moving = false
 
-	for await (const entry of catalog.streamRegion({ kind: 'cone', centerRA, centerDEC, radius: Math.min(Math.PI, cone.radius), magnitudeMax })) {
+	for await (const entry of catalog.streamRegion({ kind: 'cone', centerRA, centerDEC, radius: Math.min(PI, cone.radius), magnitudeMax })) {
 		epoch ??= entry.epoch
 		let ra = entry.rightAscension
 		let dec = entry.declination
@@ -182,9 +182,9 @@ export async function catalogQuadIndexStars(catalog: StarCatalog, cone: SkyCone,
 			if (entry.pmDEC !== undefined) dec += entry.pmDEC * years
 
 			// A star carried over a pole comes down on the other side of it (HEALPix refuses a declination beyond it).
-			if (dec > Math.PI / 2 || dec < -Math.PI / 2) {
-				dec = Math.sign(dec) * Math.PI - dec
-				ra += Math.PI
+			if (dec > PIOVERTWO || dec < -PIOVERTWO) {
+				dec = Math.sign(dec) * PI - dec
+				ra += PI
 			}
 		}
 

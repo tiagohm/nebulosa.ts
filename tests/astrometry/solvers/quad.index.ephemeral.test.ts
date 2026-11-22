@@ -4,6 +4,7 @@ import { eraC2s, eraS2c } from '../../../src/astronomy/coordinates/erfa/erfa'
 import { coordToPixel } from '../../../src/astronomy/sky/spatial/healpix'
 import type { StarCatalog, StarCatalogConeQuery, StarCatalogEntry } from '../../../src/catalogs/stars/catalog'
 import { HnskyCatalog } from '../../../src/catalogs/stars/hnsky'
+import { PIOVERTWO, PI } from '../../../src/core/constants'
 import { deg } from '../../../src/math/units/angle'
 import { downloadAll } from '../../download'
 
@@ -80,11 +81,11 @@ test('carries proper motions to one epoch and returns them', async () => {
 test('a star carried over a pole comes down on its other side', async () => {
 	// 0.5" from the north pole, moving 100 mas/yr toward it, carried 14 years.
 	const pm = deg(0.1 / 3600)
-	const entry: StarCatalogEntry = { rightAscension: 1, declination: Math.PI / 2 - deg(0.5 / 3600), magnitude: 5, epoch: 2016, pmRA: 0, pmDEC: pm }
+	const entry: StarCatalogEntry = { rightAscension: 1, declination: PIOVERTWO - deg(0.5 / 3600), magnitude: 5, epoch: 2016, pmRA: 0, pmDEC: pm }
 	const stub = { streamRegion: () => [entry] } as unknown as StarCatalog
 	const stars = await catalogQuadIndexStars(stub, { center: [0, 0, 1], radius: deg(1) }, { epoch: 2030, nside: 64, perCell: 4 })
 	const [ra, dec] = eraC2s(stars.vectors[0], stars.vectors[1], stars.vectors[2])
-	expect(dec).toBeCloseTo(Math.PI / 2 - deg(0.9 / 3600), 12)
+	expect(dec).toBeCloseTo(PIOVERTWO - deg(0.9 / 3600), 12)
 	// Half a turn away in right ascension.
-	expect(Math.cos(ra - 1 - Math.PI)).toBeCloseTo(1, 9)
+	expect(Math.cos(ra - 1 - PI)).toBeCloseTo(1, 9)
 })

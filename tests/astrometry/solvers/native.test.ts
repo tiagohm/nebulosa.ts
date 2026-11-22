@@ -1,8 +1,8 @@
-import { describe, expect, spyOn, test } from 'bun:test'
+import { describe, expect, test } from 'bun:test'
 import fs from 'fs'
 import os from 'os'
 import { join } from 'path'
-import { nativeNearbyPlateSolve, nativePlateSolve, nativeSolutionHeader } from '../../../src/astrometry/solvers/native'
+import { acceptedVerification, nativeNearbyPlateSolve, nativePlateSolve, nativeSolutionHeader } from '../../../src/astrometry/solvers/native'
 import { prepareSolverField } from '../../../src/astrometry/solvers/native.field'
 import { fitLinearTanWcs, fitSimilarityTanWcs, type TanWcs, tanPixelToSky, tanSkyToPixel } from '../../../src/astrometry/solvers/native.fit'
 import * as tweak from '../../../src/astrometry/solvers/native.tweak'
@@ -13,11 +13,10 @@ import type { QuadIndex } from '../../../src/astrometry/solvers/quad.index'
 import { catalogStarVectors, EphemeralQuadIndex } from '../../../src/astrometry/solvers/quad.index.ephemeral'
 import { encodeQuadIndexTile, NebulosaQuadIndex, quadIndexTileFileName, quadIndexTilesFromBand } from '../../../src/astrometry/solvers/quad.index.file'
 import { tanProject, tanUnproject } from '../../../src/astrometry/wcs/fits.wcs'
-import * as sipFit from '../../../src/astrometry/wcs/sip.fit'
 import { eraC2s, eraS2c } from '../../../src/astronomy/coordinates/erfa/erfa'
 import type { StarCatalog, StarCatalogConeQuery, StarCatalogEntry } from '../../../src/catalogs/stars/catalog'
 import { HnskyCatalog } from '../../../src/catalogs/stars/hnsky'
-import { ASEC2RAD, DEG2RAD } from '../../../src/core/constants'
+import { ASEC2RAD, DEG2RAD, PIOVERTWO, TAU } from '../../../src/core/constants'
 import { type DetectedStar, detectStars } from '../../../src/imaging/stars/detector'
 import { Bitpix } from '../../../src/io/formats/fits/fits'
 import { type MutVec3, vecAngleUnit } from '../../../src/math/linear-algebra/vec3'
@@ -36,15 +35,15 @@ interface Sky {
 
 function syntheticSky(seed: number, ra: number, dec: number, radius: number, density: number): Sky {
 	const random = mulberry32(seed)
-	const area = 2 * Math.PI * (1 - Math.cos(radius))
+	const area = TAU * (1 - Math.cos(radius))
 	const count = Math.round((density * area) / (DEG2RAD * DEG2RAD))
 	const stars: { v: MutVec3; mag: number }[] = []
 	const center = eraS2c(ra, dec)
-	const theta = Math.PI / 2 - dec
+	const theta = PIOVERTWO - dec
 
 	for (let i = 0; i < count; i++) {
 		const z = 1 - random() * (1 - Math.cos(radius))
-		const phi = random() * 2 * Math.PI
+		const phi = random() * TAU
 		const r = Math.sqrt(1 - z * z)
 		const lx = r * Math.cos(phi)
 		const ly = r * Math.sin(phi)
@@ -164,7 +163,7 @@ describe('TAN fit', () => {
 	})
 
 	test('projection and deprojection agree with the tangent point exactly at a pole', () => {
-		for (const dec of [Math.PI / 2, -Math.PI / 2]) {
+		for (const dec of [PIOVERTWO, -PIOVERTWO]) {
 			// eraS2c(1, ±PI/2) has a z of exactly ±1 with tiny nonzero x and y.
 			const wcs = wcsOf(1, dec, 2 * ASEC2RAD, 0.4, 'NORMAL', 2000, 1500)
 			expect(Math.abs(wcs.crval[2])).toBe(1)
@@ -178,7 +177,7 @@ describe('TAN fit', () => {
 	for (const parity of ['NORMAL', 'FLIPPED'] as const) {
 		for (const [ra, dec] of [
 			[0.0001, 0.2],
-			[3, Math.PI / 2 - 0.0002],
+			[3, PIOVERTWO - 0.0002],
 			[5, -1.2],
 		]) {
 			test(`similarity and linear fits recover a ${parity} WCS at (${ra}, ${dec})`, () => {
@@ -229,6 +228,15 @@ describe('verification', () => {
 		expect(result.theta[0]).toBe(0)
 		expect(result.theta[1]).toBe(-2)
 		expect(result.matchCount).toBe(1)
+	})
+
+	test('a switched reference recounts the matches of the distractors after the old owner', () => {
+		const area = 1e6
+		// Star 0 claims reference 0 at 3σ, star 1 matches nothing, star 2 sits on reference 0 and takes it over.
+		const result = verifyStarLists({ testCount: 3, testX: [103, 500, 100], testY: [100, 500, 100], testSigma2: [1, 1, 1], refCount: 2, refX: [100, 900], refY: [100, 900], effectiveArea: area })
+		expect([...result.theta]).toEqual([-2, -1, 0])
+		// After the switch both earlier stars are distractors with no match before them.
+		expect(result.logOdds).toBeCloseTo(2 * Math.log(0.25) + Math.log(0.75 / (2 * TAU)) + Math.log(area), 12)
 	})
 
 	test('the radius of relevance is at least the quad radius', () => {
@@ -322,45 +330,18 @@ describe('solve', () => {
 		expect(await nativePlateSolve(stars, indexes, { ...options, parity: 'NORMAL' })).toBeUndefined()
 	})
 
-	test('a later SIP failure keeps the previous distortion', async () => {
-		const truth = wcsOf(ra, dec, scale, 1.1, 'NORMAL', width, height)
-		const stars = detect(sky, truth, { seed: 6, width, height, limit: 13.5, noise: 0.1, distortion: 6 })
-		const fitSipDistortion = sipFit.fitSipDistortion
-		let calls = 0
-		const spy = spyOn(sipFit, 'fitSipDistortion').mockImplementation((...args: Parameters<typeof fitSipDistortion>) => {
-			if (calls++ === 0) return fitSipDistortion(...args)
-			throw new sipFit.SipFitError('illConditionedFit', 'forced')
-		})
-
-		try {
-			const result = await nativePlateSolve(stars, indexesFor(sky, shortSide), { width, height, scale: { lower: scale * 0.9, upper: scale * 1.1 }, sipOrder: 3 })
-			expect(calls).toBeGreaterThan(1)
-			expect(result!.header.CTYPE1).toBe('RA---TAN-SIP')
-			expect(result!.rms).toBeLessThan(1)
-		} finally {
-			spy.mockRestore()
-		}
+	test('a SIP failure keeps the previous distortion, or the linear fit when none succeeded', () => {
+		const linear = wcsOf(ra, dec, scale, 1.1, 'NORMAL', width, height)
+		const previous = { wcs: wcsOf(ra, dec, scale, 1.2, 'NORMAL', width, height), sip: { order: 2, A_ORDER: 2, B_ORDER: 2, A: { A_2_0: 1e-6 }, B: {}, terms: [] } }
+		expect(tweak.afterSipFailure(previous, linear)).toBe(previous)
+		expect(tweak.afterSipFailure({ wcs: previous.wcs }, linear)).toEqual({ wcs: linear })
 	})
 
-	test('a refinement worse than the hypothesis keeps the hypothesis', async () => {
-		const truth = wcsOf(ra, dec, scale, 0.9, 'NORMAL', width, height)
-		const stars = detect(sky, truth, { seed: 13, width, height, limit: 13, noise: 0.2 })
-		const tweakSolution = tweak.tweakSolution
-		const spy = spyOn(tweak, 'tweakSolution').mockImplementation((input) => {
-			const refined = tweakSolution(input)
-			// A refinement that moved the solution by 50 pixels and verifies badly.
-			return { solution: { wcs: { ...refined.solution.wcs, crpix1: refined.solution.wcs.crpix1 + 50 } }, verification: { ...refined.verification, logOdds: 0 } }
-		})
-
-		try {
-			const result = await nativePlateSolve(stars, indexesFor(sky, shortSide), { width, height, scale: { lower: scale * 0.9, upper: scale * 1.1 } })
-			expect(spy).toHaveBeenCalled()
-			expect(result).toBeDefined()
-			// The four-star similarity extrapolates to the corners within a few arcseconds; the shifted one is 100" off.
-			expectSolution(result!.header, truth, width, height, 15 * ASEC2RAD)
-		} finally {
-			spy.mockRestore()
-		}
+	test('a refinement worse than the hypothesis keeps the hypothesis', () => {
+		const accept = Math.log(1e9)
+		expect(acceptedVerification(accept, accept + 5)).toBe('refined')
+		expect(acceptedVerification(accept + 5, accept - 1)).toBe('hypothesis')
+		expect(acceptedVerification(accept - 1, accept - 2)).toBeUndefined()
 	})
 
 	test('hypotheses of indexes sharing an id are tried for each index', async () => {
@@ -441,7 +422,7 @@ describe('solve', () => {
 		// A few bright stars keep each of the hundreds of position searches short.
 		const stars = detect(sky, wcsOf(ra, dec, scale, 0.3, 'NORMAL', width, height), { seed: 18, width, height, limit: 13 }).slice(0, 8)
 
-		for (const declination of [Math.PI / 2, deg(89.9), -Math.PI / 2]) {
+		for (const declination of [PIOVERTWO, deg(89.9), -PIOVERTWO]) {
 			let queries = 0
 			const catalog = {
 				streamRegion: () => {
@@ -565,7 +546,7 @@ describe('solve', () => {
 
 	test('a solution at or next to a pole writes a header of the same orientation', () => {
 		// Exactly at a pole, rounded onto it (z = 1), and 2.5 mas from it (below the RA threshold of eraC2s).
-		for (const crval of [[0, 0, 1], eraS2c(1, Math.PI / 2 - 1e-11), eraS2c(1, Math.PI / 2 - 1.2e-8), [0, 0, -1], eraS2c(2.5, -Math.PI / 2 + 1e-11)] as MutVec3[]) {
+		for (const crval of [[0, 0, 1], eraS2c(1, PIOVERTWO - 1e-11), eraS2c(1, PIOVERTWO - 1.2e-8), [0, 0, -1], eraS2c(2.5, -PIOVERTWO + 1e-11)] as MutVec3[]) {
 			const truth: TanWcs = { ...wcsOf(0, 0, scale, 0.7, 'NORMAL', width, height), crval }
 			expectSolution(nativeSolutionHeader({ wcs: truth }, width, height), truth, width, height, 0.01 * ASEC2RAD)
 		}

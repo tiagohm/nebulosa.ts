@@ -6,7 +6,7 @@ import { buildQuadBand } from '../../../src/astrometry/solvers/quad.builder'
 import { dequantizeQuadCodeComponent, quadCode, skyQuadCode } from '../../../src/astrometry/solvers/quad.code'
 import { buildQuadIndexTile, decodeQuadIndexTile, encodeQuadIndexTile, NebulosaQuadIndex, quadIndexTileCone, quadIndexTileFileName, quadIndexTilesFromBand, verifyQuadIndexTile } from '../../../src/astrometry/solvers/quad.index.file'
 import { eraC2s, eraS2c } from '../../../src/astronomy/coordinates/erfa/erfa'
-import { DEG2RAD } from '../../../src/core/constants'
+import { DEG2RAD, PIOVERTWO, TAU } from '../../../src/core/constants'
 import { type MutVec3, vecAngleUnit } from '../../../src/math/linear-algebra/vec3'
 import { mulberry32 } from '../../../src/math/numerical/random'
 
@@ -17,11 +17,11 @@ afterAll(() => fs.rmSync(DIR, { recursive: true, force: true }))
 function sky(seed: number, count: number, ra: number, dec: number, radius: number) {
 	const random = mulberry32(seed)
 	const vectors = new Float64Array(count * 3)
-	const theta = Math.PI / 2 - dec
+	const theta = PIOVERTWO - dec
 
 	for (let i = 0; i < count; i++) {
 		const z = 1 - random() * (1 - Math.cos(radius))
-		const phi = random() * 2 * Math.PI
+		const phi = random() * TAU
 		const r = Math.sqrt(1 - z * z)
 		const lx = r * Math.cos(phi)
 		const ly = r * Math.sin(phi)
@@ -254,6 +254,27 @@ test('a tile built alone from its cone holds the quads of its cells only', () =>
 	expect(alone.quadStars.length).toBeGreaterThan(0.8 * target.quadStars.length)
 	expect(alone.quadStars.length).toBeLessThan(1.2 * target.quadStars.length)
 	expect(verifyQuadIndexTile(encodeQuadIndexTile(alone))).toBeTrue()
+})
+
+test('tiles with stars but no quad keep their stars for the verification', () => {
+	// Quads only around the center of the cap, stars over all of it.
+	const regional = buildQuadBand(stars.vectors, { scaleLower: 0.2 * DEG2RAD, scaleUpper: 0.2 * DEG2RAD * Math.SQRT2, region: { center: eraS2c(2, 0.5), radius: 0.5 * DEG2RAD } })
+	const split = quadIndexTilesFromBand(regional, { tileNside: 32, jitter: 1e-5, epoch: 2016 })
+	const empty = split.filter((tile) => tile.quadStars.length === 0)
+	expect(empty.length).toBeGreaterThan(0)
+	expect(split.reduce((sum, tile) => sum + tile.ownStarCount, 0)).toBe(regional.sweeps.length)
+
+	// A tile without quads round-trips and serves its stars.
+	const path = join(DIR, `empty-${quadIndexTileFileName(empty[0])}`)
+	fs.writeFileSync(path, encodeQuadIndexTile(empty[0]))
+	using index = new NebulosaQuadIndex([path])
+	let found = 0
+	index.searchCodes([0.3, 0.4, 0.5, 0.2], 1, () => found++)
+	expect(found).toBe(0)
+	const star = index.starVector(0, [0, 0, 0])
+	let inCone = 0
+	index.starsInCone({ center: star, radius: 1e-6 }, () => inCone++)
+	expect(inCone).toBeGreaterThan(0)
 })
 
 test('code sections stay loaded under any star budget', () => {

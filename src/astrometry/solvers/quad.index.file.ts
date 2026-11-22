@@ -1,6 +1,7 @@
 import fs from 'fs'
 import { eraC2s, eraS2c } from '../../astronomy/coordinates/erfa/erfa'
 import { circleToPixels, coordToPixel, pixelToBoundary, pixelToCenter } from '../../astronomy/sky/spatial/healpix'
+import { PI } from '../../core/constants'
 import { type MutVec3, vecAngleUnit } from '../../math/linear-algebra/vec3'
 import type { Angle } from '../../math/units/angle'
 import { buildQuadBand, healpixCellSize, type QuadBand, type QuadBandOptions, quadCellNside } from './quad.builder'
@@ -158,7 +159,8 @@ function cellOf(x: number, y: number, z: number, nside: number) {
 }
 
 // Splits a band into tiles: each tile holds the quads whose backbone midpoint lies in it, its own kept stars sorted by
-// cell, and the margin stars its quads use from other tiles. Tiles without quads are left out.
+// cell, and the margin stars its quads use from other tiles. A tile holding stars but no quad is kept, since its stars
+// still serve the verification of the fields that reach it; a tile holding neither is left out.
 export function quadIndexTilesFromBand(band: QuadBand, options: QuadIndexTileOptions): QuadIndexTile[] {
 	const { nside } = band
 	const tileNside = options.tileNside
@@ -190,15 +192,15 @@ export function quadIndexTilesFromBand(band: QuadBand, options: QuadIndexTileOpt
 	const tileStars = new Map<number, number[]>()
 	for (let s = 0; s < starCount; s++) {
 		const tile = tileOfCell(starCells[s], nside, tileNside)
-		if (!tileQuads.has(tile) || (wanted !== undefined && !wanted.has(tile))) continue
+		if (wanted !== undefined && !wanted.has(tile)) continue
 		const list = tileStars.get(tile)
 		if (list === undefined) tileStars.set(tile, [s])
 		else list.push(s)
 	}
 
-	for (const tile of [...tileQuads.keys()].sort((a, b) => a - b)) {
+	for (const tile of [...new Set([...tileQuads.keys(), ...tileStars.keys()])].sort((a, b) => a - b)) {
 		if (wanted !== undefined && !wanted.has(tile)) continue
-		tiles.push(buildTile(band, options, tile, tileQuads.get(tile)!, tileStars.get(tile) ?? [], starCells))
+		tiles.push(buildTile(band, options, tile, tileQuads.get(tile) ?? [], tileStars.get(tile) ?? [], starCells))
 	}
 
 	return tiles
@@ -305,7 +307,7 @@ function buildTile(band: QuadBand, options: QuadIndexTileOptions, tile: number, 
 
 // Name of a tile file: band minimum in arcseconds, tiling and tile, for example nqi-480-4-0123.nqi.
 export function quadIndexTileFileName(tile: Pick<QuadIndexTile, 'scaleLower' | 'tileNside' | 'tileId'>) {
-	const arcsec = Math.round((tile.scaleLower * 180 * 3600) / Math.PI)
+	const arcsec = Math.round((tile.scaleLower * 180 * 3600) / PI)
 	return `nqi-${arcsec}-${tile.tileNside}-${tile.tileId.toString().padStart(4, '0')}${QUAD_INDEX_EXTENSION}`
 }
 
@@ -513,7 +515,7 @@ export interface NebulosaQuadIndexOptions {
 	readonly maxLoadedBytes?: number
 }
 
-/// Code sections of a tile, kept once read: every code search of a blind solve visits every tile.
+// Code sections of a tile, kept once read: every code search of a blind solve visits every tile.
 interface TileCodes {
 	// Code tree over the quantized codes, in file order.
 	readonly tree: KdTree<Uint16Array>
@@ -691,12 +693,12 @@ export class NebulosaQuadIndex implements QuadIndex {
 
 		// Positions move to another epoch only when every file has proper motions.
 		const movable = options.epoch !== undefined && this.#files.every((file) => file.header.sections.has(STAR_PROPER_MOTION) && file.header.epoch === first.epoch)
-		this.id = options.id ?? `nqi:${Math.round((first.scaleLower * 180 * 3600) / Math.PI)}`
+		this.id = options.id ?? `nqi:${Math.round((first.scaleLower * 180 * 3600) / PI)}`
 		this.scaleLower = first.scaleLower
 		this.scaleUpper = first.scaleUpper
 		this.jitter = first.jitter
 		this.epoch = movable ? (options.epoch ?? first.epoch) : first.epoch
-		this.cellSize = Math.sqrt(Math.PI / 3) / first.nside
+		this.cellSize = Math.sqrt(PI / 3) / first.nside
 		this.#nside = first.nside
 		this.#tileNside = first.tileNside
 		this.#targetEpoch = movable ? options.epoch : undefined
@@ -779,7 +781,7 @@ export class NebulosaQuadIndex implements QuadIndex {
 
 		const [ra, dec] = eraC2s(region.center[0], region.center[1], region.center[2])
 		const ordinals: number[] = []
-		for (const tile of circleToPixels(this.#tileNside, ra, dec, Math.min(Math.PI, region.radius))) {
+		for (const tile of circleToPixels(this.#tileNside, ra, dec, Math.min(PI, region.radius))) {
 			const ordinal = this.#byTile.get(tile)
 			if (ordinal !== undefined) ordinals.push(ordinal)
 		}
@@ -841,7 +843,7 @@ export class NebulosaQuadIndex implements QuadIndex {
 	// Visits the own stars of the tiles within the cone (each star once across tiles).
 	readonly starsInCone = (cone: SkyCone, visit: (star: number) => void) => {
 		const [ra, dec] = eraC2s(cone.center[0], cone.center[1], cone.center[2])
-		const radius = Math.min(Math.PI, cone.radius)
+		const radius = Math.min(PI, cone.radius)
 		const cells = circleToPixels(this.#nside, ra, dec, radius)
 		const cosRadius = Math.cos(radius)
 		const center = cone.center
@@ -908,19 +910,19 @@ export interface QuadIndexStars {
 
 // Cone that holds a tile and every star its quads may use: the tile, widened by the longest quad and one cell.
 export function quadIndexTileCone(tileNside: number, tileId: number, scaleUpper: Angle): SkyCone {
-	if (tileNside === 0) return { center: [0, 0, 1], radius: Math.PI }
+	if (tileNside === 0) return { center: [0, 0, 1], radius: PI }
 	const [ra, dec] = pixelToCenter(tileNside, tileId)
 	const center = eraS2c(ra, dec)
 	let bound = 0
 	for (const [lon, lat] of pixelToBoundary(tileNside, tileId)) bound = Math.max(bound, vecAngleUnit(center, eraS2c(lon, lat)))
 	const nside = quadCellNside(scaleUpper / Math.SQRT2)
-	return { center, radius: Math.min(Math.PI, bound + scaleUpper + 2 * healpixCellSize(nside)) }
+	return { center, radius: Math.min(PI, bound + scaleUpper + 2 * healpixCellSize(nside)) }
 }
 
 // Builds one tile of a band from the stars of its cone (quadIndexTileCone): the quads are built only for the cells
 // of the tile, with the stars around them, so tiles can be built one at a time from a catalog read tile by tile.
 // Reuse limits then apply per tile, so a star near a tile edge may join quads of both tiles. Undefined when the
-// tile gets no quad.
+// tile gets neither a quad nor a star.
 export function buildQuadIndexTile(stars: QuadIndexStars, band: Omit<QuadBandOptions, 'region' | 'cells'>, tileNside: number, tileId: number, options: Omit<QuadIndexTileOptions, 'tileNside' | 'tiles' | 'magnitudes' | 'properMotions' | 'sources'>): QuadIndexTile | undefined {
 	const nside = quadCellNside(band.scaleLower)
 	if (!(tileNside <= nside)) throw new Error('the tile NSIDE must not exceed the band NSIDE')

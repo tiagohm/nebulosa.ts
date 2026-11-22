@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { canonicalizeQuadCode, dequantizeQuadCodeComponent, flipQuadCodeParity, forEachQuadCodeVariant, insideQuadCircle, type MutQuadCode, type MutQuadStars, planarQuadCode, QUAD_CODE_MAX, QUAD_CODE_MIN, quadCode, quantizeQuadCodeComponent, skyQuadCode } from '../../../src/astrometry/solvers/quad.code'
 import { eraS2c } from '../../../src/astronomy/coordinates/erfa/erfa'
+import { PI, PIOVERTWO } from '../../../src/core/constants'
 import { mulberry32 } from '../../../src/math/numerical/random'
 
 function expectCode(actual: readonly number[], expected: readonly number[], digits: number = 12) {
@@ -66,15 +67,15 @@ describe('sky code', () => {
 	test('refuses a star on the far hemisphere', () => {
 		const a = eraS2c(0, 0)
 		const b = eraS2c(0.01, 0)
-		const far = eraS2c(Math.PI, 0)
+		const far = eraS2c(PI, 0)
 		expect(skyQuadCode(a, b, far, far, quadCode())).toBeFalse()
 	})
 
 	test('is defined at the pole', () => {
-		const a = eraS2c(0, Math.PI / 2 - 0.001)
-		const b = eraS2c(Math.PI, Math.PI / 2 - 0.001)
-		const c = eraS2c(Math.PI / 2, Math.PI / 2 - 0.0005)
-		const d = eraS2c(-Math.PI / 2, Math.PI / 2 - 0.0005)
+		const a = eraS2c(0, PIOVERTWO - 0.001)
+		const b = eraS2c(PI, PIOVERTWO - 0.001)
+		const c = eraS2c(PIOVERTWO, PIOVERTWO - 0.0005)
+		const d = eraS2c(-PIOVERTWO, PIOVERTWO - 0.0005)
 		const code = quadCode()
 		expect(skyQuadCode(a, b, c, d, code)).toBeTrue()
 		for (const value of code) expect(Number.isFinite(value)).toBeTrue()

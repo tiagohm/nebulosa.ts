@@ -236,6 +236,13 @@ export function tweakSolution(input: TweakInput): TweakResult {
 	return { solution, verification: verifySolution(input, solution, 0, quadX, quadY) }
 }
 
+// Solution kept when a SIP fit fails: a linear fit made on SIP-corrected pixels is only valid with that SIP, so a
+// failure after a successful SIP fit keeps the previous solution, and a first failure keeps linear, the linear fit of
+// the raw pixels.
+export function afterSipFailure(previous: NativeSolution, linear: TanWcs): NativeSolution {
+	return previous.sip !== undefined ? previous : { wcs: linear }
+}
+
 // Alternates the linear fit on SIP-corrected pixels and the SIP fit on the residuals of the linear one.
 function fitSolutionSip(input: TweakInput, solution: NativeSolution, crpix: readonly [number, number]): NativeSolution {
 	const { field } = input
@@ -271,10 +278,8 @@ function fitSolutionSip(input: TweakInput, solution: NativeSolution, crpix: read
 			best = { wcs: fit.wcs, sip: sip.model }
 		} catch (e) {
 			if (!(e instanceof SipFitError)) throw e
-			// The fit failed for this order. A linear fit made on SIP-corrected pixels is only valid with that SIP,
-			// so a later failure keeps the previous solution; a first failure keeps the linear fit of the raw pixels.
-			if (best.sip !== undefined) break
-			return { wcs: fit.wcs }
+			best = afterSipFailure(best, fit.wcs)
+			break
 		}
 	}
 
