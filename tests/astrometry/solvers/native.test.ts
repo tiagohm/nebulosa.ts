@@ -288,6 +288,9 @@ describe('solve', () => {
 			for (const index of indexes) index[Symbol.dispose]()
 			expect(result).toBeDefined()
 			expect(result!.indexId.startsWith('nqi:')).toBeTrue()
+			// The refined solution, not the unrefined hypothesis: the refinement matches stars whose tiled ids exceed 32 bits.
+			expect(result!.header.CTYPE1).toBe('RA---TAN-SIP')
+			expect(result!.matchCount).toBeGreaterThan(40)
 			expectSolution(result!.header, truth, width, height)
 		} finally {
 			fs.rmSync(directory, { recursive: true, force: true })

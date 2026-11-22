@@ -205,8 +205,8 @@ export interface VerifyHypothesisInput {
 export interface VerifyHypothesisResult extends VerifyStarListsResult {
 	// Field star index of each test position.
 	readonly testStars: Int32Array
-	// Index star id of each reference.
-	readonly refStars: Int32Array
+	// Index star id of each reference; tiled indexes use ids above 32 bits, held exactly as doubles.
+	readonly refStars: Float64Array
 	// Pixel of each reference under the hypothesis.
 	readonly refX: Float64Array
 	readonly refY: Float64Array
@@ -268,7 +268,7 @@ export function verifyHypothesis(input: VerifyHypothesisInput): VerifyHypothesis
 
 	const keptRefs = refs.filter((ref) => goodBins[binOf(ref.x, ref.y)] === 1)
 	const refCount = keptRefs.length
-	const refStars = new Int32Array(refCount)
+	const refStars = new Float64Array(refCount)
 	const refX = new Float64Array(refCount)
 	const refY = new Float64Array(refCount)
 
