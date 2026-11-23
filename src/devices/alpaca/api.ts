@@ -9,6 +9,7 @@ import type {
 	AlpacaRequestFailedResult,
 	AlpacaRequestResult,
 	AlpacaResponse,
+	AlpacaServerDescription,
 	AlpacaStateItem,
 	AlpacaTelescopeAlignmentMode,
 	AlpacaTelescopeAxis,
@@ -68,6 +69,11 @@ export class AlpacaManagementApi {
 		const result = await request<readonly AlpacaConfiguredDevice[]>(this.url, 'management/v1/configureddevices', 'GET')
 		if (result.ok) for (const device of result.value) (device as unknown as Record<string, string>).DeviceType = device.DeviceType.toLowerCase()
 		return result
+	}
+
+	// Reads the identity of the server: its name, manufacturer, manufacturer version, and location, as the server declares them.
+	description() {
+		return request<AlpacaServerDescription>(this.url, 'management/v1/description', 'GET')
 	}
 }
 

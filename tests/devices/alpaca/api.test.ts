@@ -139,6 +139,10 @@ describe('management', () => {
 			configured('weather', 'observingconditions', 'weather'),
 		])
 	})
+
+	test('description', async () => {
+		expectOk(await api.management.description(), { ServerName: 'Nebulosa', Manufacturer: 'Tiago Melo', ManufacturerVersion: '1.0.0', Location: 'None' })
+	})
 })
 
 describe('camera', () => {

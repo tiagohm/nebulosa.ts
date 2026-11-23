@@ -11259,7 +11259,7 @@ const fits = makeFitsFromImageBytes(data, timeYMDHMS(2026, 2, 18, 12, 0, 0), cam
 
 Alpaca servers announce themselves through the Alpaca Discovery protocol, so a client can find them without knowing their address. The client sends the UDP datagram `alpacadiscovery1` to port 32227, as an IPv4 broadcast on every local interface or to the link-scoped IPv6 multicast group `ff12::a1:9aca`, and each server answers with a JSON datagram `{"AlpacaPort":N}` naming the HTTP port of its management API. `AlpacaDiscoveryClient` is that probing side (see [ASCOM Alpaca Discovery Server](#ascom-alpaca-discovery-server) for the responder).
 
-For every response, the client reports the sender address, the announced port and, unless fetching is turned off, the configured devices read from the management API of that server (see [ASCOM Alpaca REST API](#ascom-alpaca-rest-api)). Responses arrive during a listen window. A server can be reported more than once when it answers the probe of several interfaces. UDP broadcast and multicast are not guaranteed to be delivered, and many networks block them, so a discovery that finds nothing does not prove that there is no server.
+For every response, the client reports the sender address, the announced port and, unless fetching is turned off, the configured devices and the description (name, manufacturer, version and location) read from the management API of that server (see [ASCOM Alpaca REST API](#ascom-alpaca-rest-api)). Responses arrive during a listen window. A server can be reported more than once when it answers the probe of several interfaces. UDP broadcast and multicast are not guaranteed to be delivered, and many networks block them, so a discovery that finds nothing does not prove that there is no server.
 
 ```ts
 import { AlpacaDiscoveryClient } from 'nebulosa/src/devices/alpaca/discovery'
@@ -11267,8 +11267,8 @@ import { AlpacaDiscoveryClient } from 'nebulosa/src/devices/alpaca/discovery'
 const client = new AlpacaDiscoveryClient()
 
 // Probes over IPv4 and waits for the 5000 ms listen window to close.
-// The callback receives the server address, its management port and its configured devices.
-await client.discovery((server) => console.log(server.address, server.port, server.devices), { timeout: 5000, wait: true })
+// The callback receives the server address, its management port, its configured devices and its description.
+await client.discovery((server) => console.log(server.address, server.port, server.devices, server.description?.ServerName), { timeout: 5000, wait: true })
 
 // The same probe over IPv6 multicast.
 await client.discovery((server) => console.log(server.address, server.port), { family: 'IPv6', timeout: 5000, wait: true })
@@ -11302,7 +11302,7 @@ discovery.stop()
 
 ### ASCOM Alpaca REST API
 
-The Alpaca device API is plain HTTP: a property is read with `GET /api/v1/<devicetype>/<devicenumber>/<member>` and parameters in the query string, a property is set or an operation started with a `PUT` and a form-encoded body, and every answer is a JSON envelope with the `Value`, an `ErrorNumber` and an `ErrorMessage`. The management API under `/management/v1/` lists the configured devices. Values are in the units of the ASCOM specification: right ascension in hours; declination, azimuth, altitude and position angles in degrees; exposure durations in seconds and guide pulses in milliseconds; temperatures in degrees Celsius.
+The Alpaca device API is plain HTTP: a property is read with `GET /api/v1/<devicetype>/<devicenumber>/<member>` and parameters in the query string, a property is set or an operation started with a `PUT` and a form-encoded body, and every answer is a JSON envelope with the `Value`, an `ErrorNumber` and an `ErrorMessage`. The management API under `/management/v1/` lists the configured devices and describes the server. Values are in the units of the ASCOM specification: right ascension in hours; declination, azimuth, altitude and position angles in degrees; exposure durations in seconds and guide pulses in milliseconds; temperatures in degrees Celsius.
 
 `devices/alpaca/api` is a thin typed client of that API: one class per device type, one method per Alpaca member, and the values passed through unchanged. The conversion from the library radians is done by the adapter and the server (see [ASCOM Alpaca Device Adapter](#ascom-alpaca-device-adapter) and [ASCOM Alpaca Server](#ascom-alpaca-server)). `AlpacaApi` bundles one instance of each class on the same server. Every call resolves a result instead of throwing, so a missing optional member or an offline driver is a value to check. The calls are single requests: a long operation such as a slew or an exposure is started and then polled through its state, and the camera image is returned raw in the binary ImageBytes encoding for the caller to decode.
 
@@ -11316,6 +11316,10 @@ const api = new AlpacaApi('http://localhost:11111')
 // AlpacaManagementApi: the configured devices, with name, type, device number and unique ID.
 const devices = await api.management.configuredDevices()
 if (devices.ok) console.log(devices.value)
+
+// The server name, manufacturer, manufacturer version and location.
+const description = await api.management.description()
+if (description.ok) console.log(description.value.ServerName)
 
 // Every device member takes the zero-based device number first and resolves { ok, value } or an error.
 // AlpacaDeviceApi, the base of every class: connect, disconnect, isConnected and the bulk deviceState.

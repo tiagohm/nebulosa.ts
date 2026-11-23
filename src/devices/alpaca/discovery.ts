@@ -1,10 +1,10 @@
 import { createSocket, type Socket as DgramSocket, type RemoteInfo } from 'node:dgram'
 import { type NetworkInterfaceInfo, networkInterfaces } from 'node:os'
 import { AlpacaManagementApi } from './api'
-import type { AlpacaConfiguredDevice } from './types'
+import type { AlpacaConfiguredDevice, AlpacaServerDescription } from './types'
 
 // ASCOM Alpaca UDP discovery: a server that answers discovery probes with its management ports, and a
-// client that broadcasts probes and collects responding servers (optionally fetching their device list).
+// client that broadcasts probes and collects responding servers (optionally fetching their device list and description).
 // Implements the Alpaca Discovery v1 protocol over IPv4 broadcast and IPv6 multicast.
 
 // UDP port on which Alpaca discovery probes and responses are exchanged.
@@ -310,18 +310,23 @@ export interface AlpacaDiscoveryOptions {
 	host?: string
 	// How long to listen for responses before auto-closing, milliseconds (0 disables the timeout).
 	timeout?: number // ms
-	// Whether to fetch each responder's configured-device list via the management API.
-	// Reports an empty list on failure; scoped IPv6 addresses skip HTTP because URL/fetch cannot represent their zone IDs.
+	// Whether to fetch each responder's configured-device list and description via the management API.
+	// Reports an empty list and no description on failure; scoped IPv6 addresses skip HTTP because URL/fetch cannot represent their zone IDs.
 	fetch?: boolean
 	// If true, resolve the discovery() promise only after the listen window closes.
 	wait?: boolean
 }
 
-// One discovered Alpaca server and, when fetched, its configured devices.
+// One discovered Alpaca server and, when fetched, its configured devices and description.
 export interface AlpacaDeviceServer {
+	// Address the response came from, with its IPv6 zone ID when scoped.
 	readonly address: string
+	// HTTP port of the management API the server announced.
 	readonly port: number
+	// Configured devices; empty when not fetched or when the request failed.
 	readonly devices: readonly AlpacaConfiguredDevice[]
+	// Identity the server declares; undefined when not fetched or when the request failed.
+	readonly description?: AlpacaServerDescription
 }
 
 // Default discovery options: IPv4 broadcast, standard port, 15 s window, fetch devices, no wait.
@@ -416,9 +421,11 @@ export class AlpacaDiscoveryClient implements Disposable {
 		this.close()
 	}
 
-	// Reports the discovered address (including its IPv6 zone ID), port, and fetched devices or an empty list on failure.
+	// Reports the discovered address (including its IPv6 zone ID), port, and the fetched devices and description, or an
+	// empty list and no description on failure.
 	async #processDiscoveryResponse(address: string, port: number, fetch: boolean, onDiscovery: (server: AlpacaDeviceServer) => void): Promise<void> {
 		let devices: readonly AlpacaConfiguredDevice[] = []
+		let description: AlpacaServerDescription | undefined
 
 		// Removing a zone ID would lose the interface needed to route a link-local request.
 		if (fetch && !address.includes('%')) {
@@ -427,13 +434,14 @@ export class AlpacaDiscoveryClient implements Disposable {
 			const api = new AlpacaManagementApi(url)
 
 			try {
-				const result = await api.configuredDevices()
-				if (result.ok) devices = result.value
+				const [configured, described] = await Promise.all([api.configuredDevices(), api.description()])
+				if (configured.ok) devices = configured.value
+				if (described.ok) description = described.value
 			} catch (e) {
-				console.error('failed to fetch configured devices at', url, e)
+				console.error('failed to fetch the management API at', url, e)
 			}
 		}
 
-		onDiscovery({ address, port, devices })
+		onDiscovery({ address, port, devices, description })
 	}
 }
