@@ -1,7 +1,10 @@
 import { DEG2RAD } from '../../core/constants'
+import { type Mat3, matMul, matMulVec, matRodriguesRotation, type MutMat3 } from '../../math/linear-algebra/mat3'
+import { vecLatitude, type MutVec3 } from '../../math/linear-algebra/vec3'
 import { clamp } from '../../math/numerical/math'
 import { type Angle, normalizeAngle } from '../../math/units/angle'
 import { parallacticAngle } from './astrometry'
+import { eraS2c } from './erfa/erfa'
 
 // Geometric pointing-error model for equatorial mounts, following the six basic TPoint terms.
 // Describes how the mechanical orientation of the axes maps to the direction the optical axis
@@ -273,4 +276,63 @@ function applySkyOffset(rightAscension: Angle, declination: Angle, east: Angle, 
 	error[0] = normalizeAngle(Math.atan2(y, x))
 	error[1] = Math.atan2(z, Math.hypot(x, y))
 	return error
+}
+
+const Y_AXIS = [0, 1, 0] as const
+
+// Exact misalignment of a polar axis, as a rotation of the mount's own equatorial frame.
+//
+// The first-order terms of polarAlignmentPointingModel linearize this rotation in hour angle and
+// declination, which is singular at the pole: within a few times the error of it, the boresight no
+// longer turns about the mount's axis as the right-ascension axis turns. The rotation has no such
+// limit. Both use the hour-angle frame fixed to the Earth: x towards hour angle 0 on the equator, y
+// towards hour angle -6 h (east) and z towards the pole, so that (H, δ) is the unit vector
+// (cos δ cos H, -cos δ sin H, sin δ).
+
+// Rotation that takes a direction of the mount's mechanical frame to the sky, for a polar axis
+// misaligned by `azimuthError` (positive towards east) and `altitudeError` (positive upwards) at
+// `latitude`, all radians, the same knobs as polarAlignmentPointingModel and agreeing with it to first
+// order. The axis is tilted in the meridian by the altitude error and then turned about the zenith by
+// the azimuth error, which is what the adjusters of a real mount do and puts the axis exactly at the
+// misaligned azimuth and altitude. Writes into `out` when given and returns it.
+export function polarAxisRotation(azimuthError: Angle, altitudeError: Angle, latitude: Angle, out?: MutMat3): MutMat3 {
+	const tilt = matRodriguesRotation(Y_AXIS, altitudeError)
+	const turn = matRodriguesRotation([Math.cos(latitude), 0, Math.sin(latitude)], -azimuthError)
+	return matMul(turn, tilt, out)
+}
+
+// Takes a mechanical orientation to the sky through a polar-axis `rotation` from polarAxisRotation.
+// `rightAscension`, `declination` and the local sidereal time `lst` are radians. Returns the right
+// ascension normalized to [0, TAU) and the declination; `out` receives them when given.
+export function applyPolarAxisRotation(rightAscension: Angle, declination: Angle, lst: Angle, rotation: Mat3, out: [Angle, Angle] = [0, 0]): [Angle, Angle] {
+	const v = matMulVec(rotation, eraS2c(rightAscension - lst, declination))
+	out[0] = normalizeAngle(lst - Math.atan2(-v[1], v[0]))
+	out[1] = vecLatitude(v)
+	return out
+}
+
+// Position angle, radians east of north in [0, TAU), of the up direction of a tube on an equatorial
+// mount, at the boresight (`boresightRightAscension`, `boresightDeclination`).
+//
+// The tube's up direction is the mechanical frame's north at the mechanical orientation
+// (`rightAscension`, `declination`): towards the mount's pole, or away from it when `flipped`, which
+// is the other side of the pier, where the declination axis is turned half a revolution. It is taken
+// to the sky through `rotation` when the polar axis is misaligned. Turning the right-ascension axis by
+// some angle therefore turns this direction by the same angle about the mount's axis, and a meridian
+// flip turns it half a revolution. The north and east of the boresight use its own right ascension,
+// so the result stays consistent with that coordinate at a pole. `lst` is the local sidereal time; all
+// angles are radians.
+export function tubePositionAngle(rightAscension: Angle, declination: Angle, lst: Angle, flipped: boolean, boresightRightAscension: Angle, boresightDeclination: Angle, rotation?: Mat3): Angle {
+	const hourAngle = lst - rightAscension
+	const sign = flipped ? -1 : 1
+	const sinDeclination = Math.sin(declination)
+	const up: MutVec3 = [-sign * sinDeclination * Math.cos(hourAngle), sign * sinDeclination * Math.sin(hourAngle), sign * Math.cos(declination)]
+	if (rotation !== undefined) matMulVec(rotation, up, up)
+	const boresightHourAngle = lst - boresightRightAscension
+	const sinBoresightDeclination = Math.sin(boresightDeclination)
+	const cosBoresightHourAngle = Math.cos(boresightHourAngle)
+	const sinBoresightHourAngle = Math.sin(boresightHourAngle)
+	const north = -up[0] * sinBoresightDeclination * cosBoresightHourAngle + up[1] * sinBoresightDeclination * sinBoresightHourAngle + up[2] * Math.cos(boresightDeclination)
+	const east = up[0] * sinBoresightHourAngle + up[1] * cosBoresightHourAngle
+	return normalizeAngle(Math.atan2(east, north))
 }

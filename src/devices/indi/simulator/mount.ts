@@ -1,9 +1,10 @@
 import type { EquatorialCoordinate } from '../../../astronomy/coordinates/coordinate'
-import { applyEquatorialPointingError, applyTubeFlexureError, type EquatorialPointingModel, IDENTITY_EQUATORIAL_POINTING_MODEL, polarAlignmentPointingModel } from '../../../astronomy/coordinates/pointing'
+import { applyEquatorialPointingError, applyPolarAxisRotation, applyTubeFlexureError, type EquatorialPointingModel, IDENTITY_EQUATORIAL_POINTING_MODEL, polarAxisRotation, tubePositionAngle } from '../../../astronomy/coordinates/pointing'
 import { localSiderealTime } from '../../../astronomy/observer/location'
 import { formatTemporal, TIMEZONE } from '../../../astronomy/time/temporal'
 import { timeUnix } from '../../../astronomy/time/time'
 import { ASEC2RAD, DAYSEC, PI, PIOVERTWO, SIDEREAL_DRIFT_RATE, TAU } from '../../../core/constants'
+import { type Mat3, matIdentity, type MutMat3 } from '../../../math/linear-algebra/mat3'
 import { clamp } from '../../../math/numerical/math'
 import { mulberry32, normal } from '../../../math/numerical/random'
 import { type Angle, deg, hour, normalizeAngle, normalizePI, toDeg, toHour } from '../../../math/units/angle'
@@ -267,6 +268,9 @@ export class MountSimulator extends DeviceSimulator {
 	// Rolling record of where the optical axis actually pointed, so a camera can integrate an exposure
 	// over the motion that happened rather than over a single instant.
 	readonly #boresightHistory = boresightHistory(MOUNT_TRAJECTORY_CAPACITY)
+	// Rotation of the misaligned polar axis and the knobs, arcseconds, and latitude, radians, it was
+	// built for. NaN knobs mark it as never built.
+	readonly #polarRotationCache: { azimuth: number; altitude: number; latitude: Angle; readonly rotation: MutMat3 } = { azimuth: Number.NaN, altitude: Number.NaN, latitude: Number.NaN, rotation: matIdentity() }
 	// Elastic ring-down of each axis after an abrupt stop.
 	readonly #rightAscensionSettling = settlingState()
 	readonly #declinationSettling = settlingState()
@@ -477,16 +481,23 @@ export class MountSimulator extends DeviceSimulator {
 	// sidereal angle used by alignment and flexure terms when an interval is recorded in pieces.
 	#boresightAt(time: number, pierSide: PierSide = this.pierSide): EquatorialCoordinate {
 		const model = this.pointingModel
+		const polarRotation = this.#polarRotation
 		const flexureEnabled = this.#simulatesFlexure
 		const { TUBE_FLEXURE, PIER_WEST_RA, PIER_WEST_DEC } = this.#flexure.elements
 		let rightAscension = this.#mechanical.rightAscension
 		let declination = this.#mechanical.declination
 
-		if (model !== IDENTITY_EQUATORIAL_POINTING_MODEL || (flexureEnabled && (TUBE_FLEXURE.value !== 0 || PIER_WEST_RA.value !== 0 || PIER_WEST_DEC.value !== 0))) {
+		if (model !== IDENTITY_EQUATORIAL_POINTING_MODEL || polarRotation !== undefined || (flexureEnabled && (TUBE_FLEXURE.value !== 0 || PIER_WEST_RA.value !== 0 || PIER_WEST_DEC.value !== 0))) {
 			const lst = this.siderealTimeAt(time)
 
+			// The cone and non-perpendicularity act between the axes and the tube, in the mount's own
+			// frame, so they come first; the polar axis then carries that whole frame onto the sky.
 			if (model !== IDENTITY_EQUATORIAL_POINTING_MODEL) {
 				;[rightAscension, declination] = applyEquatorialPointingError(rightAscension, declination, lst, model)
+			}
+
+			if (polarRotation !== undefined) {
+				;[rightAscension, declination] = applyPolarAxisRotation(rightAscension, declination, lst, polarRotation)
 			}
 
 			if (flexureEnabled && TUBE_FLEXURE.value !== 0) {
@@ -592,23 +603,60 @@ export class MountSimulator extends DeviceSimulator {
 		return boresightPathLength(this.#boresightHistory, startTime, endTime)
 	}
 
-	// Optical pointing model built from the configured geometric errors: how far the boresight sits
-	// from where the axes mechanically point.
+	// First-order pointing model of the configured errors between the axes and the tube: how far the
+	// boresight sits from where the axes mechanically point, before the polar axis carries the mount's
+	// frame onto the sky.
 	//
-	// Covers the polar-axis misalignment, the cone error and the non-perpendicularity of the two axes.
-	// The encoder index errors are deliberately absent: they change what the controller reports, not
-	// where the telescope looks, and are applied when the reported coordinate is derived instead.
+	// Covers the cone error and the non-perpendicularity of the two axes. The polar-axis misalignment is
+	// applied exactly by #polarRotation instead, because its first-order terms are singular at the pole,
+	// where a camera-based polar alignment works. The encoder index errors are deliberately absent: they
+	// change what the controller reports, not where the telescope looks, and are applied when the
+	// reported coordinate is derived instead.
 	//
 	// Returns the shared identity model when nothing is configured, so callers can skip the whole
 	// computation with a reference comparison.
 	get pointingModel(): EquatorialPointingModel {
 		if (!this.#simulatesAlignment) return IDENTITY_EQUATORIAL_POINTING_MODEL
 
-		const { POLAR_AZIMUTH_ERROR, POLAR_ALTITUDE_ERROR, CONE_ERROR, AXIS_NON_ORTHOGONALITY } = this.#alignment.elements
-		if (POLAR_AZIMUTH_ERROR.value === 0 && POLAR_ALTITUDE_ERROR.value === 0 && CONE_ERROR.value === 0 && AXIS_NON_ORTHOGONALITY.value === 0) return IDENTITY_EQUATORIAL_POINTING_MODEL
+		const { CONE_ERROR, AXIS_NON_ORTHOGONALITY } = this.#alignment.elements
+		if (CONE_ERROR.value === 0 && AXIS_NON_ORTHOGONALITY.value === 0) return IDENTITY_EQUATORIAL_POINTING_MODEL
 
-		const model = polarAlignmentPointingModel(POLAR_AZIMUTH_ERROR.value * ASEC2RAD, POLAR_ALTITUDE_ERROR.value * ASEC2RAD, this.latitude)
-		return { ...model, coneError: CONE_ERROR.value * ASEC2RAD, axisNonPerpendicularity: AXIS_NON_ORTHOGONALITY.value * ASEC2RAD }
+		return { ...IDENTITY_EQUATORIAL_POINTING_MODEL, coneError: CONE_ERROR.value * ASEC2RAD, axisNonPerpendicularity: AXIS_NON_ORTHOGONALITY.value * ASEC2RAD }
+	}
+
+	// Rotation of the mount's frame by the configured polar-axis misalignment, or undefined when the
+	// polar axis is aligned or alignment errors are not simulated. Cached for the knobs and latitude it
+	// was built for, since the boresight is evaluated on every tick.
+	get #polarRotation(): Mat3 | undefined {
+		if (!this.#simulatesAlignment) return undefined
+
+		const { POLAR_AZIMUTH_ERROR, POLAR_ALTITUDE_ERROR } = this.#alignment.elements
+		if (POLAR_AZIMUTH_ERROR.value === 0 && POLAR_ALTITUDE_ERROR.value === 0) return undefined
+
+		const cache = this.#polarRotationCache
+		const latitude = this.latitude
+
+		if (cache.azimuth !== POLAR_AZIMUTH_ERROR.value || cache.altitude !== POLAR_ALTITUDE_ERROR.value || cache.latitude !== latitude) {
+			polarAxisRotation(POLAR_AZIMUTH_ERROR.value * ASEC2RAD, POLAR_ALTITUDE_ERROR.value * ASEC2RAD, latitude, cache.rotation)
+			cache.azimuth = POLAR_AZIMUTH_ERROR.value
+			cache.altitude = POLAR_ALTITUDE_ERROR.value
+			cache.latitude = latitude
+		}
+
+		return cache.rotation
+	}
+
+	// Position angle of the tube's up direction at the boresight, radians east of north in the
+	// equatorial frame of date, at this instant.
+	//
+	// The tube, and a camera fixed to it, turns with the right-ascension axis about the mount's own
+	// polar axis, and half a revolution with a meridian flip: this is what makes the field of a camera
+	// rotate about the mount's axis rather than the celestial pole as the mount turns, which is what a
+	// camera-based polar alignment measures.
+	get tubeOrientation(): Angle {
+		const time = this.#utcTime + this.#utcTimeRemainder
+		const boresight = this.#boresightAt(time)
+		return tubePositionAngle(this.#mechanical.rightAscension, this.#mechanical.declination, this.siderealTimeAt(time), this.pierSide === 'WEST', boresight.rightAscension, boresight.declination, this.#polarRotation)
 	}
 
 	// Encoder zero offsets, radians, added to the mechanical orientation to obtain what the controller

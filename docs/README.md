@@ -1263,8 +1263,10 @@ An equatorial mount that is not perfectly built or aligned points slightly away 
 
 `[ΔH, Δδ]` is the amount to add to the mechanical hour angle and declination to get where the optical axis really points; in right ascension, with `H = LST − RA`, the true pointing is `[RA − ΔH, δ + Δδ]`. A polar axis misaligned by knob errors is the special case `MA = azimuth·cos(latitude)` and `ME = −altitude`, plus a constant hour-angle term `azimuth·sin(latitude)`; a positive altitude error means the polar axis points above the true pole. All coefficients are radians. The `sec δ` and `tan δ` terms diverge at the pole, so near it the raw `ΔH` grows large without meaning an on-sky error of that size; the corrected right ascension and declination remain well defined there. Add tube flexure separately with [Tube Flexure Pointing Error](#tube-flexure-pointing-error).
 
+These terms linearize what a misaligned polar axis really is: a rotation of the mount's whole equatorial frame. The linearization fails within a few times the error of the pole, where a camera-based polar alignment works: there the boresight no longer circles the mount's axis as the right-ascension axis turns. `polarAxisRotation` builds that rotation exactly, tilting the axis by the altitude error and turning it about the zenith by the azimuth error, as the adjusters of a mount do; it agrees with `MA` and `ME` to first order. `tubePositionAngle` gives the orientation of a tube on such a mount: its up direction is the mechanical frame's north, so it turns with the right-ascension axis about the mount's axis and half a revolution across a meridian flip.
+
 ```ts
-import { applyEquatorialPointingError, equatorialPointingError, type EquatorialPointingModel, IDENTITY_EQUATORIAL_POINTING_MODEL, isIdentityEquatorialPointingModel, polarAlignmentPointingModel } from 'nebulosa/src/astronomy/coordinates/pointing'
+import { applyEquatorialPointingError, applyPolarAxisRotation, equatorialPointingError, type EquatorialPointingModel, IDENTITY_EQUATORIAL_POINTING_MODEL, isIdentityEquatorialPointingModel, polarAlignmentPointingModel, polarAxisRotation, tubePositionAngle } from 'nebulosa/src/astronomy/coordinates/pointing'
 import { arcsec, deg, hour, toArcsec, toDeg, toHour } from 'nebulosa/src/math/units/angle'
 
 const model: EquatorialPointingModel = {
@@ -1294,6 +1296,15 @@ console.log(toHour(ra), toDeg(dec)) // 9.9962 44.9875 — hours, degrees
 const polar = polarAlignmentPointingModel(arcsec(120), arcsec(-300), deg(40))
 
 console.log(toArcsec(polar.polarAzimuthError), toArcsec(polar.polarAltitudeError)) // 91.93 300 — MA, ME in arcseconds
+
+// The same misalignment as an exact rotation, valid at the pole: where the mechanical pole really points at LST 13 h.
+const rotation = polarAxisRotation(arcsec(120), arcsec(-300), deg(40))
+const axis = applyPolarAxisRotation(0, deg(90), hour(13), rotation)
+console.log(toHour(axis[0]), toDeg(axis[1])) // hours, degrees
+
+// Position angle of the tube's up direction at its boresight (radians east of north), not flipped across the pier.
+const boresight = applyPolarAxisRotation(hour(10), deg(89), hour(13), rotation)
+console.log(tubePositionAngle(hour(10), deg(89), hour(13), false, boresight[0], boresight[1], rotation))
 ```
 
 ### Equinoxes and Solstices
@@ -13229,7 +13240,7 @@ manager.park(mount)
 
 `MountSimulator` is an in-process German equatorial mount for testing pointing, tracking, guiding and meridian-flip logic. It distinguishes three directions: the reported coordinate (radians, JNOW) that the controller believes and an INDI client sees, the mechanical orientation of its axes, and the boresight where the optical axis really points. With every imperfection off they coincide; turned on, they diverge as on a real mount. The simulator models goto, flip and sync, manual motion at seven slew rates, sidereal, solar, lunar and King tracking, home and park, the site and clock, and pulse guiding at a guide rate that is a fraction of the sidereal rate. The side of the pier follows the placement of the axes.
 
-The imperfections are independent families switched on by `SIMULATOR_ERROR_FEATURES`, each configured by its own number vector: polar misalignment, cone and non-orthogonality and index errors (alignment), periodic error of the worm with optional PEC playback, backlash and stiction of the gears, guiding latency and quantization, settling ring-down after a stop, tube flexure, wind deflection, and tracking-rate bias and drift. The recorded boresight path is what the camera simulator uses to trail the stars of an exposure (see [INDI Camera Simulator](#indi-camera-simulator)). The simulated clock advances in real time, and `pauseAutomaticTicking` hands it to the caller, who drives it with `advance(seconds)` so that every step is deterministic.
+The imperfections are independent families switched on by `SIMULATOR_ERROR_FEATURES`, each configured by its own number vector: polar misalignment (an exact rotation of the polar axis, valid at the pole), cone and non-orthogonality and index errors (alignment), periodic error of the worm with optional PEC playback, backlash and stiction of the gears, guiding latency and quantization, settling ring-down after a stop, tube flexure, wind deflection, and tracking-rate bias and drift. The recorded boresight path is what the camera simulator uses to trail the stars of an exposure (see [INDI Camera Simulator](#indi-camera-simulator)). The simulated clock advances in real time, and `pauseAutomaticTicking` hands it to the caller, who drives it with `advance(seconds)` so that every step is deterministic.
 
 ```ts
 import { IndiClientHandlerSet } from 'nebulosa/src/devices/indi/client'
@@ -13293,8 +13304,10 @@ const { reported, boresight } = simulator.pointingState
 console.log(toArcsec(boresight.declination - reported.declination)) // pointing error in declination, arcsec
 console.log(toArcsec(simulator.pointingErrorBound)) // upper bound of the pointing error, arcsec
 
-// The same boresight alone, the geometric pointing model, the worm phase and the tracking-rate drift (radians).
+// The same boresight alone, the cone and non-orthogonality model, the worm phase and the tracking-rate drift (radians).
 console.log(simulator.boresight, simulator.pointingModel, simulator.wormPhase, simulator.trackingRateOffset)
+// Position angle of the tube's up direction at the boresight, east of north (radians): what turns a camera's field.
+console.log(simulator.tubeOrientation)
 
 // Home: store the current pose, seek the home index, or slew to the stored home.
 simulator.setHome()

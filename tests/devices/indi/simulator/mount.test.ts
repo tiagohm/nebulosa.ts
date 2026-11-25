@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { angularDistance } from '../../../../src/astronomy/coordinates/coordinate'
+import { applyPolarAxisRotation, polarAxisRotation } from '../../../../src/astronomy/coordinates/pointing'
 import { PI, PIOVERTWO, SIDEREAL_DRIFT_RATE, TAU } from '../../../../src/core/constants'
 import { IndiClientHandlerSet } from '../../../../src/devices/indi/client'
 import { expectedPierSide, type PierSide } from '../../../../src/devices/indi/device'
@@ -3009,9 +3010,11 @@ describe('mount simulator pointing errors', () => {
 			const samples = new Float64Array(10)
 			expect(mount.sampleBoresightTrajectory(startTime, mount.utcTime, 5, samples)).toBe(5)
 
+			const rotation = polarAxisRotation(arcsec(3600), arcsec(-2400), mount.latitude)
+
 			for (let i = 0; i < 5; i++) {
 				const time = startTime + i * 250
-				const [rightAscension, declination] = polarAlignmentError(mount.mechanical.rightAscension, mount.mechanical.declination, mount.latitude, mount.siderealTimeAt(time), arcsec(3600), arcsec(-2400))
+				const [rightAscension, declination] = applyPolarAxisRotation(mount.mechanical.rightAscension, mount.mechanical.declination, mount.siderealTimeAt(time), rotation)
 				expect(normalizePI(samples[i * 2] - rightAscension)).toBeCloseTo(0, 11)
 				expect(samples[i * 2 + 1] - declination).toBeCloseTo(0, 11)
 			}
@@ -3908,7 +3911,28 @@ describe('mount simulator pointing errors', () => {
 		}
 	})
 
-	test('reproduces polarAlignmentError for the configured polar axis errors', () => {
+	test('orients the tube north of the boresight, half a turn across the pier, and about the misaligned axis near the pole', () => {
+		const { client, mount } = makeMount('mount.tube.orientation', 'ALIGNMENT')
+
+		try {
+			client.sendNumber({ device: mount.name, name: 'MOUNT_ALIGNMENT', elements: { ...NO_ALIGNMENT } })
+			mount.syncTo(hour(5), deg(20))
+			const aligned = mount.tubeOrientation
+			expect(Math.min(aligned, TAU - aligned, Math.abs(aligned - PI))).toBeLessThan(1e-9)
+			expect(Math.abs(aligned - PI) < 1e-9).toBe(mount.pierSide === 'WEST')
+
+			// A degree of polar misalignment turns the tube's up direction a degree from the pole away
+			// from the local north, which the aligned mount never does.
+			client.sendNumber({ device: mount.name, name: 'MOUNT_ALIGNMENT', elements: { ...NO_ALIGNMENT, POLAR_AZIMUTH_ERROR: 3600 } })
+			mount.syncTo(hour(5), deg(89))
+			const misaligned = normalizePI(mount.tubeOrientation - (mount.pierSide === 'WEST' ? PI : 0))
+			expect(Math.abs(misaligned)).toBeGreaterThan(deg(10))
+		} finally {
+			mount.dispose()
+		}
+	})
+
+	test('rotates the boresight exactly by the configured polar axis errors, agreeing with polarAlignmentError to first order', () => {
 		const { client, mount } = makeMount('mount.boresight.polar', 'ALIGNMENT')
 
 		try {
@@ -3918,11 +3942,14 @@ describe('mount simulator pointing errors', () => {
 
 			const utcTime = mount.utcTime
 			const lst = mount.siderealTimeAt(utcTime)
-			const [expectedRightAscension, expectedDeclination] = polarAlignmentError(mount.rightAscension, mount.declination, mount.latitude, lst, arcsec(azimuthError), arcsec(altitudeError))
+			const [expectedRightAscension, expectedDeclination] = applyPolarAxisRotation(mount.rightAscension, mount.declination, lst, polarAxisRotation(arcsec(azimuthError), arcsec(altitudeError), mount.latitude))
+			const [firstOrderRightAscension, firstOrderDeclination] = polarAlignmentError(mount.rightAscension, mount.declination, mount.latitude, lst, arcsec(azimuthError), arcsec(altitudeError))
 			const boresight = mount.boresight
 
 			expect(normalizePI(boresight.rightAscension - expectedRightAscension)).toBeCloseTo(0, 12)
 			expect(boresight.declination - expectedDeclination).toBeCloseTo(0, 12)
+			// The first-order model differs by the square of the error, a few arcseconds for a quarter degree.
+			expect(toArcsec(angularDistance(boresight.rightAscension, boresight.declination, firstOrderRightAscension, firstOrderDeclination))).toBeLessThan(5)
 			expect(mount.pointingErrorBound).toBeGreaterThan(0)
 		} finally {
 			mount.dispose()

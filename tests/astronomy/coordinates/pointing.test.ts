@@ -1,7 +1,20 @@
 import { describe, expect, test } from 'bun:test'
 import { angularDistance } from '../../../src/astronomy/coordinates/coordinate'
-import { applyEquatorialPointingError, applyTubeFlexureError, equatorialPointingError, type EquatorialPointingModel, IDENTITY_EQUATORIAL_POINTING_MODEL, isIdentityEquatorialPointingModel, MAX_POINTING_DECLINATION, polarAlignmentPointingModel, tubeFlexureError } from '../../../src/astronomy/coordinates/pointing'
-import { PIOVERTWO } from '../../../src/core/constants'
+import {
+	applyEquatorialPointingError,
+	applyPolarAxisRotation,
+	applyTubeFlexureError,
+	equatorialPointingError,
+	type EquatorialPointingModel,
+	IDENTITY_EQUATORIAL_POINTING_MODEL,
+	isIdentityEquatorialPointingModel,
+	MAX_POINTING_DECLINATION,
+	polarAlignmentPointingModel,
+	polarAxisRotation,
+	tubeFlexureError,
+	tubePositionAngle,
+} from '../../../src/astronomy/coordinates/pointing'
+import { PI, PIOVERTWO } from '../../../src/core/constants'
 import { arcsec, deg, hour, normalizePI, toArcsec } from '../../../src/math/units/angle'
 import { polarAlignmentError } from '../../../src/observation/alignment/polaralignment'
 
@@ -287,4 +300,59 @@ describe('tube flexure', () => {
 	function flexureAt(zenithDistance: number) {
 		return toArcsec(flexure) * Math.sin(zenithDistance)
 	}
+})
+
+describe('polar axis rotation', () => {
+	const latitude = deg(40)
+
+	test('is the identity for an aligned axis', () => {
+		const [ra, dec] = applyPolarAxisRotation(hour(5), deg(20), hour(8), polarAxisRotation(0, 0, latitude))
+		expect(ra).toBeCloseTo(hour(5), 14)
+		expect(dec).toBeCloseTo(deg(20), 14)
+	})
+
+	test('agrees with the first-order polar-alignment model for small errors away from the pole', () => {
+		const rotation = polarAxisRotation(arcsec(300), arcsec(-200), latitude)
+		const model = polarAlignmentPointingModel(arcsec(300), arcsec(-200), latitude)
+
+		for (const hourAngle of [-hour(5), -hour(1), 0, hour(2), hour(6)]) {
+			for (const declination of [deg(-30), deg(0), deg(45)]) {
+				const lst = hour(10)
+				const [exactRa, exactDec] = applyPolarAxisRotation(lst - hourAngle, declination, lst, rotation)
+				const [firstRa, firstDec] = applyEquatorialPointingError(lst - hourAngle, declination, lst, model)
+				expect(toArcsec(angularDistance(exactRa, exactDec, firstRa, firstDec))).toBeLessThan(0.5)
+			}
+		}
+	})
+
+	test('puts the mechanical pole on the misaligned axis and turns the field around it', () => {
+		const rotation = polarAxisRotation(deg(1), deg(0.5), latitude)
+		const lst = hour(4)
+		const axis = applyPolarAxisRotation(0, PIOVERTWO, lst, rotation)
+		// Tilted up by the altitude error and turned east by the azimuth error from the pole.
+		const altitudeOfAxis = Math.asin(Math.sin(latitude) * Math.sin(axis[1]) + Math.cos(latitude) * Math.cos(axis[1]) * Math.cos(lst - axis[0]))
+		expect(altitudeOfAxis).toBeCloseTo(latitude + deg(0.5), 9)
+
+		// Half a degree from the mechanical pole is half a degree from the axis whatever the hour angle.
+		for (const rightAscension of [0, hour(3), hour(9), hour(17)]) {
+			const [ra, dec] = applyPolarAxisRotation(rightAscension, deg(89.5), lst, rotation)
+			expect(angularDistance(ra, dec, axis[0], axis[1])).toBeCloseTo(deg(0.5), 12)
+		}
+	})
+})
+
+describe('tube position angle', () => {
+	test('points north of the boresight, south across a flip, on an aligned mount', () => {
+		const lst = hour(6)
+		expect(tubePositionAngle(hour(6), deg(20), lst, false, hour(6), deg(20))).toBeCloseTo(0, 12)
+		expect(tubePositionAngle(hour(6), deg(20), lst, true, hour(6), deg(20))).toBeCloseTo(PI, 12)
+	})
+
+	test('turns with the right-ascension axis at the pole', () => {
+		const lst = hour(6)
+		// At the pole the north of the boresight is the meridian of its own right ascension, so turning
+		// the axis turns that meridian and the tube stays on it.
+		expect(tubePositionAngle(hour(1), PIOVERTWO, lst, false, hour(1), PIOVERTWO)).toBeCloseTo(0, 12)
+		expect(tubePositionAngle(hour(1), PIOVERTWO, lst, false, hour(7), PIOVERTWO)).toBeCloseTo(hour(6), 12)
+	})
 })
