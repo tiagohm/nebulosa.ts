@@ -104,6 +104,15 @@ export function shortestRotatorDelta(target: number, current: number) {
 	return delta
 }
 
+// Turns an `angle`, degrees, by at most `step` degrees (non-negative) along the signed travel still to
+// go, `remaining` degrees, returning the new angle in [0, 360) and the travel left, zero once arrived.
+// Splitting a travel into any number of steps gives the same arrival.
+export function advanceRotation(angle: number, remaining: number, step: number): readonly [number, number] {
+	if (Math.abs(remaining) <= step) return [wrapRotatorAngle(angle + remaining), 0]
+	const moved = Math.sign(remaining) * step
+	return [wrapRotatorAngle(angle + moved), remaining - moved]
+}
+
 // Clamps a declination to [-π/2, π/2] radians.
 export function clampDeclination(value: number) {
 	return clamp(value, -PIOVERTWO, PIOVERTWO)

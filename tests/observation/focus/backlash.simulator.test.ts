@@ -34,7 +34,7 @@ describe.skipIf(SKIP)('backlash compensation over the focuser simulator', () => 
 
 	// Effective positions of the simulator each time the trajectory arrives at 50000, in steps.
 	async function returns(name: string, compensation: BacklashCompensation) {
-		using simulator = new FocuserSimulator(name, client, { backlash: 120 })
+		using simulator = new FocuserSimulator(name, client, { config: { gear: { backlash: 120 } } })
 		const focuser: Focuser = focuserManager.get(client, name)!
 		focuserManager.connect(focuser)
 		await waitUntil(() => focuser.connected && focuser.canAbsoluteMove)

@@ -275,7 +275,7 @@ describe.skipIf(SKIP_TIME_CONSUMING)('backlash calibration simulator integration
 
 		using client = new ClientSimulator('backlash.calibration', handler)
 		using cameraSimulator = new CameraSimulator('Camera Simulator', client, { focuserManager })
-		using focuserSimulator = new FocuserSimulator('Focuser Simulator', client, { backlash: 300 })
+		using focuserSimulator = new FocuserSimulator('Focuser Simulator', client, { config: { gear: { backlash: 300 } } })
 		const camera = cameraManager.get(client, cameraSimulator.name)!
 		const focuser = focuserManager.get(client, focuserSimulator.name)!
 		cameraManager.connect(camera)
@@ -321,7 +321,7 @@ describe.skipIf(SKIP_TIME_CONSUMING)('backlash calibration simulator integration
 
 		using client = new ClientSimulator('backlash.calibration.commands', handler)
 		using cameraSimulator = new CameraSimulator('Camera Simulator', client, { focuserManager })
-		using focuserSimulator = new FocuserSimulator('Focuser Simulator', client, { backlash: 300 })
+		using focuserSimulator = new FocuserSimulator('Focuser Simulator', client, { config: { gear: { backlash: 300 } } })
 		const camera = cameraManager.get(client, cameraSimulator.name)!
 		const focuser = focuserManager.get(client, focuserSimulator.name)!
 		cameraManager.connect(camera)

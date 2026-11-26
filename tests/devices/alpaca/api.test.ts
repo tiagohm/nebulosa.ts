@@ -30,16 +30,19 @@ import { WeatherManager } from '../../../src/devices/indi/manager/weather'
 import { WheelManager } from '../../../src/devices/indi/manager/wheel'
 import { CameraSimulator } from '../../../src/devices/indi/simulator/camera'
 import { ClientSimulator } from '../../../src/devices/indi/simulator/client'
-import { CAMERA_AMBIENT_TEMPERATURE, CAMERA_MAX_BIN, CAMERA_MAX_EXPOSURE, CAMERA_MIN_EXPOSURE, CAMERA_PIXEL_SIZE, CAMERA_SENSOR_HEIGHT, CAMERA_SENSOR_WIDTH, FILTER_WHEEL_SLOT_NAMES, FOCUSER_INITIAL_POSITION, FOCUSER_MAX_POSITION, PANEL_MAX_INTENSITY } from '../../../src/devices/indi/simulator/constants'
+import { CAMERA_AMBIENT_TEMPERATURE, CAMERA_MAX_BIN, CAMERA_MAX_EXPOSURE, CAMERA_MIN_EXPOSURE, CAMERA_PIXEL_SIZE, CAMERA_SENSOR_HEIGHT, CAMERA_SENSOR_WIDTH } from '../../../src/devices/indi/simulator/constants'
 import { CoverSimulator } from '../../../src/devices/indi/simulator/cover'
 import { DomeSimulator } from '../../../src/devices/indi/simulator/dome'
 import { FlatPanelSimulator } from '../../../src/devices/indi/simulator/flatpanel'
+import { DEFAULT_FLAT_PANEL_SIMULATOR_CONFIG } from '../../../src/devices/indi/simulator/flatpanel.config'
 import { FocuserSimulator } from '../../../src/devices/indi/simulator/focuser'
+import { DEFAULT_FOCUSER_SIMULATOR_CONFIG } from '../../../src/devices/indi/simulator/focuser.config'
 import { MountSimulator } from '../../../src/devices/indi/simulator/mount'
 import { RotatorSimulator } from '../../../src/devices/indi/simulator/rotator'
 import { SafetyMonitorSimulator } from '../../../src/devices/indi/simulator/safetymonitor'
 import { WeatherSimulator } from '../../../src/devices/indi/simulator/weather'
 import { WheelSimulator } from '../../../src/devices/indi/simulator/wheel'
+import { DEFAULT_WHEEL_SIMULATOR_CONFIG } from '../../../src/devices/indi/simulator/wheel.config'
 import { waitUntil } from '../../util'
 
 const cameraManager = new CameraManager()
@@ -897,12 +900,12 @@ describe('filterWheel', () => {
 	test('getFocusOffsets', async () => {
 		expectOk(
 			await api.filterWheel.getFocusOffsets(ID),
-			Array.from({ length: FILTER_WHEEL_SLOT_NAMES.length }, () => 0),
+			Array.from({ length: DEFAULT_WHEEL_SIMULATOR_CONFIG.slots.length }, () => 0),
 		)
 	})
 
 	test('getNames', async () => {
-		expectOk(await api.filterWheel.getNames(ID), [...FILTER_WHEEL_SLOT_NAMES])
+		expectOk(await api.filterWheel.getNames(ID), [...DEFAULT_WHEEL_SIMULATOR_CONFIG.slots])
 	})
 
 	test('getPosition', async () => {
@@ -943,15 +946,15 @@ describe('focuser', () => {
 	})
 
 	test('getMaxIncrement', async () => {
-		expectOk(await api.focuser.getMaxIncrement(ID), FOCUSER_MAX_POSITION)
+		expectOk(await api.focuser.getMaxIncrement(ID), DEFAULT_FOCUSER_SIMULATOR_CONFIG.drive.maxPosition)
 	})
 
 	test('getMaxStep', async () => {
-		expectOk(await api.focuser.getMaxStep(ID), FOCUSER_MAX_POSITION)
+		expectOk(await api.focuser.getMaxStep(ID), DEFAULT_FOCUSER_SIMULATOR_CONFIG.drive.maxPosition)
 	})
 
 	test('getPosition', async () => {
-		expectOk(await api.focuser.getPosition(ID), FOCUSER_INITIAL_POSITION)
+		expectOk(await api.focuser.getPosition(ID), DEFAULT_FOCUSER_SIMULATOR_CONFIG.drive.position)
 	})
 
 	test('getStepSize', async () => {
@@ -980,9 +983,9 @@ describe('focuser', () => {
 	})
 
 	test('move', async () => {
-		expectOk(await api.focuser.move(ID, FOCUSER_INITIAL_POSITION + 20))
-		await waitUntil(() => focuser.position.value === FOCUSER_INITIAL_POSITION + 20)
-		expectOk(await api.focuser.getPosition(ID), FOCUSER_INITIAL_POSITION + 20)
+		expectOk(await api.focuser.move(ID, DEFAULT_FOCUSER_SIMULATOR_CONFIG.drive.position + 20))
+		await waitUntil(() => focuser.position.value === DEFAULT_FOCUSER_SIMULATOR_CONFIG.drive.position + 20)
+		expectOk(await api.focuser.getPosition(ID), DEFAULT_FOCUSER_SIMULATOR_CONFIG.drive.position + 20)
 	})
 
 	test('move by signed steps outward on a relative focuser', async () => {
@@ -1041,7 +1044,7 @@ describe('coverCalibrator', () => {
 	})
 
 	test('getMaxBrightness', async () => {
-		expectOk(await api.coverCalibrator.getMaxBrightness(ID), PANEL_MAX_INTENSITY)
+		expectOk(await api.coverCalibrator.getMaxBrightness(ID), DEFAULT_FLAT_PANEL_SIMULATOR_CONFIG.maxIntensity)
 	})
 
 	test('on', async () => {

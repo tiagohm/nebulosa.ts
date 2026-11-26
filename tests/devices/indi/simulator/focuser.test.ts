@@ -93,7 +93,7 @@ describe.skipIf(SKIP)('focuser simulator', () => {
 
 	test('simulates gear play with persistent partial slack', async () => {
 		using client = new ClientSimulator('focuser', new IndiClientHandlerSet())
-		using simulator = new FocuserSimulator('Focuser Simulator', client, { backlash: 80 })
+		using simulator = new FocuserSimulator('Focuser Simulator', client, { config: { gear: { backlash: 80 } } })
 
 		expect(simulator.backlash).toBe(80)
 		simulator.connect()

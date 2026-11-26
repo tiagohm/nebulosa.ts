@@ -1,63 +1,46 @@
 import type { IndiClientHandler } from '../client'
 import { DeviceInterfaceType } from '../device'
-import { makeNumberVector, makeSwitchVector, type NewNumberVector, type NewSwitchVector } from '../types'
+import { BoardSimulator, type BoardSimulatorOptions } from './board'
 import type { ClientSimulator } from './client'
-import { MAIN_CONTROL, PANEL_MAX_INTENSITY } from './constants'
-import { DeviceSimulator } from './device'
-import type { DeviceSimulatorOptions, SimulatorProperty } from './types'
-import { applyExclusiveSwitchValues, applyNumberVectorValues } from './util'
+import { type FlatPanelSimulatorConfig, type FlatPanelSimulatorConfigOverride, flatPanelSimulatorConfig } from './flatpanel.config'
+import { FlatPanelLight } from './flatpanel.light'
 
-// Simulated flat-field light panel state and intensity.
+// Simulated flat-field light panel: a board with the lamp and its dimmer.
 
-// Simulated flat-field light panel with an enable switch and adjustable intensity.
-export class FlatPanelSimulator extends DeviceSimulator {
+// Options of a simulated flat panel.
+export interface FlatPanelSimulatorOptions extends BoardSimulatorOptions {
+	// Override of DEFAULT_FLAT_PANEL_SIMULATOR_CONFIG.
+	readonly config?: FlatPanelSimulatorConfigOverride
+}
+
+// Simulated flat-field light panel with an on/off switch and adjustable brightness.
+export class FlatPanelSimulator extends BoardSimulator {
 	readonly type = 'flatPanel'
 
-	readonly #light = makeSwitchVector('', 'FLAT_LIGHT_CONTROL', 'Light', MAIN_CONTROL, 'OneOfMany', 'rw', ['FLAT_LIGHT_ON', 'On', false], ['FLAT_LIGHT_OFF', 'Off', true])
-	readonly #intensity = makeNumberVector('', 'FLAT_LIGHT_INTENSITY', 'Brightness', MAIN_CONTROL, 'rw', ['FLAT_LIGHT_INTENSITY_VALUE', 'Brightness', 0, 0, PANEL_MAX_INTENSITY, 1, '%.0f'])
+	// Configuration the panel was built with.
+	readonly configuration: FlatPanelSimulatorConfig
 
-	protected readonly properties: readonly SimulatorProperty[] = [this.#light, this.#intensity]
-	protected propertiesToNotSave: readonly SimulatorProperty[] = []
+	readonly #light: FlatPanelLight
 
 	constructor(
 		name: string,
 		client: ClientSimulator,
-		readonly options?: DeviceSimulatorOptions,
+		readonly options?: FlatPanelSimulatorOptions,
 		handler: IndiClientHandler = client.handler,
 	) {
-		super(name, client, handler, DeviceInterfaceType.LIGHTBOX, 'lightbox.simulator')
-
-		for (const property of this.properties) {
-			property.device = name
-		}
-
-		this.driverInfo.elements.DRIVER_EXEC.value = 'lightbox.simulator'
+		super(name, client, handler, DeviceInterfaceType.LIGHTBOX, 'lightbox.simulator', options?.now)
+		this.configuration = flatPanelSimulatorConfig(options?.config)
+		this.#light = new FlatPanelLight(this.bus, this.configuration)
+		this.install(this.#light)
 	}
 
-	// Handles the panel brightness/intensity number command.
-	sendNumber(vector: NewNumberVector) {
-		if (vector.name === 'FLAT_LIGHT_INTENSITY' && applyNumberVectorValues(this.#intensity, vector.elements)) {
-			this.notify(this.#intensity)
-		}
+	// Whether the lamp is on.
+	get isOn() {
+		return this.#light.isOn
 	}
 
-	// Handles flat-panel switch commands: connection and light on/off.
-	sendSwitch(vector: NewSwitchVector) {
-		super.sendSwitch(vector)
-
-		switch (vector.name) {
-			case 'CONNECTION':
-				if (vector.elements.CONNECT === true) this.connect()
-				else if (vector.elements.DISCONNECT === true) this.disconnect()
-				return
-			case 'FLAT_LIGHT_CONTROL':
-				if (applyExclusiveSwitchValues(this.#light, vector.elements)) this.notify(this.#light)
-		}
-	}
-
-	// Disposes the flat-panel simulator and removes it from the manager view.
-	dispose() {
-		this.disconnect()
-		super.dispose()
+	// Brightness setting, in the controller's units.
+	get intensity() {
+		return this.#light.intensity
 	}
 }

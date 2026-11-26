@@ -12663,7 +12663,7 @@ manager.stop(cover)
 
 ### INDI Cover Simulator
 
-`CoverSimulator` is an in-process dust cap for testing observatory automation without hardware. It defines `CAP_PARK` and `CAP_ABORT` and reproduces the sequence a client sees with a real driver: a park or an unpark keeps `CAP_PARK` Busy for half a second and then reports the final position, and an abort stops the movement in place with an Alert. The cover starts open (unparked). The shared connection and configuration behaviour is in [INDI Client Simulator](#indi-client-simulator).
+`CoverSimulator` is an in-process dust cap for testing observatory automation without hardware. It defines `CAP_PARK` and `CAP_ABORT` and reproduces the sequence a client sees with a real driver: a park or an unpark keeps `CAP_PARK` Busy for half a second and then reports the final position, and an abort stops the movement in place with an Alert. The cover starts open (unparked) unless configured closed, and keeps its position across a disconnection, as a real cap does. Like the other simulators it is a set of independent circuits, each owning its INDI vectors; the initial values come from a configuration given to the constructor (`config`, merged into the defaults of its `.config` module), and a `now` option gives it a clock of its own so a test can step it with `tick()`. The shared connection and configuration behaviour is in [INDI Client Simulator](#indi-client-simulator).
 
 ```ts
 import { IndiClientHandlerSet } from 'nebulosa/src/devices/indi/client'
@@ -12837,9 +12837,9 @@ manager.park(dome)
 
 ### INDI Dome Simulator
 
-`DomeSimulator` is an in-process dome controller for testing observatory automation. Its azimuth motion and shutter transitions run on a clock from the elapsed wall time, so they are observable through the INDI vectors exactly as with a real driver. Angles are degrees on the INDI side and the speed is in RPM (one RPM is 6°/s); absolute moves take the shortest path, relative moves keep the requested direction across 0°, home and park are slews to their configured azimuths, and the shutter takes 1.5 s to open or close.
+`DomeSimulator` is an in-process dome controller for testing observatory automation. Its azimuth motion and shutter transitions run on the clock of the device, so they are observable through the INDI vectors exactly as with a real driver. Angles are degrees on the INDI side and the speed is in RPM (one RPM is 6°/s); absolute moves take the shortest path, relative moves keep the requested direction across 0°, home and park are slews to their configured azimuths, and the shutter takes 1.5 s to open or close.
 
-Given a `mountManager`, the simulator supports `DOME_AUTOSYNC`: it follows the azimuth of the telescope named by `ACTIVE_TELESCOPE`, computed from the mount's equatorial coordinate, time and site. It does not apply the off-centre geometry: the dome measurements and backlash vectors are stored but do not alter the motion. The shared connection and configuration behaviour is in [INDI Client Simulator](#indi-client-simulator).
+Given a `mountManager`, the simulator supports `DOME_AUTOSYNC`, off at power-up: it keeps the slit in front of the optical ray of the telescope named by `ACTIVE_TELESCOPE`, solved with the [dome slit geometry](#dome-slit-geometry) from the mount's coordinate, time, site and pier side and from `DOME_MEASUREMENTS`: the dome radius, the position of the mount's axes intersection relative to the dome centre, and the offset of the optical axis along the declination axis. `DM_OTA_SIDE` takes the side of the tube from the mount (the default) or fixes it east or west. With every offset zero the slit follows the azimuth of the target itself. The backlash vectors are stored only. Like the other simulators it is a set of independent circuits, each owning its INDI vectors; the initial values come from a configuration given to the constructor (`config`, merged into the defaults of its `.config` module), and a `now` option gives it a clock of its own so a test can step it with `tick()`. The shared connection and configuration behaviour is in [INDI Client Simulator](#indi-client-simulator).
 
 ```ts
 import { IndiClientHandlerSet } from 'nebulosa/src/devices/indi/client'
@@ -12925,7 +12925,7 @@ manager.slots(wheel, ['Luminance', 'Red', 'Green', 'Blue', 'Ha', 'SII', 'OIII', 
 
 ### INDI Filter Wheel Simulator
 
-`WheelSimulator` is an in-process filter wheel with eight slots named `L`, `R`, `G`, `B`, `Ha`, `SII`, `OIII` and `Dark`. A move takes a time proportional to the number of slots travelled and keeps `FILTER_SLOT` Busy meanwhile, so sequencing code sees the same timing behaviour as with a real wheel; a requested slot is rounded and clamped to the wheel. On the INDI side, and in the simulator methods, slots are 1-based. The camera simulator dims the stars with the selected filter when it snoops this wheel (see [INDI Camera Simulator](#indi-camera-simulator)).
+`WheelSimulator` is an in-process filter wheel with eight slots named `L`, `R`, `G`, `B`, `Ha`, `SII`, `OIII` and `Dark`. A move takes a time proportional to the number of slots travelled the short way round the carousel, so the last slot is one slot from the first, and keeps `FILTER_SLOT` Busy meanwhile, so sequencing code sees the same timing behaviour as with a real wheel; a requested slot is rounded and clamped to the wheel. On the INDI side, and in the simulator methods, slots are 1-based. The camera simulator dims the stars with the selected filter when it snoops this wheel (see [INDI Camera Simulator](#indi-camera-simulator)). Like the other simulators it is a set of independent circuits, each owning its INDI vectors; the initial values come from a configuration given to the constructor (`config`, merged into the defaults of its `.config` module), and a `now` option gives it a clock of its own so a test can step it with `tick()`. The slot names, and so their number, come from it.
 
 ```ts
 import { IndiClientHandlerSet } from 'nebulosa/src/devices/indi/client'
@@ -12982,7 +12982,7 @@ manager.toggle(panel)
 
 ### INDI Flat Panel Simulator
 
-`FlatPanelSimulator` is an in-process light box with an on/off switch and an intensity from 0 to 255. The changes are immediate, because a panel has no motion, so both vectors stay Idle; a requested intensity is clamped to the range, and the light switch and the intensity are independent (the light can be on at intensity 0). Both vectors are kept by `CONFIG` (see [INDI Client Simulator](#indi-client-simulator)).
+`FlatPanelSimulator` is an in-process light box with an on/off switch and an intensity from 0 to 255. The changes are immediate, because a panel has no motion, so both vectors stay Idle; a requested intensity is clamped to the range, and the light switch and the intensity are independent (the light can be on at intensity 0). `CONFIG` keeps the intensity but not the light, which a power cycle turns off (see [INDI Client Simulator](#indi-client-simulator)). Like the other simulators it is a set of independent circuits, each owning its INDI vectors; the initial values come from a configuration given to the constructor (`config`, merged into the defaults of its `.config` module), and a `now` option gives it a clock of its own so a test can step it with `tick()`.
 
 ```ts
 import { IndiClientHandlerSet } from 'nebulosa/src/devices/indi/client'
@@ -13051,9 +13051,9 @@ manager.stop(focuser)
 
 ### INDI Focuser Simulator
 
-`FocuserSimulator` is an in-process absolute focuser (0 to 100000 steps, starting at 50000, moving at 20000 steps per second) that the camera simulator reads to blur its stars, which makes it the test bed for autofocus. It also publishes a temperature, a sinusoid of 4 °C amplitude and 40 s period around the ambient temperature, and, with temperature compensation enabled, nudges the focus by a fixed number of steps per degree of drift; this is a simple model, not a calibrated focuser.
+`FocuserSimulator` is an in-process absolute focuser (0 to 100000 steps, starting at 50000, moving at 20000 steps per second) that the camera simulator reads to blur its stars, which makes it the test bed for autofocus. It also publishes a temperature, a sinusoid of 4 °C amplitude and 40 s period around the ambient temperature, and, with temperature compensation enabled, nudges the focus by a fixed number of steps per degree of drift; this is a simple model, not a calibrated focuser. Like the other simulators it is a set of independent circuits, each owning its INDI vectors; the initial values come from a configuration given to the constructor (`config`, merged into the defaults of its `.config` module), and a `now` option gives it a clock of its own so a test can step it with `tick()`.
 
-The `backlash` option models a rigid gear train with play, in steps: the reported `position` is the motor position and `effectivePosition` the optical position. On a reversal the motor first takes up the slack before the optics follow, so the optics lag by up to `backlash` steps; the loss is the same in both directions and repeated in/out cycles do not drift the optical position. A sync unloads the gear train. The standard backlash vectors of the INDI focuser interface are stored but never applied to the motion, so an algorithm under test must compensate by itself.
+The `gear.backlash` configuration, also the `SIMULATOR_BACKLASH` vector, models a rigid gear train with play, in steps: the reported `position` is the motor position and `effectivePosition` the optical position. On a reversal the motor first takes up the slack before the optics follow, so the optics lag by up to `backlash` steps; the loss is the same in both directions and repeated in/out cycles do not drift the optical position. A sync unloads the gear train. The standard backlash compensation of the INDI focuser interface acts as in a real driver: with `FOCUS_BACKLASH_TOGGLE` on, every reversal turns the motor `FOCUS_BACKLASH_STEPS` further without counting them in the position, so a compensation equal to the play lands the optics on the reported position. The reverse switch is stored only: it inverts the motor of a real controller, not the position it reports.
 
 ```ts
 import { IndiClientHandlerSet } from 'nebulosa/src/devices/indi/client'
@@ -13062,7 +13062,7 @@ import { FocuserSimulator } from 'nebulosa/src/devices/indi/simulator/focuser'
 
 // A focuser with 100 steps of gear play.
 using client = new ClientSimulator('focuser', new IndiClientHandlerSet())
-using simulator = new FocuserSimulator('Focuser Simulator', client, { backlash: 100 })
+using simulator = new FocuserSimulator('Focuser Simulator', client, { config: { gear: { backlash: 100 } } })
 simulator.connect()
 console.log(simulator.backlash) // 100
 
@@ -13484,7 +13484,7 @@ manager.stop(rotator)
 
 ### INDI Rotator Simulator
 
-`RotatorSimulator` is an in-process field rotator with an angle from 0° to 360° turning at 90° per second, which the camera simulator reads to rotate its star field. A target is wrapped to [0°, 360°) and the rotator takes the shortest way round, so a move from 350° to 10° crosses zero instead of travelling 340°. The reverse and backlash switches are only flags and do not change the simulated motion.
+`RotatorSimulator` is an in-process field rotator with an angle from 0° to 360° turning at 90° per second, which the camera simulator reads to rotate its star field. A target is wrapped to [0°, 360°) and the rotator takes the shortest way round, so a move from 350° to 10° crosses zero instead of travelling 340°. The reverse and backlash switches are only flags and do not change the simulated motion: reverse inverts the motor of a real controller, not the angle it reports, and the simulated rotator has no play. Like the other simulators it is a set of independent circuits, each owning its INDI vectors; the initial values come from a configuration given to the constructor (`config`, merged into the defaults of its `.config` module), and a `now` option gives it a clock of its own so a test can step it with `tick()`.
 
 ```ts
 import { IndiClientHandlerSet } from 'nebulosa/src/devices/indi/client'

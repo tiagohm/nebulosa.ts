@@ -1,122 +1,59 @@
-import { clamp } from '../../../math/numerical/math'
 import type { IndiClientHandler } from '../client'
 import { DeviceInterfaceType } from '../device'
-import { makeNumberVector, makeTextVector, type NewNumberVector, type NewSwitchVector, type NewTextVector } from '../types'
+import { BoardSimulator, type BoardSimulatorOptions } from './board'
 import type { ClientSimulator } from './client'
-import { FILTER_WHEEL_MOVE_TIME_MS, FILTER_WHEEL_SLOT_NAMES, MAIN_CONTROL } from './constants'
-import { DeviceSimulator } from './device'
-import type { DeviceSimulatorOptions, SimulatorProperty } from './types'
-import { applyTextVectorValues } from './util'
+import { WheelCarousel } from './wheel.carousel'
+import { type WheelSimulatorConfig, type WheelSimulatorConfigOverride, wheelSimulatorConfig } from './wheel.config'
+import { WheelNames } from './wheel.names'
 
-// Simulated filter wheel slots, names, and timed movement.
+// Simulated filter wheel: a board with the turning carousel and the filter names.
 
-// Simulated filter wheel with a fixed set of slots; models a timed move between slots.
-export class WheelSimulator extends DeviceSimulator {
+// Options of a simulated filter wheel.
+export interface WheelSimulatorOptions extends BoardSimulatorOptions {
+	// Override of DEFAULT_WHEEL_SIMULATOR_CONFIG.
+	readonly config?: WheelSimulatorConfigOverride
+}
+
+// Simulated filter wheel whose carousel turns between slots the short way round.
+export class WheelSimulator extends BoardSimulator {
 	readonly type = 'wheel'
 
-	readonly #position = makeNumberVector('', 'FILTER_SLOT', 'Slot', MAIN_CONTROL, 'rw', ['FILTER_SLOT_VALUE', 'Slot', 1, 1, FILTER_WHEEL_SLOT_NAMES.length, 1, '%.0f'])
-	readonly #names = makeTextVector('', 'FILTER_NAME', 'Filter', MAIN_CONTROL, 'rw', ...FILTER_WHEEL_SLOT_NAMES.map((e, i) => [`FILTER_SLOT_NAME_${i + 1}`, `Slot ${i + 1}`, e] as never))
+	// Configuration the wheel was built with.
+	readonly configuration: WheelSimulatorConfig
 
-	protected readonly properties: readonly SimulatorProperty[] = [this.#position, this.#names]
-	protected propertiesToNotSave: readonly SimulatorProperty[] = [this.#position]
-
-	#moveTimer?: NodeJS.Timeout
+	readonly #carousel: WheelCarousel
+	readonly #names: WheelNames
 
 	constructor(
 		name: string,
 		client: ClientSimulator,
-		readonly options?: DeviceSimulatorOptions,
+		readonly options?: WheelSimulatorOptions,
 		handler: IndiClientHandler = client.handler,
 	) {
-		super(name, client, handler, DeviceInterfaceType.FILTER, 'filterwheel.simulator')
-
-		for (const property of this.properties) {
-			property.device = name
-		}
-
-		this.driverInfo.elements.DRIVER_EXEC.value = 'filterwheel.simulator'
+		super(name, client, handler, DeviceInterfaceType.FILTER, 'filterwheel.simulator', options?.now)
+		this.configuration = wheelSimulatorConfig(options?.config)
+		this.#carousel = new WheelCarousel(this.bus, this.configuration, () => this.isConnected)
+		this.#names = new WheelNames(this.bus, this.configuration)
+		this.install(this.#carousel, this.#names)
 	}
 
-	// Handles the filter-name text command (renaming slots).
-	sendText(vector: NewTextVector) {
-		super.sendText(vector)
-
-		if (vector.name === 'FILTER_NAME' && applyTextVectorValues(this.#names, vector.elements)) {
-			this.notify(this.#names)
-		}
+	// Slot in the light path, from 1.
+	get slot() {
+		return this.#carousel.slot
 	}
 
-	// Handles the filter-slot number command (move to slot).
-	sendNumber(vector: NewNumberVector) {
-		if (vector.name === 'FILTER_SLOT' && vector.elements.FILTER_SLOT_VALUE !== undefined) {
-			this.moveTo(vector.elements.FILTER_SLOT_VALUE)
-		}
+	// Whether the carousel is turning.
+	get isMoving() {
+		return this.#carousel.isMoving
 	}
 
-	// Handles the connection switch.
-	sendSwitch(vector: NewSwitchVector) {
-		super.sendSwitch(vector)
-
-		if (vector.name === 'CONNECTION') {
-			if (vector.elements.CONNECT === true) this.connect()
-			else if (vector.elements.DISCONNECT === true) this.disconnect()
-		}
+	// Name of every slot, in slot order.
+	get names() {
+		return this.#names.names
 	}
 
-	// Disconnects the simulated filter wheel and removes its dynamic properties.
-	disconnect() {
-		if (!this.isConnected) return
-
-		if (this.#moveTimer) {
-			clearTimeout(this.#moveTimer)
-			this.#moveTimer = undefined
-		}
-
-		this.#position.state = 'Idle'
-
-		super.disconnect()
-	}
-
-	// Disposes the filter wheel simulator and removes it from the manager view.
-	dispose() {
-		this.disconnect()
-		super.dispose()
-	}
-
-	// Starts a slot change with a short time-based delay.
+	// Starts turning to `slot`.
 	moveTo(slot: number) {
-		if (!this.isConnected) return
-
-		slot = clamp(Math.round(slot), this.#position.elements.FILTER_SLOT_VALUE.min, this.#position.elements.FILTER_SLOT_VALUE.max)
-		const current = this.#position.elements.FILTER_SLOT_VALUE.value
-
-		if (slot === current) {
-			if (this.#moveTimer) {
-				clearTimeout(this.#moveTimer)
-				this.#moveTimer = undefined
-				this.#position.state = 'Idle'
-				this.notify(this.#position)
-			}
-
-			return
-		}
-
-		if (this.#moveTimer) {
-			clearTimeout(this.#moveTimer)
-			this.#moveTimer = undefined
-		}
-
-		this.#position.state = 'Busy'
-		this.notify(this.#position)
-
-		this.#moveTimer = setTimeout(
-			() => {
-				this.#moveTimer = undefined
-				this.#position.elements.FILTER_SLOT_VALUE.value = slot
-				this.#position.state = 'Idle'
-				this.notify(this.#position)
-			},
-			Math.max(150, Math.abs(slot - current) * FILTER_WHEEL_MOVE_TIME_MS),
-		)
+		this.#carousel.moveTo(slot)
 	}
 }

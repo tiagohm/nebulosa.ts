@@ -1,69 +1,34 @@
-import { TAU } from '../../../core/constants'
-import { clamp } from '../../../math/numerical/math'
-import { normalizeAngle } from '../../../math/units/angle'
 import type { IndiClientHandler } from '../client'
 import { DeviceInterfaceType } from '../device'
-import { makeNumberVector, makeSwitchVector, type NewNumberVector, type NewSwitchVector } from '../types'
+import { BoardSimulator, type BoardSimulatorOptions } from './board'
 import type { ClientSimulator } from './client'
-import { CAMERA_AMBIENT_TEMPERATURE, FOCUSER_INITIAL_POSITION, FOCUSER_MAX_POSITION, FOCUSER_MOVE_RATE, FOCUSER_TEMPERATURE_AMPLITUDE, FOCUSER_TEMPERATURE_COMPENSATION_HYSTERESIS, FOCUSER_TEMPERATURE_COMPENSATION_STEPS, FOCUSER_TEMPERATURE_PERIOD_SECONDS, MAIN_CONTROL, SIMULATION, TICK_INTERVAL_MS } from './constants'
-import { DeviceSimulator } from './device'
-import type { DeviceSimulatorOptions, SimulatorProperty } from './types'
-import { applyExclusiveSwitchValues, applyNumberVectorValues } from './util'
+import { FocuserCompensation } from './focuser.compensation'
+import { type FocuserSimulatorConfig, type FocuserSimulatorConfigOverride, focuserSimulatorConfig } from './focuser.config'
+import { FocuserDrive } from './focuser.drive'
+import { FocuserGear } from './focuser.gear'
+import { FocuserThermometer } from './focuser.thermometer'
 
-// Simulated focuser motion, mechanical backlash, ambient temperature, and temperature compensation. The standard
-// driver backlash compensation properties are published and stored but never applied, so a client can be tested
-// against a driver that reports one.
-//
-// Backlash is the play of a rigid gear train, in steps: a single gap between the motor and the optical drawtube, the
-// same transmission model as the mount axes in mount.axis.ts without stiction. A reversal moves the open slack to the
-// other flank, so it costs the full gap (or the complement of a partly closed one) in either direction, and the motor
-// to optics offset only swings across one interval as wide as the backlash (containing zero after a sync, shifted by a
-// later change of the backlash). Repeated IN/OUT cycles therefore never drift the optics.
+// Simulated focuser: a board with the motor, the gear train and its compensation, the temperature probe
+// and the temperature compensation. Positions are motor steps and temperatures °C.
 
-// Direction the gear train is loaded in, with zero denoting a mechanism that has not yet engaged either flank.
-type FocuserAxisDirection = -1 | 0 | 1
-
-// Configures persistence and gear play for a simulated focuser.
-export interface FocuserSimulatorOptions extends DeviceSimulatorOptions {
-	// Total play of the gear train, in steps (non-negative). A full reversal in either direction consumes this much
-	// motor travel before the optical position moves again.
-	readonly backlash?: number
+// Options of a simulated focuser.
+export interface FocuserSimulatorOptions extends BoardSimulatorOptions {
+	// Override of DEFAULT_FOCUSER_SIMULATOR_CONFIG.
+	readonly config?: FocuserSimulatorConfigOverride
 }
 
-// Simulated focuser. Models absolute/relative moves at a fixed rate, a sinusoidal temperature,
-// gear backlash, and temperature compensation, advancing the position each tick. The reverse
-// switch is kept but, as on a real controller, only inverts the motor and not the reported position.
-export class FocuserSimulator extends DeviceSimulator {
+// Simulated focuser with absolute and relative moves at a fixed rate, gear play the driver can
+// compensate, a swinging ambient temperature and temperature compensation.
+export class FocuserSimulator extends BoardSimulator {
 	readonly type = 'focuser'
 
-	readonly #position = makeNumberVector('', 'ABS_FOCUS_POSITION', 'Position', MAIN_CONTROL, 'rw', ['FOCUS_ABSOLUTE_POSITION', 'Position', FOCUSER_INITIAL_POSITION, 0, FOCUSER_MAX_POSITION, 1, '%.0f'])
-	readonly #relativePosition = makeNumberVector('', 'REL_FOCUS_POSITION', 'Relative', MAIN_CONTROL, 'rw', ['FOCUS_RELATIVE_POSITION', 'Steps', 0, 0, FOCUSER_MAX_POSITION, 1, '%.0f'])
-	readonly #motion = makeSwitchVector('', 'FOCUS_MOTION', 'Motion', MAIN_CONTROL, 'OneOfMany', 'rw', ['FOCUS_INWARD', 'Inward', false], ['FOCUS_OUTWARD', 'Outward', true])
-	readonly #abort = makeSwitchVector('', 'FOCUS_ABORT_MOTION', 'Abort', MAIN_CONTROL, 'AtMostOne', 'rw', ['ABORT', 'Abort', false])
-	readonly #reverse = makeSwitchVector('', 'FOCUS_REVERSE_MOTION', 'Reverse', MAIN_CONTROL, 'OneOfMany', 'rw', ['INDI_ENABLED', 'Enabled', false], ['INDI_DISABLED', 'Disabled', true])
-	readonly #sync = makeNumberVector('', 'FOCUS_SYNC', 'Sync', MAIN_CONTROL, 'rw', ['FOCUS_SYNC_VALUE', 'Position', FOCUSER_INITIAL_POSITION, 0, FOCUSER_MAX_POSITION, 1, '%.0f'])
-	readonly #temperature = makeNumberVector('', 'FOCUS_TEMPERATURE', 'Temperature', MAIN_CONTROL, 'ro', ['TEMPERATURE', 'Temperature', CAMERA_AMBIENT_TEMPERATURE, -50, 70, 0.1, '%6.2f'])
-	readonly #temperatureCompensation = makeSwitchVector('', 'FOCUS_TEMPERATURE_COMPENSATION', 'Temperature Compensation', MAIN_CONTROL, 'OneOfMany', 'rw', ['INDI_ENABLED', 'On', false], ['INDI_DISABLED', 'Off', true])
-	readonly #backlash = makeNumberVector('', 'SIMULATOR_BACKLASH', 'Backlash', SIMULATION, 'rw', ['BACKLASH', 'Play (steps)', 0, 0, FOCUSER_MAX_POSITION, 1, '%.0f'])
+	// Configuration the focuser was built with.
+	readonly configuration: FocuserSimulatorConfig
 
-	// Standard driver backlash compensation switch, stored only: the simulated mechanics never apply it.
-	readonly #driverBacklashToggle = makeSwitchVector('', 'FOCUS_BACKLASH_TOGGLE', 'Backlash', MAIN_CONTROL, 'OneOfMany', 'rw', ['INDI_ENABLED', 'Enabled', false], ['INDI_DISABLED', 'Disabled', true])
-	// Standard driver backlash compensation amount, in steps, stored only.
-	readonly #driverBacklashSteps = makeNumberVector('', 'FOCUS_BACKLASH_STEPS', 'Backlash steps', MAIN_CONTROL, 'rw', ['FOCUS_BACKLASH_VALUE', 'Steps', 0, 0, 1000, 1, '%.0f'])
-
-	protected readonly properties: readonly SimulatorProperty[] = [this.#position, this.#relativePosition, this.#motion, this.#abort, this.#reverse, this.#sync, this.#temperature, this.#temperatureCompensation, this.#backlash, this.#driverBacklashToggle, this.#driverBacklashSteps]
-	protected propertiesToNotSave: readonly SimulatorProperty[] = this.properties.filter((e) => e !== this.#reverse && e !== this.#motion && e !== this.#backlash)
-
-	#timer?: NodeJS.Timeout
-	#lastTick = 0
-	#targetPosition?: number
-	#effectivePosition = FOCUSER_INITIAL_POSITION
-	// Flank the gear train is loaded on, or zero when unloaded (initially and after a sync).
-	#loadDirection: FocuserAxisDirection = 0
-	// Slack still to be taken up in the load direction before the optics move, in steps within [0, backlash].
-	#slackRemaining = 0
-	#temperaturePhase = 0
-	#lastCompensationTemperature = CAMERA_AMBIENT_TEMPERATURE
+	readonly #drive: FocuserDrive
+	readonly #gear: FocuserGear
+	readonly #thermometer: FocuserThermometer
+	readonly #compensation: FocuserCompensation
 
 	constructor(
 		name: string,
@@ -71,307 +36,64 @@ export class FocuserSimulator extends DeviceSimulator {
 		readonly options?: FocuserSimulatorOptions,
 		handler: IndiClientHandler = client.handler,
 	) {
-		super(name, client, handler, DeviceInterfaceType.FOCUSER, 'focuser.simulator')
-		this.#backlash.elements.BACKLASH.value = options?.backlash ?? 0
-
-		for (const property of this.properties) {
-			property.device = name
-		}
-
-		this.driverInfo.elements.DRIVER_EXEC.value = 'focuser.simulator'
+		super(name, client, handler, DeviceInterfaceType.FOCUSER, 'focuser.simulator', options?.now)
+		const config = focuserSimulatorConfig(options?.config)
+		this.configuration = config
+		this.#gear = new FocuserGear(this.bus, config.gear, config.drive)
+		this.#drive = new FocuserDrive(this.bus, config.drive, this.#gear, () => this.isConnected)
+		this.#thermometer = new FocuserThermometer(this.bus, config.thermometer)
+		this.#compensation = new FocuserCompensation(this.bus, config.compensation, this.#thermometer, this.#drive)
+		// The temperature is read before it is compensated, and both before the motor turns.
+		this.install(this.#thermometer, this.#compensation, this.#drive, this.#gear)
 	}
 
-	// Current absolute position (steps).
+	// Counted position of the motor, steps.
 	get position() {
-		return this.#position.elements.FOCUS_ABSOLUTE_POSITION.value
+		return this.#drive.position
 	}
 
-	// Current effective optical position after the gear play is applied, in steps. Since a sync it differs from the motor
-	// position by at most the backlash (while the backlash is unchanged), so it can lie up to that many steps outside the
-	// motor range at the travel limits.
+	// Position of the optics after the gear play, steps.
 	get effectivePosition() {
-		return this.#effectivePosition
+		return this.#gear.effectivePosition
 	}
 
-	// Configured total play of the gear train, in steps.
+	// Play of the gear train, steps.
 	get backlash() {
-		return this.#backlash.elements.BACKLASH.value
+		return this.#gear.backlash
 	}
 
 	// Whether a move is in progress.
 	get isMoving() {
-		return this.#position.state === 'Busy'
+		return this.#drive.isMoving
 	}
 
-	// Whether temperature compensation is enabled.
+	// Whether temperature compensation is on.
 	get isTemperatureCompensationEnabled() {
-		return this.#temperatureCompensation.elements.INDI_ENABLED.value
+		return this.#compensation.enabled
 	}
 
-	// Current temperature (degrees Celsius).
+	// Temperature of the probe, °C.
 	get temperature() {
-		return this.#temperature.elements.TEMPERATURE.value
+		return this.#thermometer.temperature
 	}
 
-	// Handles focuser number commands: absolute/relative move, sync to a position, and the backlash amount.
-	sendNumber(vector: NewNumberVector) {
-		switch (vector.name) {
-			case 'ABS_FOCUS_POSITION':
-				if (vector.elements.FOCUS_ABSOLUTE_POSITION !== undefined) this.moveTo(vector.elements.FOCUS_ABSOLUTE_POSITION)
-				return
-			case 'REL_FOCUS_POSITION':
-				if (vector.elements.FOCUS_RELATIVE_POSITION !== undefined) this.moveRelative(vector.elements.FOCUS_RELATIVE_POSITION)
-				return
-			case 'FOCUS_SYNC':
-				if (vector.elements.FOCUS_SYNC_VALUE !== undefined) this.syncTo(vector.elements.FOCUS_SYNC_VALUE)
-				return
-			case 'SIMULATOR_BACKLASH':
-				if (applyNumberVectorValues(this.#backlash, vector.elements)) {
-					// The open slack cannot exceed the gap the gear now has, or a shrunk play would still be ground through.
-					this.#slackRemaining = Math.min(this.#slackRemaining, this.backlash)
-					this.notify(this.#backlash)
-				}
-
-				return
-			case 'FOCUS_BACKLASH_STEPS':
-				if (applyNumberVectorValues(this.#driverBacklashSteps, vector.elements)) this.notify(this.#driverBacklashSteps)
-		}
-	}
-
-	// Handles focuser switch commands: connection, motion direction, abort, reverse, temperature compensation
-	// toggle, and driver backlash toggle.
-	sendSwitch(vector: NewSwitchVector) {
-		super.sendSwitch(vector)
-
-		switch (vector.name) {
-			case 'CONNECTION':
-				if (vector.elements.CONNECT === true) this.connect()
-				else if (vector.elements.DISCONNECT === true) this.disconnect()
-				return
-			case 'FOCUS_MOTION':
-				if (applyExclusiveSwitchValues(this.#motion, vector.elements)) this.notify(this.#motion)
-				return
-			case 'FOCUS_ABORT_MOTION':
-				if (vector.elements.ABORT === true) this.stop()
-				return
-			case 'FOCUS_REVERSE_MOTION':
-				if (applyExclusiveSwitchValues(this.#reverse, vector.elements)) this.notify(this.#reverse)
-				return
-			case 'FOCUS_TEMPERATURE_COMPENSATION':
-				if (applyExclusiveSwitchValues(this.#temperatureCompensation, vector.elements)) {
-					this.#lastCompensationTemperature = this.temperature
-					this.notify(this.#temperatureCompensation)
-				}
-
-				return
-			case 'FOCUS_BACKLASH_TOGGLE':
-				if (applyExclusiveSwitchValues(this.#driverBacklashToggle, vector.elements)) this.notify(this.#driverBacklashToggle)
-		}
-	}
-
-	// Connects the simulated focuser and publishes its supported properties.
-	connect() {
-		if (this.#timer) return
-
-		super.connect()
-
-		if (!this.isConnected) return
-
-		this.#lastTick = Date.now()
-		this.#lastCompensationTemperature = this.temperature
-		this.#timer = setInterval(this.#tick.bind(this), TICK_INTERVAL_MS)
-	}
-
-	// Disconnects the simulated focuser and removes its dynamic properties.
-	disconnect() {
-		if (!this.#timer) return
-
-		clearInterval(this.#timer)
-		this.#timer = undefined
-		this.stop(false)
-
-		super.disconnect()
-	}
-
-	// Disposes the focuser simulator and removes it from the manager view.
-	dispose() {
-		this.disconnect()
-		super.dispose()
-	}
-
-	// Starts an absolute focuser move.
+	// Starts a move to `position`, steps.
 	moveTo(position: number) {
-		if (!this.isConnected) return
-
-		position = clamp(position, this.#position.elements.FOCUS_ABSOLUTE_POSITION.min, this.#position.elements.FOCUS_ABSOLUTE_POSITION.max)
-
-		if (position === this.position) {
-			this.stop(false)
-			return
-		}
-
-		this.#targetPosition = position
-		this.#relativePosition.elements.FOCUS_RELATIVE_POSITION.value = Math.abs(position - this.position)
-		this.#setMoving(true)
+		this.#drive.moveTo(position)
 	}
 
-	// Starts a relative move using the selected motion direction.
+	// Starts a move of `steps` in the selected direction.
 	moveRelative(steps: number) {
-		if (!this.isConnected || steps <= 0) return
-
-		const direction = this.#relativeDirection()
-		const target = clamp(this.position + steps * direction, this.#position.elements.FOCUS_ABSOLUTE_POSITION.min, this.#position.elements.FOCUS_ABSOLUTE_POSITION.max)
-		if (target === this.position) return
-
-		this.#relativePosition.elements.FOCUS_RELATIVE_POSITION.value = Math.abs(target - this.position)
-		this.#targetPosition = target
-		this.#setMoving(true)
+		this.#drive.moveRelative(steps)
 	}
 
-	// Applies a sync immediately without any slew time.
+	// Rewrites the position without moving.
 	syncTo(position: number) {
-		if (!this.isConnected) return
-
-		position = clamp(position, this.#position.elements.FOCUS_ABSOLUTE_POSITION.min, this.#position.elements.FOCUS_ABSOLUTE_POSITION.max)
-		this.#sync.elements.FOCUS_SYNC_VALUE.value = position
-		this.#position.elements.FOCUS_ABSOLUTE_POSITION.value = position
-		this.#effectivePosition = position
-		this.#loadDirection = 0
-		this.#slackRemaining = 0
-		this.#relativePosition.elements.FOCUS_RELATIVE_POSITION.value = 0
-		this.stop(false)
-		this.notify(this.#sync)
-		this.notify(this.#position)
+		this.#drive.syncTo(position)
 	}
 
-	// Aborts the active move and leaves the focuser at its current position.
+	// Stops the motor, Alert when `alert`.
 	stop(alert: boolean = true) {
-		const wasMoving = this.isMoving
-		this.#targetPosition = undefined
-		this.#relativePosition.elements.FOCUS_RELATIVE_POSITION.value = 0
-		this.#setMoving(false, alert && wasMoving)
-
-		if (alert && wasMoving) {
-			this.#abort.elements.ABORT.value = true
-			this.notify(this.#abort)
-			this.#abort.elements.ABORT.value = false
-		}
-	}
-
-	// Advances the focuser position toward the requested target.
-	#tick() {
-		const now = Date.now()
-		const dtSeconds = Math.max(0, (now - this.#lastTick) / 1000)
-		this.#lastTick = now
-
-		if (dtSeconds <= 0) return
-
-		this.#advanceTemperature(dtSeconds)
-		this.#applyTemperatureCompensation()
-
-		if (this.#targetPosition === undefined) return
-
-		const current = this.position
-		const delta = this.#targetPosition - current
-		const step = FOCUSER_MOVE_RATE * dtSeconds
-
-		if (Math.abs(delta) <= step) {
-			this.#advanceEffectivePosition(delta)
-			this.#position.elements.FOCUS_ABSOLUTE_POSITION.value = this.#targetPosition
-			this.#relativePosition.elements.FOCUS_RELATIVE_POSITION.value = 0
-			this.#targetPosition = undefined
-			this.#setMoving(false)
-			this.notify(this.#position)
-			this.notify(this.#relativePosition)
-			return
-		}
-
-		const next = current + Math.sign(delta) * step
-		this.#advanceEffectivePosition(next - current)
-		this.#position.elements.FOCUS_ABSOLUTE_POSITION.value = next
-		this.#relativePosition.elements.FOCUS_RELATIVE_POSITION.value = Math.abs(this.#targetPosition - next)
-		this.notify(this.#position)
-		this.notify(this.#relativePosition)
-	}
-
-	// Applies signed motor travel, in steps, to the effective optical position through the gear play. An unloaded train
-	// engages immediately; a reversal leaves open the complement of the slack still open on the previous flank; the
-	// motor then closes that slack before the remainder of the travel reaches the optics. Splitting a move across ticks
-	// gives the same result as applying it at once.
-	#advanceEffectivePosition(travel: number) {
-		if (travel === 0) return
-
-		const direction = Math.sign(travel) as Exclude<FocuserAxisDirection, 0>
-
-		if (this.#loadDirection !== direction) {
-			this.#slackRemaining = this.#loadDirection === 0 ? 0 : this.backlash - this.#slackRemaining
-			this.#loadDirection = direction
-		}
-
-		const distance = Math.abs(travel)
-		const closed = Math.min(distance, this.#slackRemaining)
-		this.#slackRemaining -= closed
-		this.#effectivePosition += direction * (distance - closed)
-	}
-
-	// Updates the moving state reflected by both focuser motion vectors.
-	#setMoving(moving: boolean, alert: boolean = false) {
-		const state = alert ? 'Alert' : moving ? 'Busy' : 'Idle'
-		let updated = false
-
-		if (this.#position.state !== state) {
-			this.#position.state = state
-			updated = true
-		}
-
-		if (this.#relativePosition.state !== state) {
-			this.#relativePosition.state = state
-			updated = true
-		}
-
-		if (updated) {
-			this.notify(this.#position)
-			this.notify(this.#relativePosition)
-		}
-	}
-
-	// Resolves the current relative-motion direction of the position counter. Reverse mode is ignored: it
-	// inverts the motor of a real controller so that inward still decreases the position, which is what the
-	// INDI focuser interface assumes when it bounds a relative move against the absolute range.
-	#relativeDirection() {
-		return this.#motion.elements.FOCUS_INWARD.value ? -1 : 1
-	}
-
-	// Advances the simulated ambient temperature with a smooth periodic waveform.
-	#advanceTemperature(dtSeconds: number) {
-		this.#temperaturePhase = normalizeAngle(this.#temperaturePhase + (dtSeconds * TAU) / FOCUSER_TEMPERATURE_PERIOD_SECONDS)
-		const next = CAMERA_AMBIENT_TEMPERATURE + Math.sin(this.#temperaturePhase) * FOCUSER_TEMPERATURE_AMPLITUDE
-
-		if (Math.abs(next - this.temperature) >= 0.1) {
-			this.#temperature.elements.TEMPERATURE.value = next
-			this.notify(this.#temperature)
-		}
-	}
-
-	// Applies a simple temperature-compensation model by nudging focus position as ambient temperature drifts.
-	#applyTemperatureCompensation() {
-		if (!this.isTemperatureCompensationEnabled || this.isMoving) {
-			this.#lastCompensationTemperature = this.temperature
-			return
-		}
-
-		const delta = this.temperature - this.#lastCompensationTemperature
-		if (Math.abs(delta) < FOCUSER_TEMPERATURE_COMPENSATION_HYSTERESIS) return
-
-		const steps = Math.trunc(delta * FOCUSER_TEMPERATURE_COMPENSATION_STEPS)
-		this.#lastCompensationTemperature = this.temperature
-		if (steps === 0) return
-
-		const target = clamp(this.position + steps, this.#position.elements.FOCUS_ABSOLUTE_POSITION.min, this.#position.elements.FOCUS_ABSOLUTE_POSITION.max)
-		if (target === this.position) return
-
-		this.#relativePosition.elements.FOCUS_RELATIVE_POSITION.value = Math.abs(target - this.position)
-		this.#targetPosition = target
-		this.#setMoving(true)
+		this.#drive.abort(alert)
 	}
 }

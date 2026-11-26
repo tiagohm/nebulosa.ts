@@ -1,119 +1,61 @@
 import type { IndiClientHandler } from '../client'
 import { DeviceInterfaceType } from '../device'
-import { makeSwitchVector, type NewNumberVector, type NewSwitchVector, selectOnSwitch } from '../types'
+import { BoardSimulator, type BoardSimulatorOptions } from './board'
 import type { ClientSimulator } from './client'
-import { COVER_MOVE_TIME_MS, MAIN_CONTROL } from './constants'
-import { DeviceSimulator } from './device'
-import type { DeviceSimulatorOptions, SimulatorProperty } from './types'
+import { CoverCap } from './cover.cap'
+import { type CoverSimulatorConfig, type CoverSimulatorConfigOverride, coverSimulatorConfig } from './cover.config'
 
-// Simulated telescope cover parking, unparking, and abort behavior.
+// Simulated telescope dust cap: a board with the motorized cap.
 
-// Simulated telescope cover/dust cap; models a timed open (unpark)/close (park) with abort.
-export class CoverSimulator extends DeviceSimulator {
+// Options of a simulated dust cap.
+export interface CoverSimulatorOptions extends BoardSimulatorOptions {
+	// Override of DEFAULT_COVER_SIMULATOR_CONFIG.
+	readonly config?: CoverSimulatorConfigOverride
+}
+
+// Simulated telescope cover that opens (unparks) and closes (parks) over a fixed time, with abort.
+export class CoverSimulator extends BoardSimulator {
 	readonly type = 'cover'
 
-	readonly #park = makeSwitchVector('', 'CAP_PARK', 'Park', MAIN_CONTROL, 'OneOfMany', 'rw', ['PARK', 'Park', false], ['UNPARK', 'Unpark', true])
-	readonly #abort = makeSwitchVector('', 'CAP_ABORT', 'Abort', MAIN_CONTROL, 'AtMostOne', 'rw', ['ABORT', 'Abort', false])
+	// Configuration the cap was built with.
+	readonly configuration: CoverSimulatorConfig
 
-	protected readonly properties: readonly SimulatorProperty[] = [this.#park, this.#abort]
-	protected propertiesToNotSave: readonly SimulatorProperty[] = this.properties
-
-	#moveTimer?: NodeJS.Timeout
+	readonly #cap: CoverCap
 
 	constructor(
 		name: string,
 		client: ClientSimulator,
-		readonly options?: DeviceSimulatorOptions,
+		readonly options?: CoverSimulatorOptions,
 		handler: IndiClientHandler = client.handler,
 	) {
-		super(name, client, handler, DeviceInterfaceType.DUSTCAP, 'dustcap.simulator')
-
-		for (const property of this.properties) {
-			property.device = name
-		}
-
-		this.driverInfo.elements.DRIVER_EXEC.value = 'dustcap.simulator'
+		super(name, client, handler, DeviceInterfaceType.DUSTCAP, 'dustcap.simulator', options?.now)
+		this.configuration = coverSimulatorConfig(options?.config)
+		this.#cap = new CoverCap(this.bus, this.configuration, () => this.isConnected)
+		this.install(this.#cap)
 	}
 
-	// The cover has no number properties.
-	sendNumber(vector: NewNumberVector) {}
-
-	// Handles cover switch commands: connection, park (close)/unpark (open), and abort.
-	sendSwitch(vector: NewSwitchVector) {
-		super.sendSwitch(vector)
-
-		switch (vector.name) {
-			case 'CONNECTION':
-				if (vector.elements.CONNECT === true) this.connect()
-				else if (vector.elements.DISCONNECT === true) this.disconnect()
-				return
-			case 'CAP_PARK':
-				if (vector.elements.PARK === true) this.park()
-				else if (vector.elements.UNPARK === true) this.unpark()
-				return
-			case 'CAP_ABORT':
-				if (vector.elements.ABORT === true) this.stop()
-		}
+	// Whether the cap is closed.
+	get isParked() {
+		return this.#cap.isParked
 	}
 
-	// Disconnects the simulated dust cap and removes its dynamic properties.
-	disconnect() {
-		if (!this.isConnected) return
-
-		this.stop(false)
-		super.disconnect()
+	// Whether the cap is opening or closing.
+	get isMoving() {
+		return this.#cap.isMoving
 	}
 
-	// Disposes the dust-cap simulator and removes it from the manager view.
-	dispose() {
-		this.disconnect()
-		super.dispose()
-	}
-
-	// Starts closing the dust cap.
+	// Starts closing the cap.
 	park() {
-		if (!this.isConnected || this.#park.state === 'Busy' || this.#park.elements.PARK.value) return
-		this.#startParkTransition(true)
+		this.#cap.park()
 	}
 
-	// Starts opening the dust cap.
+	// Starts opening the cap.
 	unpark() {
-		if (!this.isConnected || this.#park.state === 'Busy' || this.#park.elements.UNPARK.value) return
-		this.#startParkTransition(false)
+		this.#cap.unpark()
 	}
 
-	// Stops any active cap transition.
+	// Stops a running transition, Alert when `alert`.
 	stop(alert: boolean = true) {
-		const wasMoving = this.#moveTimer !== undefined
-
-		if (this.#moveTimer) {
-			clearTimeout(this.#moveTimer)
-			this.#moveTimer = undefined
-		}
-
-		if (this.#park.state !== 'Idle') {
-			this.#park.state = alert && wasMoving ? 'Alert' : 'Idle'
-			this.notify(this.#park)
-		}
-
-		if (alert && wasMoving) {
-			this.#abort.elements.ABORT.value = true
-			this.notify(this.#abort)
-			this.#abort.elements.ABORT.value = false
-		}
-	}
-
-	// Schedules the cap open or close transition.
-	#startParkTransition(parked: boolean) {
-		this.stop(false)
-		this.#park.state = 'Busy'
-		this.notify(this.#park)
-
-		this.#moveTimer = setTimeout(() => {
-			this.#moveTimer = undefined
-			selectOnSwitch(this.#park, parked ? 'PARK' : 'UNPARK')
-			this.#park.state = 'Idle'
-			this.notify(this.#park)
-		}, COVER_MOVE_TIME_MS)
+		this.#cap.abort(alert)
 	}
 }

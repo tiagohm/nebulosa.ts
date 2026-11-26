@@ -57,31 +57,6 @@ export const CAMERA_BLOB_PADDING = 16384
 // stars. Past this cap the trailing edge of a displaced field thins out, which is an acceptable
 // trade for an error already far larger than the sensor itself.
 export const CAMERA_MAX_SCENE_MARGIN = 1024
-// Simulated focuser: travel range and initial position (steps), move rate (steps/second), and the
-// temperature model (amplitude °C, period s) plus temperature-compensation gain (steps) and hysteresis (°C).
-export const FOCUSER_MAX_POSITION = 100000
-export const FOCUSER_INITIAL_POSITION = 50000
-export const FOCUSER_MOVE_RATE = 20000
-export const FOCUSER_TEMPERATURE_AMPLITUDE = 4
-export const FOCUSER_TEMPERATURE_PERIOD_SECONDS = 40
-export const FOCUSER_TEMPERATURE_COMPENSATION_STEPS = -250
-export const FOCUSER_TEMPERATURE_COMPENSATION_HYSTERESIS = 0.05
-// Simulated filter wheel slot labels and per-slot move time (ms).
-export const FILTER_WHEEL_SLOT_NAMES = ['L', 'R', 'G', 'B', 'Ha', 'SII', 'OIII', 'Dark'] as const
-export const FILTER_WHEEL_MOVE_TIME_MS = 250
-// Simulated rotator slew rate (degrees/second).
-export const ROTATOR_MOVE_RATE = 90
-// Simulated dome rotation speed limits (RPM) and shutter transition duration.
-export const DOME_DEFAULT_SPEED_RPM = 6
-export const DOME_MIN_SPEED_RPM = 0.1
-export const DOME_MAX_SPEED_RPM = 12
-export const DOME_SHUTTER_MOVE_TIME_MS = 1500
-// Simulated dome home and park azimuths (degrees).
-export const DOME_DEFAULT_HOME_AZIMUTH = 0
-export const DOME_DEFAULT_PARK_AZIMUTH = 180
-// Simulated cover open/close time (ms) and flat-panel maximum intensity.
-export const COVER_MOVE_TIME_MS = 500
-export const PANEL_MAX_INTENSITY = 255
 // Simulated weather station driver re-read period (seconds): default plus the range advertised on
 // WEATHER_UPDATE. The simulator only stores the value; it schedules nothing from it.
 export const WEATHER_DEFAULT_UPDATE_PERIOD = 60

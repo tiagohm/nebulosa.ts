@@ -92,12 +92,13 @@ describe.skipIf(SKIP)('dome simulator', () => {
 		await waitUntil(() => dome.backlashEnabled)
 		manager.backlashSteps(dome, 14)
 		await waitUntil(() => dome.backlash.value === 14)
-		client.sendSwitch({ device: dome.name, name: 'DM_OTA_SIDE', elements: { DM_OTA_EAST: true } })
+		client.sendSwitch({ device: dome.name, name: 'DM_OTA_SIDE', elements: { DM_OTA_SIDE_EAST: true } })
 		await waitUntil(() => dome.measurements.otaSide === 'EAST')
 
 		manager.openShutter(dome)
 		await waitUntil(() => dome.shutterState === 'OPENING')
-		expect(dome.slewing).toBeFalse()
+		// Like the ASCOM Slewing property, a moving shutter counts as the dome moving.
+		expect(dome.slewing).toBeTrue()
 		await waitUntil(() => dome.shutterState === 'OPEN', 2500)
 		await waitUntil(() => !dome.slewing)
 
@@ -213,6 +214,6 @@ describe.skipIf(SKIP)('dome simulator', () => {
 
 		simulator.saveProperties()
 
-		expect(saved).toEqual(['DOME_SPEED', 'DOME_PARAMS', 'DOME_AUTOSYNC', 'DOME_PARK_POSITION', 'DOME_BACKLASH_TOGGLE', 'DOME_BACKLASH_STEPS', 'DOME_MEASUREMENTS', 'DM_OTA_SIDE'])
+		expect(saved).toEqual(['DOME_SPEED', 'DOME_PARAMS', 'DOME_PARK_POSITION', 'DOME_MEASUREMENTS', 'DM_OTA_SIDE', 'DOME_BACKLASH_TOGGLE', 'DOME_BACKLASH_STEPS'])
 	})
 })
