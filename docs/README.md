@@ -12531,7 +12531,7 @@ manager.disableBlob(camera)
 
 Imaging software (calibration, stacking, plate solving, autofocus, guiding) needs images whose content is known and reproducible, which a real sky never gives. `CameraSimulator` is an in-process INDI camera that renders physically plausible frames: a 16-bit sensor of 1280 × 1024 pixels of 5.2 µm with a cooler, the full CCD vector set of a real driver, and the image delivered as a FITS or XISF `CCD1` BLOB with its header.
 
-The frame types differ as in a real camera: a bias holds only the offset and the read noise, a dark adds a dark current that grows with the sensor temperature (doubling over a fixed interval), a flat is a vignetted illumination with dust and banding, and a light adds the sky background, the stars and optional moon, light pollution and amp glow. Star fluxes and sky level scale linearly with the exposure time, and an exposure lasts its real duration. The stars come from a seeded random field or from a catalog projected through the pointing of the snooped mount; the star profile follows the snooped focuser position (so autofocus has a real V-curve), the field turns with the rotator, the filter dims the flux, and the stars trail along the recorded path of the mount during the exposure, so mount errors from [INDI Mount Simulator](#indi-mount-simulator) appear in the image. The scene, the noise and the optical aberrations are tuned through simulator-only INDI vectors, so any INDI client can change them; the shared connection and configuration behaviour is in [INDI Client Simulator](#indi-client-simulator).
+The frame types differ as in a real camera: a bias holds only the offset and the read noise, a dark adds a dark current that grows with the sensor temperature (doubling over a fixed interval), a flat is a vignetted illumination with dust and banding, and a light adds the sky background, the stars and optional moon, light pollution and amp glow. Star fluxes and sky level scale linearly with the exposure time, and an exposure lasts its real duration. The stars come from a seeded random field or from a catalog, both with fixed J2000 coordinates, projected around the boresight of the snooped mount; the star profile follows the snooped focuser position (so autofocus has a real V-curve), the filter dims the flux, and the stars trail along the path the mount recorded during the exposure, read at a few instants evenly spaced in time, each stretch carrying its share of the light, so mount errors from [INDI Mount Simulator](#indi-mount-simulator) appear in the image. The sensor is fixed to the tube: the field turns with the rotator, and with the right-ascension axis about the mount's own polar axis, half a turn across a meridian flip, so a camera-based polar alignment sees the field rotate about the misaligned axis rather than the celestial pole. The scene and the orientation ignore aberration and refraction, which a polar alignment computed with refraction sees as an offset of the axis of a few arcminutes. The camera is a set of independent circuits (sensor, readout, cooler, shutter, guide port, optics, star model, sky, noise, flat field and output), each owning its INDI vectors: the parameters an operator tunes are simulator-only vectors any INDI client can change, and the fixed ones are a configuration given to the constructor; the shared connection and configuration behaviour is in [INDI Client Simulator](#indi-client-simulator).
 
 ```ts
 import { IndiClientHandlerSet } from 'nebulosa/src/devices/indi/client'
@@ -12550,7 +12550,8 @@ handler.add(cameras)
 // The camera reads the snooped devices through their managers: here the field centre follows the mount.
 using client = new ClientSimulator('camera', handler)
 using mount = new MountSimulator('Mount Simulator', client)
-using simulator = new CameraSimulator('Camera Simulator', client, { mountManager: mounts, focalLength: 500, aperture: 80 })
+// The configuration overrides the defaults section by section: here the optics, in mm.
+using simulator = new CameraSimulator('Camera Simulator', client, { mountManager: mounts, config: { optics: { focalLength: 500, aperture: 80 } } })
 mount.connect()
 simulator.connect()
 client.sendText({ device: simulator.name, name: 'ACTIVE_DEVICES', elements: { ACTIVE_TELESCOPE: mount.name } })
@@ -12564,11 +12565,11 @@ simulator.setBin(2, 2)
 simulator.setTargetTemperature(-10)
 console.log(simulator.imageWidth, simulator.imageHeight) // 128 128 (binned pixels)
 
-// What the next frame is rendered from: the sensor, the snooped mount and its centre (radians), and the scene.
-console.log(simulator.sensorWidth, simulator.sensorHeight, simulator.frameType, simulator.cfaPattern, simulator.channels)
-// activeMountSimulator is the simulator behind the mount, and sceneTime the instant of its simulated clock.
-console.log(simulator.activeMount?.name, simulator.reportedCenter, simulator.sceneTime, simulator.activeFocuser, simulator.activeRotator, simulator.activeFilter)
-console.log(simulator.catalogSourceType, simulator.seeing, simulator.telescopeFocalLength, simulator.telescopeAperture) // focal length and aperture in mm
+// What the next frame is rendered from: the sensor, the snooped devices, the scene and the configuration.
+console.log(simulator.sensorWidth, simulator.sensorHeight, simulator.frameType, simulator.cfaPattern, simulator.channels, simulator.transferFormat)
+// activeMountSimulator is the simulator behind the mount, whose boresight, clock and orientation the frame is drawn from.
+console.log(simulator.activeMount?.name, simulator.activeMountSimulator?.name, simulator.activeFocuser, simulator.activeRotator, simulator.activeFilter)
+console.log(simulator.catalogSourceType, simulator.telescopeFocalLength, simulator.telescopeAperture, simulator.configuration.sensor.pixelSize) // mm, mm, µm
 
 // A 0.5 s exposure; the image reaches CameraManager handlers as the CCD1 BLOB when it ends.
 simulator.startExposure(0.5)

@@ -261,12 +261,12 @@ export class GuidingSimulation {
 		this.simulatorClient.sendNumber({ device: this.camera.name, name: 'CCD_FRAME', elements: { X: 320, Y: 272, WIDTH: 640, HEIGHT: 480 } })
 		this.simulatorClient.sendNumber({ device: this.camera.name, name: 'SIMULATOR_SCENE', elements: { SCENE_SEED: 424242, SEEING: 1.4, FLUX_MIN: 0.05, FLUX_MAX: 0.8 } })
 		this.simulatorClient.sendSwitch({ device: this.camera.name, name: 'SIMULATOR_NOISE_QUALITY', elements: { HIGH_REALISM: true } })
-		this.simulatorClient.sendSwitch({ device: this.camera.name, name: 'SIMULATOR_NOISE_FEATURES', elements: { SKY_ENABLED: false, LIGHT_POLLUTION_ENABLED: false, MOON_ENABLED: false, AMP_GLOW_ENABLED: false, OUTPUT_QUANTIZE: false } })
+		this.simulatorClient.sendSwitch({ device: this.camera.name, name: 'SIMULATOR_NOISE_FEATURES', elements: { SKY_ENABLED: false, LIGHT_POLLUTION_ENABLED: false, MOON_ENABLED: false, AMP_GLOW_ENABLED: false } })
 	}
 
 	#setCameraSaturation(enabled: boolean) {
-		this.simulatorClient.sendSwitch({ device: this.camera.name, name: 'SIMULATOR_STAR_PLOT_FLAGS', elements: { SATURATION_ENABLED: enabled } })
-		this.simulatorClient.sendNumber({ device: this.camera.name, name: 'SIMULATOR_STAR_PLOT_OPTIONS', elements: { SATURATION_LEVEL: enabled ? 0.12 : 1 } })
+		// A zero saturation level disables saturation.
+		this.simulatorClient.sendNumber({ device: this.camera.name, name: 'SIMULATOR_STAR_PLOT_OPTIONS', elements: { SATURATION_LEVEL: enabled ? 0.12 : 0 } })
 	}
 
 	#setCameraConnected(enabled: boolean | undefined) {

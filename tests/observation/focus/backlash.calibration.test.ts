@@ -75,9 +75,8 @@ function configureBacklashImagingScene(client: ClientSimulator, cameraManager: C
 		name: 'SIMULATOR_NOISE_ARTIFACTS',
 		elements: { FIXED_PATTERN_NOISE_STRENGTH: 0, ROW_NOISE_STRENGTH: 0, COLUMN_NOISE_STRENGTH: 0, BANDING_STRENGTH: 0, HOT_PIXEL_RATE: 0, WARM_PIXEL_RATE: 0, DEAD_PIXEL_RATE: 0 },
 	})
-	client.sendNumber({ device: camera.name, name: 'SIMULATOR_STAR_PLOT_OPTIONS', elements: { BEST_FOCUS: bestFocus } })
 	client.sendSwitch({ device: camera.name, name: 'SIMULATOR_ABERRATION_FEATURES', elements: { SENSOR_TILT: true } })
-	client.sendNumber({ device: camera.name, name: 'SIMULATOR_ABERRATION_FOCUS', elements: { FOCUS_RANGE: focusRange, TILT: 10, TILT_ANGLE: 0 } })
+	client.sendNumber({ device: camera.name, name: 'SIMULATOR_ABERRATION_FOCUS', elements: { BEST_FOCUS: bestFocus, FOCUS_RANGE: focusRange, TILT: 10, TILT_ANGLE: 0 } })
 }
 
 // Command counts and terminal output produced by an asynchronous simulator-backed calibration.

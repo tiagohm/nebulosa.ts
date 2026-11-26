@@ -117,7 +117,7 @@ export async function createGuidingRig(capturesDir: string): Promise<GuidingRig>
 	const client = new ClientSimulator('Guiding Rig', new IndiClientHandlerSet([cameraManager, mountManager, guideOutputManager]))
 	const mountSimulator = new MountSimulator(GUIDING_RIG_NAMES.mount, client)
 	const mainSimulator = new CameraSimulator(GUIDING_RIG_NAMES.main, client, { mountManager, guideOutputManager })
-	const guideSimulator = new CameraSimulator(GUIDING_RIG_NAMES.guide, client, { mountManager, guideOutputManager, catalogSources: { GUIDING: guideField() }, catalogSource: 'GUIDING', focalLength: GUIDING_RIG_GUIDE_FOCAL_LENGTH })
+	const guideSimulator = new CameraSimulator(GUIDING_RIG_NAMES.guide, client, { mountManager, guideOutputManager, catalogSources: { GUIDING: guideField() }, config: { scene: { catalogSource: 'GUIDING' }, optics: { focalLength: GUIDING_RIG_GUIDE_FOCAL_LENGTH } } })
 
 	const mountCommander = new MountCommander(mountManager)
 	const guideOutputCommander = new GuideOutputCommander(guideOutputManager, arbiter)
