@@ -22,10 +22,12 @@ export type ThreePointPolarAlignmentInput = readonly [Angle, Angle, Time]
 export interface ThreePointPolarAlignmentResult extends Readonly<HorizontalCoordinate> {
 	// Exposure epoch of the ICRF pole and the reference plate solve used by the next refresh.
 	readonly time: Time
-	// Mount-pole azimuth error relative to the true pole (radians); positive sense per hemisphere.
+	// Mount-pole azimuth error relative to the visible celestial pole (radians), positive when the
+	// axis lies east of it, in either hemisphere.
 	readonly azimuthError: Angle
-	// Signed difference of observed mount-pole and target altitudes (radians), reversed in the south.
-	// Both altitudes include the selected refraction; false gives the geometric DARV convention.
+	// Observed mount-pole altitude minus the target altitude (radians), positive when the axis lies
+	// above the visible pole, in either hemisphere. Both altitudes include the selected refraction;
+	// false gives the geometric DARV convention.
 	readonly altitudeError: Angle
 	// Unit direction of the above-horizon mechanical pole in ICRF at `time`.
 	readonly pole: Vec3
@@ -41,15 +43,18 @@ export interface ThreePointPolarAlignmentResult extends Readonly<HorizontalCoord
 const DEGENERATE_POLE_NORMAL = 1e-14
 
 // Converts an ICRF mount-pole direction to observed azimuth/altitude and signed polar-alignment
-// errors at `time`. `pole` is a unit vector; the returned `pole` aliases it. `azimuthAdjustment`
+// errors at `time`, on the visible pole: east and above it are positive in either hemisphere.
+// `pole` is a unit vector; the returned `pole` aliases it. `azimuthAdjustment`
 // and `altitudeAdjustment` are the last inferred knob deltas in radians, and stay 0 on the
 // initial estimate and when no base adjustment is detected.
 function observedPolarAlignment(pole: Vec3, time: Time, refraction: RefractionParameters | false, location: GeographicPosition, azimuthAdjustment: Angle = 0, altitudeAdjustment: Angle = 0): ThreePointPolarAlignmentResult {
 	const isNorthern = location.latitude >= 0
 	const { azimuth, altitude } = cirsToObserved(matMulVec(cirsRotationMatrix(time), pole), time, refraction, location)
 	const latitude = polarAlignmentReferenceAltitude(location.latitude, refraction)
-	const azimuthError = isNorthern ? normalizePI(azimuth) : normalizePI(azimuth + PI)
-	const altitudeError = isNorthern ? altitude - latitude : latitude - altitude
+	// Azimuth grows through the east from the north, so south of the equator east of the pole is a
+	// smaller azimuth than the pole's 180°.
+	const azimuthError = isNorthern ? normalizePI(azimuth) : normalizePI(PI - azimuth)
+	const altitudeError = altitude - latitude
 	return { time, azimuth, altitude, pole, azimuthError, altitudeError, azimuthAdjustment, altitudeAdjustment }
 }
 

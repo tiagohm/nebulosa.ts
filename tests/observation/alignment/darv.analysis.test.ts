@@ -363,9 +363,11 @@ describe('DARV adapters', () => {
 	})
 })
 
-// Independent differentiation of the BORESIGHT pointing model, negated for star motion.
+// Independent differentiation of the BORESIGHT pointing model, negated for star motion. The errors are
+// those of the visible pole, which the pointing model takes for the north end of the axis.
 function pointingDrift(azimuth: number, altitude: number, latitude: number, hourAngle: number): number {
-	const model = polarAlignmentPointingModel(azimuth, altitude, latitude)
+	const hemisphere = latitude >= 0 ? 1 : -1
+	const model = polarAlignmentPointingModel(hemisphere * azimuth, hemisphere * altitude, latitude)
 	const before = equatorialPointingError(hourAngle - SIDEREAL_DRIFT_RATE / 2, 0.3, model)
 	const after = equatorialPointingError(hourAngle + SIDEREAL_DRIFT_RATE / 2, 0.3, model)
 	return before[1] - after[1]
@@ -423,7 +425,8 @@ describe('DARV polar inversion', () => {
 			for (const sign of [-1, 1]) {
 				const azimuth = sign * deg(1)
 				const altitude = -sign * deg(0.7)
-				const pole = applyMountAdjustment(vecZ(), [Math.cos(latitude), 0, Math.sin(latitude)], vecY(), -azimuth, altitude)
+				const hemisphere = latitude >= 0 ? 1 : -1
+				const pole = applyMountAdjustment(vecZ(), [Math.cos(latitude), 0, Math.sin(latitude)], vecY(), -hemisphere * azimuth, hemisphere * altitude)
 				const observations = [-1.2, 0, 1.2].map((hourAngle) => {
 					const star: Vec3 = [Math.cos(hourAngle), -Math.sin(hourAngle), 0]
 					const position = (seconds: number) => {
@@ -438,8 +441,8 @@ describe('DARV polar inversion', () => {
 				if (result.status !== 'ok') return
 				// Exact vector kinematics recover pY/cos(latitude) and pX in this linear inversion.
 				// The azimuth bias includes -azimuth*altitude*tan(latitude), about 0.51 arcmin here.
-				expect(result.azimuthError).toBeCloseTo(pole[1] / Math.cos(latitude), 10)
-				expect(result.altitudeError).toBeCloseTo(pole[0], 10)
+				expect(result.azimuthError).toBeCloseTo((hemisphere * pole[1]) / Math.cos(latitude), 10)
+				expect(result.altitudeError).toBeCloseTo(hemisphere * pole[0], 10)
 				expect(Math.abs(result.azimuthError - azimuth)).toBeLessThan(arcmin(1))
 				expect(Math.abs(result.altitudeError - altitude)).toBeLessThan(arcmin(1))
 			}
@@ -559,7 +562,8 @@ describe('DARV image extraction', () => {
 
 // Independent physical simulation: a fixed celestial star is expressed in the camera basis by
 // undoing Earth rotation and rotating about the misaligned mechanical RA axis. The star's PSF is
-// integrated over 160 seconds. No DARV drift formula or detector geometry generates these pixels.
+// integrated over 160 seconds. No DARV drift formula or detector geometry generates these pixels. The
+// errors are those of the visible pole; the axis is built from its north end.
 function physicalCapture(azimuth: number, altitude: number, latitude: number, hourAngle: number, cameraAngle: number, parity: number): DarvAnalysisInput {
 	const frame = image(384, 384)
 	const scale = arcsec(0.2)
@@ -567,7 +571,8 @@ function physicalCapture(azimuth: number, altitude: number, latitude: number, ho
 	const exposure = 2 * leg
 	const up: Vec3 = [Math.cos(latitude), 0, Math.sin(latitude)]
 	const east: Vec3 = vecY()
-	const pole = applyMountAdjustment(vecZ(), up, east, -azimuth, altitude)
+	const hemisphere = latitude >= 0 ? 1 : -1
+	const pole = applyMountAdjustment(vecZ(), up, east, -hemisphere * azimuth, hemisphere * altitude)
 	const dec = 0.2
 	const ra = -hourAngle
 	const star: Vec3 = [Math.cos(dec) * Math.cos(ra), Math.cos(dec) * Math.sin(ra), Math.sin(dec)]

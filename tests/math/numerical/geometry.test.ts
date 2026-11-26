@@ -324,9 +324,9 @@ test('spherical tangent-plane projection round-trips and follows the expected gn
 	expect(sphericalProjectTangentPlane(eraS2c(longitude + PI, -latitude), origin)).toBeFalse()
 })
 
-test('spherical mount polar axis vector uses hemisphere-aware polar error signs', () => {
+test('spherical mount polar axis vector puts positive errors east of and above the visible pole', () => {
 	expectVectorClose(sphericalMountPolarAxisVector(deg(52), deg(10), deg(-2)), eraS2c(deg(10), deg(50)), 14)
-	expectVectorClose(sphericalMountPolarAxisVector(deg(-35), deg(7), deg(-3)), eraS2c(PI + deg(7), deg(38)), 14)
+	expectVectorClose(sphericalMountPolarAxisVector(deg(-35), deg(7), deg(-3)), eraS2c(PI - deg(7), deg(32)), 14)
 })
 
 test('spherical mount basis aligns with equatorial east and north for a standard polar axis', () => {

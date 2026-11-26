@@ -95,6 +95,8 @@ describe('computed polar alignment error', () => {
 
 	test('southern hemisphere without refraction', () => {
 		time.location = southLocation
+		// The knobs of polarAlignmentError are those of the north end of the axis; the visible south
+		// pole is the other end, so both errors come back with the opposite sign.
 
 		for (let orie = 0; orie <= 1; orie++) {
 			for (let az = -60; az <= 60; az += 10) {
@@ -105,8 +107,8 @@ describe('computed polar alignment error', () => {
 						expect(result).not.toBeFalse()
 						if (!result) continue
 
-						expect(toArcmin(result.azimuthError)).toBeCloseTo(az, precision)
-						expect(toArcmin(result.altitudeError)).toBeCloseTo(al, precision)
+						expect(toArcmin(result.azimuthError)).toBeCloseTo(-az, precision)
+						expect(toArcmin(result.altitudeError)).toBeCloseTo(-al, precision)
 					}
 				}
 			}
@@ -115,6 +117,8 @@ describe('computed polar alignment error', () => {
 
 	test('southern hemisphere with refraction', () => {
 		time.location = southLocation
+		// The knobs of polarAlignmentError are those of the north end of the axis; the visible south
+		// pole is the other end, so both errors come back with the opposite sign.
 
 		for (let orie = 0; orie <= 1; orie++) {
 			for (let az = -60; az <= 60; az += 10) {
@@ -125,8 +129,8 @@ describe('computed polar alignment error', () => {
 						expect(result).not.toBeFalse()
 						if (!result) continue
 
-						expect(toArcmin(result.azimuthError)).toBeCloseTo(az, precision)
-						expect(toArcmin(result.altitudeError)).toBeCloseTo(al, precision)
+						expect(toArcmin(result.azimuthError)).toBeCloseTo(-az, precision)
+						expect(toArcmin(result.altitudeError)).toBeCloseTo(-al, precision)
 					}
 				}
 			}

@@ -48,8 +48,8 @@ export function polarAlignmentReferenceAltitude(latitude: Angle, refraction: Ref
 }
 
 // Converts a signed altitude error (radians) between geometric (false) and refracted references.
-// Latitude is geographic radians; positive error raises the pole in the north and lowers it in
-// the south, using the northern convention at zero latitude. Defaults convert geometric DARV
+// Latitude is geographic radians; a positive error puts the axis above the visible pole in either
+// hemisphere. Defaults convert geometric DARV
 // errors to the three-point display's default atmosphere. Swap from/to for the inverse conversion.
 // Both the mount-pole altitude and target are refracted, not just the target. Matches the three-point
 // display's ERFA vector refraction and refractedAltitude target (including their near-horizon
@@ -59,8 +59,7 @@ export function polarAlignmentReferenceAltitude(latitude: Angle, refraction: Ref
 // stopping tolerance. Inputs are unchanged and the returned value is a scalar angle.
 export function convertPolarAlignmentAltitudeError(error: Angle, latitude: Angle, from: RefractionParameters | false = false, to: RefractionParameters | false = DEFAULT_REFRACTION_PARAMETERS): Angle {
 	if (from === to) return error
-	const sign = latitude >= 0 ? 1 : -1
-	const sourceAltitude = polarAlignmentReferenceAltitude(latitude, from) + sign * error
+	const sourceAltitude = polarAlignmentReferenceAltitude(latitude, from) + error
 	let geometricAltitude = sourceAltitude
 	if (from !== false) {
 		for (let i = 0; i < 12; i++) {
@@ -70,7 +69,7 @@ export function convertPolarAlignmentAltitudeError(error: Angle, latitude: Angle
 		}
 	}
 	const altitude = to === false ? geometricAltitude : observedPoleAltitude(geometricAltitude, to)
-	return sign * (altitude - polarAlignmentReferenceAltitude(latitude, to))
+	return altitude - polarAlignmentReferenceAltitude(latitude, to)
 }
 
 // Refracts a geometric mount-pole altitude in radians using eraAtioq's vector update. The scalar

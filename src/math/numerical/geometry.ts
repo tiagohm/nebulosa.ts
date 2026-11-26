@@ -383,11 +383,13 @@ export function sphericalUnprojectTangentPlane(x: number, y: number, origin: Vec
 	return vecNormalizeMut(vecFill(out ?? vecZero(), localBasis.origin[0] + x * localBasis.east[0] + y * localBasis.north[0], localBasis.origin[1] + x * localBasis.east[1] + y * localBasis.north[1], localBasis.origin[2] + x * localBasis.east[2] + y * localBasis.north[2]))
 }
 
-// Creates the local mount polar axis vector from site latitude plus azimuth/altitude polar errors.
+// Creates the local mount polar axis vector, as horizontal azimuth (north through east) and
+// altitude, from the site latitude and the polar errors of the visible pole, all radians: a
+// positive azimuth error is east of it and a positive altitude error above it, in either hemisphere.
 export function sphericalMountPolarAxisVector(latitude: number, azimuthError: number = 0, altitudeError: number = 0, out?: MutVec3) {
 	const isNorthern = latitude >= 0
-	const azimuth = isNorthern ? normalizeAngle(azimuthError) : normalizeAngle(PI + azimuthError)
-	const altitude = Math.abs(latitude) + (isNorthern ? altitudeError : -altitudeError)
+	const azimuth = isNorthern ? normalizeAngle(azimuthError) : normalizeAngle(PI - azimuthError)
+	const altitude = Math.abs(latitude) + altitudeError
 	return eraS2c(azimuth, altitude, out)
 }
 

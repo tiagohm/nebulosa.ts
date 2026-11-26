@@ -129,14 +129,17 @@ function computeDarvGeometryFactor(mode: DarvExposureMode, latitude: Angle, hour
 // Signed [azimuth, altitude] coefficients converting polar errors in radians to stellar north drift
 // divided by the sidereal rate. Latitude and west-positive hour angle are radians, evaluated at the
 // exposure midpoint. The shared pointing model gives BORESIGHT Δδ = MA sin H + ME cos H;
-// a fixed star moves oppositely in the image, hence -(MA cos H - ME sin H). Its polar coefficients
-// already encode the ThreePointPolarAlignmentResult convention, including southern altitude sign.
+// a fixed star moves oppositely in the image, hence -(MA cos H - ME sin H). The pointing model takes
+// the errors of the axis end pointing north; south of the equator the visible pole is the other end,
+// so both errors change sign to match ThreePointPolarAlignmentResult: positive east of and above the
+// visible pole, in either hemisphere.
 // No refraction is included: altitude errors refer to the geometric pole. Valid for small errors
 // (tested through one degree at mid-latitudes, with up to one arcminute linearization error), short
 // exposures, and no DEC guiding or atmospheric drift. Accuracy degrades near geographic poles.
 export function darvGeometryFactors(latitude: Angle, hourAngle: Angle): readonly [number, number] {
-	const azimuth = polarAlignmentPointingModel(1, 0, latitude)
-	const altitude = polarAlignmentPointingModel(0, 1, latitude)
+	const hemisphere = latitude >= 0 ? 1 : -1
+	const azimuth = polarAlignmentPointingModel(hemisphere, 0, latitude)
+	const altitude = polarAlignmentPointingModel(0, hemisphere, latitude)
 	const cos = Math.cos(hourAngle)
 	const sin = Math.sin(hourAngle)
 	return [-(azimuth.polarAzimuthError * cos - azimuth.polarAltitudeError * sin), -(altitude.polarAzimuthError * cos - altitude.polarAltitudeError * sin)]
