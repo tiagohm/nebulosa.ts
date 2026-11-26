@@ -1,5 +1,10 @@
-import { TAU } from '../../../core/constants'
+import { ASEC2RAD, DAYSEC, DEG2RAD, SIDEREAL_DRIFT_RATE, TAU } from '../../../core/constants'
 import { type Angle, normalizeAngle } from '../../../math/units/angle'
+import { makeNumberVector, type NewNumberVector } from '../types'
+import { type ComponentBus, makeBoundNumberVector, type NumberBinding, readBoundNumberVector, SimulatorComponent } from './component'
+import { SIMULATION } from './constants'
+import type { MountPeriodicErrorConfig } from './mount.config'
+import { applyNumberVectorValues } from './util'
 
 // Periodic error of a mount's right-ascension worm, as a function of the accumulated worm phase, plus
 // the periodic error correction a controller applies to it.
@@ -135,4 +140,136 @@ export function periodicErrorBound(curve: PeriodicErrorCurve): Angle {
 	}
 
 	return bound
+}
+
+// Harmonic terms of MOUNT_PERIODIC_ERROR: worm period in seconds, semi-amplitudes in arcseconds and
+// phases in degrees.
+const PERIODIC_ERROR: readonly NumberBinding<'period' | 'amplitude' | 'phase' | 'amplitude2' | 'phase2' | 'amplitude3' | 'phase3'>[] = [
+	['RA_PERIOD', 'Worm Period (s)', 'period', 0, DAYSEC, 1, '%.0f'],
+	['RA_AMPLITUDE', 'Amplitude (arcsec)', 'amplitude', 0, 3600, 0.1, '%.3f'],
+	['RA_PHASE', 'Phase (deg)', 'phase', 0, 360, 1, '%.1f'],
+	['RA_AMPLITUDE_2', '2nd Harmonic (arcsec)', 'amplitude2', 0, 3600, 0.1, '%.3f'],
+	['RA_PHASE_2', '2nd Harmonic Phase (deg)', 'phase2', 0, 360, 1, '%.1f'],
+	['RA_AMPLITUDE_3', '3rd Harmonic (arcsec)', 'amplitude3', 0, 3600, 0.1, '%.3f'],
+	['RA_PHASE_3', '3rd Harmonic Phase (deg)', 'phase3', 0, 360, 1, '%.1f'],
+]
+
+// Trained correction of MOUNT_PEC: recorded samples per revolution and playback gain.
+const CORRECTION: readonly NumberBinding<'pecSamples' | 'pecGain'>[] = [
+	['SAMPLES', 'Recorded Samples', 'pecSamples', 0, 1024, 1, '%.0f'],
+	['GAIN', 'Playback Gain', 'pecGain', 0, 1, 0.01, '%.3f'],
+]
+
+// The right-ascension worm: its phase, integrated from the motion of the axis, and the periodic error
+// it produces with the trained correction played back.
+//
+// There is deliberately no declination counterpart: classic periodic error comes from the worm of the
+// axis that turns continuously, which during tracking is only right ascension.
+export class MountPeriodicError extends SimulatorComponent {
+	readonly #error: ReturnType<typeof makeBoundNumberVector>
+	readonly #correction: ReturnType<typeof makeBoundNumberVector>
+	// Live phase, degrees. Read-only: it stands still while the mount is parked and speeds up in a slew.
+	readonly #phaseVector = makeNumberVector('', 'MOUNT_WORM_PHASE', 'Worm Phase', SIMULATION, 'ro', ['PHASE', 'Phase (deg)', 0, 0, 360, 0.1, '%.3f'])
+
+	readonly properties: readonly ReturnType<typeof makeNumberVector>[]
+	readonly transient: readonly ReturnType<typeof makeNumberVector>[]
+
+	// Whether the periodic-error family is simulated; set through `refresh`.
+	#enabled = false
+	// Harmonics with the trained correction, rebuilt whenever a term changes so evaluating the
+	// boresight allocates nothing; the shared identity while nothing applies.
+	#curve: PeriodicErrorCurve = IDENTITY_PERIODIC_ERROR_CURVE
+	// Phase of the worm, radians in [0, TAU). Physical state: it survives a disconnection.
+	#phase: Angle = 0
+	// Simulated time the phase was last published at, milliseconds.
+	#publishedAt = 0
+
+	// `config` gives the initial terms; `changed` runs after a command changed them.
+	constructor(
+		bus: ComponentBus,
+		config: MountPeriodicErrorConfig,
+		readonly changed: () => void,
+	) {
+		super(bus)
+		this.#error = makeBoundNumberVector('MOUNT_PERIODIC_ERROR', 'Periodic Error', SIMULATION, PERIODIC_ERROR, config)
+		this.#correction = makeBoundNumberVector('MOUNT_PEC', 'PEC', SIMULATION, CORRECTION, config)
+		this.properties = [this.#error, this.#correction, this.#phaseVector]
+		this.transient = [this.#phaseVector]
+	}
+
+	// Phase of the worm, radians in [0, TAU).
+	get phase(): Angle {
+		return this.#phase
+	}
+
+	// Harmonics in effect, the shared identity while the family is off or has nothing to apply.
+	get curve() {
+		return this.#curve
+	}
+
+	// Periodic error at the current phase, radians of right ascension; zero while nothing applies.
+	get error(): Angle {
+		return this.#curve === IDENTITY_PERIODIC_ERROR_CURVE ? 0 : periodicErrorAt(this.#phase, this.#curve)
+	}
+
+	// Rebuilds the curve for the family being `enabled` or not.
+	//
+	// Retraining on every change is what a controller does when the mechanics change under it. A worm
+	// that never turns collapses to the identity too: without a period the harmonics would become a
+	// constant offset, which is an index error rather than a periodic one.
+	refresh(enabled: boolean) {
+		this.#enabled = enabled
+		const terms = readBoundNumberVector(this.#error, PERIODIC_ERROR)
+
+		if (!enabled || terms.period <= 0 || (terms.amplitude === 0 && terms.amplitude2 === 0 && terms.amplitude3 === 0)) {
+			this.#curve = IDENTITY_PERIODIC_ERROR_CURVE
+			return
+		}
+
+		const amplitudes = new Float64Array(PERIODIC_ERROR_HARMONICS)
+		const phases = new Float64Array(PERIODIC_ERROR_HARMONICS)
+		amplitudes[0] = terms.amplitude * ASEC2RAD
+		amplitudes[1] = terms.amplitude2 * ASEC2RAD
+		amplitudes[2] = terms.amplitude3 * ASEC2RAD
+		phases[0] = terms.phase * DEG2RAD
+		phases[1] = terms.phase2 * DEG2RAD
+		phases[2] = terms.phase3 * DEG2RAD
+
+		const { pecSamples, pecGain } = readBoundNumberVector(this.#correction, CORRECTION)
+		this.#curve = trainPeriodicErrorCorrection({ amplitudes, phases }, pecSamples, pecGain)
+	}
+
+	// Advances the phase over `dtSeconds` with the right-ascension motor at `motorRate`, radians per
+	// second. One revolution per period at the sidereal tracking rate; tracking advances it. Integrated
+	// whether or not the family is on, because the worm goes on turning while its error is not applied.
+	advance(motorRate: number, dtSeconds: number) {
+		const period = this.#error.elements.RA_PERIOD.value
+		if (period <= 0) return
+		this.#phase = normalizeAngle(this.#phase + (-motorRate / SIDEREAL_DRIFT_RATE) * (TAU / period) * dtSeconds)
+	}
+
+	// Publishes the phase at most once per `interval` milliseconds of simulated time `now`. A clock set
+	// backwards publishes at once and re-registers the epoch.
+	publish(now: number, interval: number) {
+		if (!this.#enabled || this.#error.elements.RA_PERIOD.value <= 0) return
+		const elapsed = now - this.#publishedAt
+		if (elapsed >= 0 && elapsed < interval) return
+		this.#publishedAt = now
+		this.#phaseVector.elements.PHASE.value = this.#phase / DEG2RAD
+		this.bus.notify(this.#phaseVector)
+	}
+
+	// Handles MOUNT_PERIODIC_ERROR and MOUNT_PEC.
+	handleNumber(vector: NewNumberVector) {
+		const property = vector.name === this.#error.name ? this.#error : vector.name === this.#correction.name ? this.#correction : undefined
+		if (property === undefined) return false
+
+		if (applyNumberVectorValues(property, vector.elements)) {
+			this.refresh(this.#enabled)
+			this.changed()
+			this.bus.notify(property)
+		}
+
+		return true
+	}
 }

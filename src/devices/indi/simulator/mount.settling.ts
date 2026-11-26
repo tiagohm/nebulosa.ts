@@ -1,6 +1,11 @@
-import { TAU } from '../../../core/constants'
+import { ASEC2RAD, TAU } from '../../../core/constants'
 import { clamp } from '../../../math/numerical/math'
 import type { Angle } from '../../../math/units/angle'
+import type { NewNumberVector } from '../types'
+import { type ComponentBus, makeBoundNumberVector, type NumberBinding, readBoundNumberVector, SimulatorComponent } from './component'
+import { MAX_SETTLING_STEPS, SETTLING_SAMPLES_PER_CYCLE, SIMULATION } from './constants'
+import type { MountSettlingConfig } from './mount.config'
+import { applyNumberVectorValues } from './util'
 
 // Elastic settling of a mount axis: the overshoot and ring-down that follow an abrupt stop, because a
 // telescope on a tripod is a spring rather than a rigid body. Modelled as a free damped harmonic
@@ -104,4 +109,104 @@ export function advanceSettling(state: SettlingState, dtSeconds: number, config:
 	state.velocity = decay * (state.velocity * cos - (naturalFrequency * naturalFrequency * previous + dampingRatio * naturalFrequency * state.velocity) * (sin / dampedFrequency))
 
 	return state.offset - previous
+}
+
+// Terms of MOUNT_SETTLING: overshoot at full slew speed in arcseconds, natural frequency in hertz and
+// damping ratio.
+const SETTLING: readonly NumberBinding<keyof MountSettlingConfig>[] = [
+	['OVERSHOOT', 'Overshoot (arcsec)', 'overshoot', 0, 600, 0.1, '%.3f'],
+	['FREQUENCY', 'Frequency (Hz)', 'frequency', 0, 50, 0.1, '%.2f'],
+	['DAMPING_RATIO', 'Damping Ratio', 'dampingRatio', 0, 1, 0.01, '%.3f'],
+]
+
+// The structure of the mount ringing after an abrupt stop, one oscillator per axis, with how much of
+// each excursion is currently written into the mechanical coordinate.
+export class MountSettling extends SimulatorComponent {
+	readonly #settling: ReturnType<typeof makeBoundNumberVector>
+
+	readonly properties: readonly ReturnType<typeof makeBoundNumberVector>[]
+
+	// Whether the settling family is simulated; set through `refresh`.
+	enabled = false
+	// Oscillator of each axis.
+	readonly rightAscension = settlingState()
+	readonly declination = settlingState()
+	// How much of each excursion is currently in the mechanical coordinate, radians. Not the oscillator's
+	// own offset: the declination is clamped at the poles, so an axis ringing there receives less than
+	// was asked for, and only what it received may be taken back.
+	appliedRightAscension: Angle = 0
+	appliedDeclination: Angle = 0
+	// Configuration in effect, the identity while the family is off.
+	#config: SettlingConfig = IDENTITY_SETTLING_CONFIG
+
+	// `config` gives the initial terms.
+	constructor(bus: ComponentBus, config: MountSettlingConfig) {
+		super(bus)
+		this.#settling = makeBoundNumberVector('MOUNT_SETTLING', 'Settling', SIMULATION, SETTLING, config)
+		this.properties = [this.#settling]
+	}
+
+	// Configuration in effect.
+	get config() {
+		return this.#config
+	}
+
+	// Whether either axis is still away from where it was commanded.
+	get ringing() {
+		return isSettling(this.rightAscension) || isSettling(this.declination)
+	}
+
+	// Rebuilds the configuration for the family being `enabled` or not.
+	refresh(enabled: boolean) {
+		this.enabled = enabled
+
+		if (!enabled) {
+			this.#config = IDENTITY_SETTLING_CONFIG
+			return
+		}
+
+		const { overshoot, frequency, dampingRatio } = readBoundNumberVector(this.#settling, SETTLING)
+		this.#config = { overshoot: overshoot * ASEC2RAD, frequency, dampingRatio }
+	}
+
+	// Sub-steps a ring-down over `dtSeconds` is advanced and recorded in: enough for
+	// SETTLING_SAMPLES_PER_CYCLE points per cycle, capped at MAX_SETTLING_STEPS, and one while nothing
+	// rings, so an idle mount costs a single step.
+	steps(dtSeconds: number) {
+		if (!this.ringing) return 1
+		return clamp(Math.ceil(dtSeconds * this.#config.frequency * SETTLING_SAMPLES_PER_CYCLE), 1, MAX_SETTLING_STEPS)
+	}
+
+	// Kicks both axes at an abrupt stop with signed severities in [-1, 1].
+	excite(rightAscensionSeverity: number, declinationSeverity: number) {
+		exciteSettling(this.rightAscension, rightAscensionSeverity, this.#config)
+		exciteSettling(this.declination, declinationSeverity, this.#config)
+	}
+
+	// Advances both oscillators over `dtSeconds`.
+	advance(dtSeconds: number) {
+		advanceSettling(this.rightAscension, dtSeconds, this.#config)
+		advanceSettling(this.declination, dtSeconds, this.#config)
+	}
+
+	// Puts both oscillators back on target and forgets what they had put into the coordinate. The two
+	// go together: an excursion in the coordinate is owed back only while its oscillator runs.
+	reset() {
+		resetSettling(this.rightAscension)
+		resetSettling(this.declination)
+		this.appliedRightAscension = 0
+		this.appliedDeclination = 0
+	}
+
+	// Handles MOUNT_SETTLING.
+	handleNumber(vector: NewNumberVector) {
+		if (vector.name !== this.#settling.name) return false
+
+		if (applyNumberVectorValues(this.#settling, vector.elements)) {
+			this.refresh(this.enabled)
+			this.bus.notify(this.#settling)
+		}
+
+		return true
+	}
 }

@@ -2,11 +2,12 @@ import { describe, expect, test } from 'bun:test'
 import type { GuideDirection } from '../../../../src/devices/indi/device'
 import { cameraSimulatorConfig, DEFAULT_CAMERA_SIMULATOR_CONFIG } from '../../../../src/devices/indi/simulator/camera.config'
 import { approachTemperature, CameraCooler, coolerPower } from '../../../../src/devices/indi/simulator/camera.cooler'
-import { CameraGuidePort, timedGuidePulse } from '../../../../src/devices/indi/simulator/camera.guideport'
+import { CameraGuidePort } from '../../../../src/devices/indi/simulator/camera.guideport'
 import { CameraReadout } from '../../../../src/devices/indi/simulator/camera.readout'
 import { CameraSensor } from '../../../../src/devices/indi/simulator/camera.sensor'
 import { CameraShutter, type CameraShutterListener } from '../../../../src/devices/indi/simulator/camera.shutter'
 import { routeNumber } from '../../../../src/devices/indi/simulator/component'
+import { timedGuidePulse } from '../../../../src/devices/indi/simulator/util'
 import { TestBus } from '../../../util/bus'
 
 // Unit coverage of the camera's control circuits, driven by a manual clock without a client or timers.

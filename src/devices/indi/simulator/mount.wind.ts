@@ -1,5 +1,11 @@
-import type { Random } from '../../../math/numerical/random'
+import { ASEC2RAD } from '../../../core/constants'
+import { mulberry32, normal, type Random } from '../../../math/numerical/random'
 import type { Angle } from '../../../math/units/angle'
+import type { NewNumberVector } from '../types'
+import { type ComponentBus, makeBoundNumberVector, type NumberBinding, readBoundNumberVector, SimulatorComponent } from './component'
+import { SIMULATION } from './constants'
+import type { MountWindConfig } from './mount.config'
+import { applyNumberVectorValues } from './util'
 
 // Buffeting of the telescope by wind, as a bounded disturbance of where the optical axis points.
 //
@@ -50,11 +56,6 @@ export function windState(): WindState {
 	return { rightAscension: 0, declination: 0 }
 }
 
-// Whether the telescope is currently deflected at all.
-export function isWindy(state: WindState) {
-	return state.rightAscension !== 0 || state.declination !== 0
-}
-
 // Draws a deflection from the settled distribution of `config`, so the process starts as if the wind
 // had already been blowing rather than spending several correlation times warming up from zero.
 //
@@ -85,4 +86,75 @@ export function advanceWind(state: WindState, dtSeconds: number, config: WindCon
 
 	state.rightAscension = state.rightAscension * decay + normal() * innovation
 	state.declination = state.declination * decay + normal() * innovation
+}
+
+// Terms of MOUNT_WIND: amplitude in arcseconds and correlation time in seconds.
+const WIND: readonly NumberBinding<keyof MountWindConfig>[] = [
+	['AMPLITUDE', 'Amplitude (arcsec)', 'amplitude', 0, 600, 0.1, '%.3f'],
+	['CORRELATION_TIME', 'Correlation Time (s)', 'correlationTime', 0.1, 300, 0.1, '%.2f'],
+]
+
+// Buffeting of the telescope by wind: a bounded random deflection of the optical axis with a memory of
+// its own, which also stands for the centroid wander of seeing. Draws from its own generator.
+export class MountWind extends SimulatorComponent {
+	readonly #wind: ReturnType<typeof makeBoundNumberVector>
+
+	readonly properties: readonly ReturnType<typeof makeBoundNumberVector>[]
+
+	// Current deflection, east and north on the sky, radians.
+	readonly state = windState()
+	// Conditions in effect, the identity while the family is off or the air is still.
+	#config: WindConfig = IDENTITY_WIND_CONFIG
+	// Whether the wind family is simulated; set through `refresh`.
+	#enabled = false
+	// Standard normal source of the gusts.
+	readonly #normal: Random
+
+	// `config` gives the initial conditions, `seed` the generator; `changed` runs after a command
+	// changed them.
+	constructor(
+		bus: ComponentBus,
+		config: MountWindConfig,
+		seed: number,
+		readonly changed: () => void,
+	) {
+		super(bus)
+		this.#wind = makeBoundNumberVector('MOUNT_WIND', 'Wind', SIMULATION, WIND, config)
+		this.properties = [this.#wind]
+		this.#normal = normal(mulberry32(seed))
+	}
+
+	// Conditions in effect.
+	get config() {
+		return this.#config
+	}
+
+	// Rebuilds the conditions for the family being `enabled` or not, reseeding the deflection from the
+	// settled distribution only when they really changed: reseeding on an unrelated feature switch would
+	// teleport the optical axis by about an arcsecond.
+	refresh(enabled: boolean) {
+		this.#enabled = enabled
+		const { amplitude, correlationTime } = readBoundNumberVector(this.#wind, WIND)
+		const previous = this.#config
+		this.#config = enabled && amplitude > 0 ? { amplitude: amplitude * ASEC2RAD, correlationTime } : IDENTITY_WIND_CONFIG
+		if (this.#config.amplitude !== previous.amplitude || this.#config.correlationTime !== previous.correlationTime) resetWind(this.state, this.#config, this.#normal)
+	}
+
+	// Advances the deflection over `dtSeconds`. Exact over any interval, so splitting one costs nothing.
+	advance(dtSeconds: number) {
+		advanceWind(this.state, dtSeconds, this.#config, this.#normal)
+	}
+
+	// Handles MOUNT_WIND.
+	handleNumber(vector: NewNumberVector) {
+		if (vector.name !== this.#wind.name) return false
+
+		if (applyNumberVectorValues(this.#wind, vector.elements)) {
+			this.refresh(this.#enabled)
+			this.changed()
+			this.bus.notify(this.#wind)
+		}
+
+		return true
+	}
 }

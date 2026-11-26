@@ -510,7 +510,7 @@ describe.skipIf(SKIP)('camera simulator', () => {
 			// depends on the hour angle at render time, so only its presence and bound are asserted.
 			client.sendSwitch({ device: mount.name, name: 'SIMULATOR_ERROR_FEATURES', elements: { ALIGNMENT: true } })
 			client.sendNumber({ device: mount.name, name: 'MOUNT_ALIGNMENT', elements: { POLAR_AZIMUTH_ERROR: 1800, POLAR_ALTITUDE_ERROR: 1800, CONE_ERROR: 0, AXIS_NON_ORTHOGONALITY: 0, RA_INDEX_ERROR: 0, DEC_INDEX_ERROR: 0 } })
-			await waitUntil(() => mountSimulator.pointingErrorBound > 0)
+			expect(mountSimulator.boresight).not.toEqual(mountSimulator.mechanical)
 
 			cameraSimulator.startExposure(0.05)
 			await waitUntil(() => frameReceiver.length > 1, 10000, 50)
@@ -527,14 +527,13 @@ describe.skipIf(SKIP)('camera simulator', () => {
 			client.sendSwitch({ device: camera.name, name: 'SIMULATOR_CATALOG_SOURCE', elements: { RANDOM: true } })
 			await waitUntil(() => cameraManager.properties.get(camera)?.SIMULATOR_CATALOG_SOURCE?.elements.RANDOM.value === true)
 			client.sendNumber({ device: mount.name, name: 'MOUNT_ALIGNMENT', elements: { POLAR_AZIMUTH_ERROR: 0, POLAR_ALTITUDE_ERROR: 0, CONE_ERROR: 0, AXIS_NON_ORTHOGONALITY: 0, RA_INDEX_ERROR: 0, DEC_INDEX_ERROR: 0 } })
-			await waitUntil(() => mountSimulator.pointingErrorBound === 0)
 
 			cameraSimulator.startExposure(0.05)
 			await waitUntil(() => frameReceiver.length > 2, 10000, 50)
 			const randomAligned = await readImageFromBuffer(frameReceiver.lastFrame)
 
 			client.sendNumber({ device: mount.name, name: 'MOUNT_ALIGNMENT', elements: { POLAR_AZIMUTH_ERROR: 1800, POLAR_ALTITUDE_ERROR: 1800, CONE_ERROR: 0, AXIS_NON_ORTHOGONALITY: 0, RA_INDEX_ERROR: 0, DEC_INDEX_ERROR: 0 } })
-			await waitUntil(() => mountSimulator.pointingErrorBound > 0)
+			expect(mountSimulator.boresight).not.toEqual(mountSimulator.mechanical)
 
 			cameraSimulator.startExposure(0.05)
 			await waitUntil(() => frameReceiver.length > 3, 10000, 50)
@@ -623,9 +622,8 @@ describe.skipIf(SKIP)('camera simulator', () => {
 		await waitUntil(() => cameraManager.properties.get(camera)?.SIMULATOR_CATALOG_SOURCE?.elements.SPREAD.value === true)
 
 		try {
-			// The mount points perfectly, so the pointing error contributes no margin at all. What sweeps
-			// the field is commanded motion, which the error bound knows nothing about.
-			expect(mountSimulator.pointingErrorBound).toBe(0)
+			// The mount points perfectly, so what sweeps the field is commanded motion alone.
+			expect(mountSimulator.boresight).toEqual(mountSimulator.mechanical)
 
 			// Half a degree per second for a fifth of a second is a couple of hundred pixels of travel,
 			// enough to pull one of the outer stars onto a sensor it started sixty pixels clear of.

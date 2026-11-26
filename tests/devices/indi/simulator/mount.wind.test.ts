@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { advanceWind, IDENTITY_WIND_CONFIG, isWindy, resetWind, type WindConfig, windState } from '../../../../src/devices/indi/simulator/mount.wind'
+import { advanceWind, IDENTITY_WIND_CONFIG, resetWind, type WindConfig, windState } from '../../../../src/devices/indi/simulator/mount.wind'
 import { mulberry32, normal } from '../../../../src/math/numerical/random'
 import { arcsec, toArcsec } from '../../../../src/math/units/angle'
 
@@ -40,7 +40,7 @@ describe('wind', () => {
 	test('leaves a still site undisturbed', () => {
 		const state = windState()
 		advanceWind(state, 10, IDENTITY_WIND_CONFIG, normalSource())
-		expect(isWindy(state)).toBeFalse()
+		expect(state.rightAscension === 0 && state.declination === 0).toBeTrue()
 	})
 
 	test('ignores a non-positive interval or correlation time', () => {
@@ -48,7 +48,7 @@ describe('wind', () => {
 		advanceWind(state, 0, BREEZY, normalSource())
 		advanceWind(state, -1, BREEZY, normalSource())
 		advanceWind(state, 1, { ...BREEZY, correlationTime: 0 }, normalSource())
-		expect(isWindy(state)).toBeFalse()
+		expect(state.rightAscension === 0 && state.declination === 0).toBeTrue()
 	})
 
 	test('settles at the configured spread', () => {
@@ -134,9 +134,9 @@ describe('wind', () => {
 	test('stills the telescope when reset to a calm site', () => {
 		const state = windState()
 		resetWind(state, BREEZY, normalSource())
-		expect(isWindy(state)).toBeTrue()
+		expect(state.rightAscension !== 0 || state.declination !== 0).toBeTrue()
 
 		resetWind(state, IDENTITY_WIND_CONFIG, normalSource())
-		expect(isWindy(state)).toBeFalse()
+		expect(state.rightAscension === 0 && state.declination === 0).toBeTrue()
 	})
 })

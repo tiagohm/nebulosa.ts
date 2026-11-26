@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { boresightHistory, boresightHistorySpan, boresightPathLength, sampleBoresightPath, clearBoresightHistory, recordBoresightSample, sampleBoresightAt, sampleBoresightTrajectory } from '../../../../src/devices/indi/simulator/mount.trajectory'
+import { boresightHistory, boresightHistorySpan, clearBoresightHistory, recordBoresightSample, sampleBoresightAt, sampleBoresightTrajectory } from '../../../../src/devices/indi/simulator/mount.trajectory'
 import { deg, hour, normalizePI, toDeg } from '../../../../src/math/units/angle'
 
 // Unit coverage for the rolling boresight history: ring wrap, interpolation, clamping outside the
@@ -34,21 +34,13 @@ describe('boresight history', () => {
 		const history = boresightHistory(8)
 		for (let i = 0; i < 4; i++) recordBoresightSample(history, i * 100, deg(i), deg(-i))
 
-		const path = new Float64Array(3)
 		const trajectory = new Float64Array(2)
 
-		// The count is returned as the number of triples written, and a caller indexes the buffer by it.
-		// NaN passed the size check, ran every loop zero times and came back as NaN, which is a count of
-		// samples nothing had been written for.
-		expect(sampleBoresightPath(history, 0, 300, Number.NaN, path)).toBe(1)
-		expect(toDeg(path[0])).toBeCloseTo(1.5, 9)
-		expect(path[2]).toBe(1)
-
+		// The count is returned as the number of pairs written, and a caller indexes the buffer by it.
 		expect(sampleBoresightTrajectory(history, 0, 300, Number.NaN, trajectory)).toBe(1)
 		expect(toDeg(trajectory[0])).toBeCloseTo(1.5, 9)
 
 		// An infinite count is a buffer that cannot hold it, which is already refused.
-		expect(sampleBoresightPath(history, 0, 300, Infinity, path)).toBe(0)
 		expect(sampleBoresightTrajectory(history, 0, 300, Infinity, trajectory)).toBe(0)
 	})
 
@@ -167,129 +159,6 @@ describe('boresight trajectory sampling', () => {
 	})
 })
 
-describe('boresight path length', () => {
-	test('measures nothing without samples or over an empty interval', () => {
-		expect(boresightPathLength(boresightHistory(4), 0, 1000)).toBe(0)
-
-		const history = boresightHistory(4)
-		recordBoresightSample(history, 1000, deg(10), deg(20))
-		expect(boresightPathLength(history, 1000, 1000)).toBe(0)
-	})
-
-	test('scales the right ascension by the cosine of the declination', () => {
-		const history = boresightHistory(4)
-		recordBoresightSample(history, 0, deg(10), deg(60))
-		recordBoresightSample(history, 1000, deg(11), deg(60))
-
-		// One degree of right ascension at sixty degrees of declination is half a degree on the sky.
-		expect(toDeg(boresightPathLength(history, 0, 1000))).toBeCloseTo(0.5, 6)
-	})
-
-	test('sums the path rather than the displacement of its endpoints', () => {
-		const history = boresightHistory(8)
-		recordBoresightSample(history, 0, deg(10), deg(0))
-		recordBoresightSample(history, 1000, deg(11), deg(0))
-		recordBoresightSample(history, 2000, deg(10), deg(0))
-
-		// The field swung a degree away and came back, so the endpoints coincide and the path is two
-		// degrees. This is the case a fixed probe grid can miss entirely.
-		expect(toDeg(boresightPathLength(history, 0, 2000))).toBeCloseTo(2, 6)
-	})
-
-	test('measures only the part of the path inside the window', () => {
-		const history = boresightHistory(8)
-		recordBoresightSample(history, 0, deg(10), deg(0))
-		recordBoresightSample(history, 1000, deg(12), deg(0))
-
-		// Half of an evenly travelled interval, with both endpoints interpolated between samples.
-		expect(toDeg(boresightPathLength(history, 250, 750))).toBeCloseTo(1, 6)
-	})
-
-	test('clamps to the retained window instead of extrapolating', () => {
-		const history = boresightHistory(8)
-		recordBoresightSample(history, 1000, deg(10), deg(0))
-		recordBoresightSample(history, 2000, deg(11), deg(0))
-
-		// Nothing is known before or after the window, so the extra time adds no path.
-		expect(toDeg(boresightPathLength(history, 0, 3000))).toBeCloseTo(1, 6)
-	})
-})
-
-describe('boresight path sampling', () => {
-	// A field that sits still for a second, darts half a degree away and back over twenty milliseconds,
-	// then sits still for another second. The excursion is 1% of the interval and all of the motion.
-	function dithering() {
-		const history = boresightHistory(16)
-		recordBoresightSample(history, 0, deg(10), deg(0))
-		recordBoresightSample(history, 1000, deg(10), deg(0))
-		recordBoresightSample(history, 1010, deg(10.5), deg(0))
-		recordBoresightSample(history, 1020, deg(10), deg(0))
-		recordBoresightSample(history, 2000, deg(10), deg(0))
-		return history
-	}
-
-	test('refuses to write past the end of the output', () => {
-		expect(sampleBoresightPath(dithering(), 0, 2000, 5, new Float64Array(14))).toBe(0)
-		expect(sampleBoresightPath(boresightHistory(4), 0, 2000, 5, new Float64Array(15))).toBe(0)
-	})
-
-	test('gives a single sample the whole exposure, at the middle of it', () => {
-		const out = new Float64Array(3)
-		expect(sampleBoresightPath(dithering(), 0, 2000, 1, out)).toBe(1)
-		expect(toDeg(out[0])).toBeCloseTo(10, 9)
-		expect(out[2]).toBe(1)
-	})
-
-	test('places the samples on the motion rather than on the clock', () => {
-		const out = new Float64Array(15)
-		expect(sampleBoresightPath(dithering(), 0, 2000, 5, out)).toBe(5)
-
-		// Spaced evenly along the path, so the excursion is drawn: a quarter of the way along it, at its
-		// far point, and a quarter of the way back. Sampling evenly in time would have put every one of
-		// these on the resting position and rendered a star that never moved.
-		expect(toDeg(out[3])).toBeCloseTo(10.25, 6)
-		expect(toDeg(out[6])).toBeCloseTo(10.5, 6)
-		expect(toDeg(out[9])).toBeCloseTo(10.25, 6)
-
-		// The endpoints are still the ends of the interval, where the field was at rest.
-		expect(toDeg(out[0])).toBeCloseTo(10, 9)
-		expect(toDeg(out[12])).toBeCloseTo(10, 9)
-	})
-
-	test('weights each sample by the share of the exposure it was held for', () => {
-		const out = new Float64Array(15)
-		sampleBoresightPath(dithering(), 0, 2000, 5, out)
-
-		let total = 0
-		for (let i = 0; i < 5; i++) total += out[i * 3 + 2]
-		expect(total).toBeCloseTo(1, 12)
-
-		// The mount spent 1% of the exposure on the excursion, so its samples are faint and the two
-		// resting positions carry almost all of the light. Weighting them equally would have painted a
-		// dither as bright as the star.
-		expect(out[8]).toBeLessThan(0.01)
-		expect(out[2] + out[14]).toBeGreaterThan(0.98)
-	})
-
-	test('falls back to even times for a field that never moved', () => {
-		const history = boresightHistory(8)
-		recordBoresightSample(history, 0, deg(10), deg(20))
-		recordBoresightSample(history, 2000, deg(10), deg(20))
-
-		const out = new Float64Array(9)
-		expect(sampleBoresightPath(history, 0, 2000, 3, out)).toBe(3)
-
-		let total = 0
-
-		for (let i = 0; i < 3; i++) {
-			expect(toDeg(out[i * 3])).toBeCloseTo(10, 9)
-			total += out[i * 3 + 2]
-		}
-
-		expect(total).toBeCloseTo(1, 12)
-	})
-})
-
 describe('boresight recording', () => {
 	test('preserves both sides of a discontinuity recorded at the same instant', () => {
 		const history = boresightHistory(8)
@@ -314,13 +183,11 @@ describe('boresight recording', () => {
 		recordBoresightSample(history, 1000, deg(10), deg(20))
 		recordBoresightSample(history, 1000, deg(11), deg(21))
 
-		expect(boresightPathLength(history, 0, 1000)).toBe(0)
-
-		const out = new Float64Array(9)
-		expect(sampleBoresightPath(history, 0, 1000, 3, out)).toBe(3)
+		const out = new Float64Array(6)
+		expect(sampleBoresightTrajectory(history, 0, 1000, 3, out)).toBe(3)
 		for (let i = 0; i < 3; i++) {
-			expect(toDeg(out[i * 3])).toBeCloseTo(10, 9)
-			expect(toDeg(out[i * 3 + 1])).toBeCloseTo(20, 9)
+			expect(toDeg(out[i * 2])).toBeCloseTo(10, 9)
+			expect(toDeg(out[i * 2 + 1])).toBeCloseTo(20, 9)
 		}
 	})
 
@@ -331,20 +198,17 @@ describe('boresight recording', () => {
 		recordBoresightSample(history, 500, deg(20), deg(30))
 		recordBoresightSample(history, 1000, deg(20), deg(30))
 
-		const out = new Float64Array(15)
-		expect(sampleBoresightPath(history, 0, 1000, 5, out)).toBe(5)
+		const out = new Float64Array(10)
+		expect(sampleBoresightTrajectory(history, 0, 1000, 5, out)).toBe(5)
 
-		let weight = 0
 		for (let i = 0; i < 5; i++) {
-			const rightAscension = toDeg(out[i * 3])
-			const declination = toDeg(out[i * 3 + 1])
+			const rightAscension = toDeg(out[i * 2])
+			const declination = toDeg(out[i * 2 + 1])
 			expect(Math.min(Math.abs(rightAscension - 10), Math.abs(rightAscension - 20))).toBeLessThan(1e-9)
 			expect(Math.min(Math.abs(declination - 20), Math.abs(declination - 30))).toBeLessThan(1e-9)
-			weight += out[i * 3 + 2]
 		}
 
-		expect(out[2]).toBeCloseTo(0.5, 12)
-		expect(out[14]).toBeCloseTo(0.5, 12)
-		expect(weight).toBeCloseTo(1, 12)
+		// The sample at the jump is taken after it, as every sample but the last is.
+		expect(toDeg(out[4])).toBeCloseTo(20, 9)
 	})
 })

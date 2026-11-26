@@ -25,17 +25,6 @@ export const GUIDE_JITTER_SEED = 0x5f3a1c27
 // minutes per leg and a window that merely spanned a typical sub-exposure truncated a third of the
 // trail.
 export const MOUNT_TRAJECTORY_CAPACITY = 8192
-// Most positions an exposure is integrated over. Bounds the cost of a badly drifting mount, at the
-// price of under-resolving a trail longer than half this many pixels.
-//
-// Known limit: a drift-alignment run deliberately sweeps the field hundreds of pixels, so its trail
-// comes out as this many discrete images of each star rather than a continuous line. Rendering one
-// faithfully would need a sample per pixel of trail, or segments instead of points in the image
-// generator; neither is worth it for a case the rest of the simulator does not depend on.
-export const MAX_TRAJECTORY_SAMPLES = 64
-// Field displacement, in unbinned pixels, that each integration sample is allowed to cover. Half a
-// pixel keeps a trail continuous without over-sampling a field that barely moves.
-export const TRAJECTORY_PIXELS_PER_SAMPLE = 0.5
 // Points a simulation step puts on one cycle of a ring-down, which is the only motion modelled here
 // that can be faster than the tick. Eight resolves the excursion and its direction; fewer starts to
 // understate the peak, and the trajectory is only ever read as a path length and a set of dwells.

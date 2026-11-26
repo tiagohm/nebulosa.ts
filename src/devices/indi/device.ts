@@ -953,7 +953,9 @@ export function isSubDevice<D extends Device>(device: Device): device is SubDevi
 
 // Predicts the pier side a German equatorial mount would use for the given coordinates and local
 // sidereal time. RA, Dec, and LST are radians. Returns NEITHER at the celestial poles where it is
-// undefined; otherwise WEST when the target is east of the meridian (hour angle in [0,12)h), else EAST.
+// undefined; otherwise WEST when the target is east of the meridian (RA - LST in [0, 12) h, an hour
+// angle in (-12, 0] h), else EAST. Mirroring a mount between hemispheres keeps east, west and the
+// counterweight where they are, so the same rule holds south of the equator.
 export function expectedPierSide(rightAscension: Angle, declination: Angle, lst: Angle): PierSide {
 	if (Math.abs(declination) === PIOVERTWO) return 'NEITHER'
 	return toHour(normalizeAngle(rightAscension - lst)) < 12 ? 'WEST' : 'EAST'

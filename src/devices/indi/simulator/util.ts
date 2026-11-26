@@ -6,6 +6,7 @@ import type { Point } from '../../../math/numerical/geometry'
 import { clamp, pmod } from '../../../math/numerical/math'
 import type { Angle } from '../../../math/units/angle'
 import { handleDefLightVector, handleDefNumberVector, handleDefSwitchVector, handleDefTextVector, type IndiClientHandler } from '../client'
+import type { GuideDirection } from '../device'
 import { type DefNumberVector, type DefSwitchVector, type DefTextVector, selectOnSwitch } from '../types'
 import type { ClientSimulator } from './client'
 import type { SimulatorProperty } from './types'
@@ -155,4 +156,14 @@ export function boresightOffsetInPixels(centerRightAscension: Angle, centerDecli
 	const [center, centerDec] = equatorialToJ2000(centerRightAscension, centerDeclination, time)
 	const [boresight, boresightDec] = equatorialToJ2000(rightAscension, declination, time)
 	return pointingOffsetInPixels(center, centerDec, boresight, boresightDec, pixelScale, out)
+}
+
+// Pulse an axis command asks for: the first positive duration of its two directions, or a zero that
+// cancels the axis, or undefined when the command carries neither.
+export function timedGuidePulse(positive: GuideDirection, positiveDuration: number | undefined, negative: GuideDirection, negativeDuration: number | undefined): readonly [GuideDirection, number] | undefined {
+	if (positiveDuration !== undefined && positiveDuration > 0) return [positive, positiveDuration]
+	if (negativeDuration !== undefined && negativeDuration > 0) return [negative, negativeDuration]
+	if (positiveDuration === 0) return [positive, 0]
+	if (negativeDuration === 0) return [negative, 0]
+	return undefined
 }

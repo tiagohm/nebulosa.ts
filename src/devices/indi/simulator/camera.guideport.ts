@@ -2,6 +2,7 @@ import type { GuideDirection } from '../device'
 import { makeNumberVector, type NewNumberVector, type PropertyState } from '../types'
 import { type ComponentBus, SimulatorComponent } from './component'
 import { MAIN_CONTROL } from './constants'
+import { timedGuidePulse } from './util'
 
 // Guide-port circuit of the simulated camera: an ST-4 output that relays timed pulses to whatever
 // drives the mount and reports each axis Busy while its pulse lasts. Durations and instants are
@@ -18,16 +19,6 @@ export interface CameraGuidePortOutput {
 // Guide axis a direction belongs to.
 function isNorthSouth(direction: GuideDirection) {
 	return direction === 'NORTH' || direction === 'SOUTH'
-}
-
-// Pulse an axis command asks for: the first positive duration of its two directions, or a zero that
-// cancels the axis, or undefined when the command carries neither.
-export function timedGuidePulse(positive: GuideDirection, positiveDuration: number | undefined, negative: GuideDirection, negativeDuration: number | undefined): readonly [GuideDirection, number] | undefined {
-	if (positiveDuration !== undefined && positiveDuration > 0) return [positive, positiveDuration]
-	if (negativeDuration !== undefined && negativeDuration > 0) return [negative, negativeDuration]
-	if (positiveDuration === 0) return [positive, 0]
-	if (negativeDuration === 0) return [negative, 0]
-	return undefined
 }
 
 // A timed-guide property of one axis.

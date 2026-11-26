@@ -249,7 +249,7 @@ function applyPolarPointingError(rightAscension: Angle, declination: Angle, hour
 // along the great circle they point along. East is increasing right ascension; north is increasing
 // declination. `error` receives the result and is returned. A zero offset normalizes the right
 // ascension and leaves the declination unchanged.
-function applySkyOffset(rightAscension: Angle, declination: Angle, east: Angle, north: Angle, error: [Angle, Angle]): readonly [Angle, Angle] {
+export function applySkyOffset(rightAscension: Angle, declination: Angle, east: Angle, north: Angle, error: [Angle, Angle]): readonly [Angle, Angle] {
 	const offset = Math.hypot(east, north)
 
 	if (offset === 0) {
@@ -294,7 +294,9 @@ const Y_AXIS = [0, 1, 0] as const
 // `latitude`, all radians, the same knobs as polarAlignmentPointingModel and agreeing with it to first
 // order. The axis is tilted in the meridian by the altitude error and then turned about the zenith by
 // the azimuth error, which is what the adjusters of a real mount do and puts the axis exactly at the
-// misaligned azimuth and altitude. Writes into `out` when given and returns it.
+// misaligned azimuth and altitude. The knobs describe the end of the axis pointing at the north
+// celestial pole at any latitude; the same error seen from the south pole has both signs reversed.
+// Writes into `out` when given and returns it.
 export function polarAxisRotation(azimuthError: Angle, altitudeError: Angle, latitude: Angle, out?: MutMat3): MutMat3 {
 	const tilt = matRodriguesRotation(Y_AXIS, altitudeError)
 	const turn = matRodriguesRotation([Math.cos(latitude), 0, Math.sin(latitude)], -azimuthError)

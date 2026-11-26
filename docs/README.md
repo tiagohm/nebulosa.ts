@@ -13239,9 +13239,13 @@ manager.park(mount)
 
 ### INDI Mount Simulator
 
-`MountSimulator` is an in-process German equatorial mount for testing pointing, tracking, guiding and meridian-flip logic. It distinguishes three directions: the reported coordinate (radians, JNOW) that the controller believes and an INDI client sees, the mechanical orientation of its axes, and the boresight where the optical axis really points. With every imperfection off they coincide; turned on, they diverge as on a real mount. The simulator models goto, flip and sync, manual motion at seven slew rates, sidereal, solar, lunar and King tracking, home and park, the site and clock, and pulse guiding at a guide rate that is a fraction of the sidereal rate. The side of the pier follows the placement of the axes.
+`MountSimulator` is an in-process German equatorial mount for testing pointing, tracking, guiding and meridian-flip logic. It distinguishes three directions: the reported coordinate (radians, JNOW) that the controller believes and an INDI client sees, the mechanical orientation of its axes, and the boresight where the optical axis really points. With every imperfection off they coincide; turned on, they diverge as on a real mount. The simulator models goto, flip and sync, manual motion at seven slew rates, sidereal, solar, lunar and King tracking, home and park, the site and clock, and pulse guiding at a guide rate that is a fraction of the sidereal rate.
 
-The imperfections are independent families switched on by `SIMULATOR_ERROR_FEATURES`, each configured by its own number vector: polar misalignment (an exact rotation of the polar axis, valid at the pole), cone and non-orthogonality and index errors (alignment), periodic error of the worm with optional PEC playback, backlash and stiction of the gears, guiding latency and quantization, settling ring-down after a stop, tube flexure, wind deflection, and tracking-rate bias and drift. The recorded boresight path is what the camera simulator uses to trail the stars of an exposure (see [INDI Camera Simulator](#indi-camera-simulator)). The simulated clock advances in real time, and `pauseAutomaticTicking` hands it to the caller, who drives it with `advance(seconds)` so that every step is deterministic.
+The side of the pier is the physical side of the tube, not the side a coordinate predicts: it changes only when the axes really move to the other side (a goto, a flip, home or park arriving there) or cross a pole, so a target tracked through the meridian, or synced after an early flip, keeps its side. A flip swings the tube over the pole the mount points at. The meridian limit of `MOUNT_MERIDIAN_FLIP_SETTINGS` (degrees past the meridian, zero to disable) lets a goto stay on its side up to it and stops tracking on the west side beyond it; the automatic flip starts at its own hour angle, which belongs before the limit. The mount powers up, homes and parks at the visible pole of its site, the south celestial pole south of the equator, and a site given after the connection moves that pose while nothing has placed the axes; home and park are kept as hour angles, fixed on the mount. Guide pulses are refused while a goto, flip, home or park slews.
+
+The imperfections are independent families switched on by `SIMULATOR_ERROR_FEATURES`, each configured by its own number vector: polar misalignment (an exact rotation of the polar axis, valid at the pole), cone and non-orthogonality and index errors (alignment), periodic error of the worm with optional PEC playback, backlash and stiction of the gears, guiding latency and quantization, settling ring-down after a stop, tube flexure, wind deflection, and tracking-rate bias and drift. The polar errors follow the visible pole in both hemispheres: a positive altitude error puts the axis above it and a positive azimuth error east of it. The recorded boresight path is what the camera simulator uses to trail the stars of an exposure (see [INDI Camera Simulator](#indi-camera-simulator)). The simulated clock advances in real time, keeps running while the mount is disconnected, and `pauseAutomaticTicking` hands it to the caller, who drives it with `advance(seconds)` so that every step is deterministic.
+
+The mount is a set of independent circuits (drive, clock, site, tracking, guide port, meridian policy, the error families and the boresight), each owning its INDI vectors. The initial value of every vector comes from a configuration given to the constructor, `DEFAULT_MOUNT_SIMULATOR_CONFIG` of `mount.config` merged with the partial override of the `config` option, which also seeds the random sources; the shared connection and configuration behaviour is in [INDI Client Simulator](#indi-client-simulator).
 
 ```ts
 import { IndiClientHandlerSet } from 'nebulosa/src/devices/indi/client'
@@ -13250,13 +13254,14 @@ import { MountSimulator } from 'nebulosa/src/devices/indi/simulator/mount'
 import { deg, hour, toArcsec, toHour } from 'nebulosa/src/math/units/angle'
 
 using client = new ClientSimulator('mount', new IndiClientHandlerSet())
-using simulator = new MountSimulator('Mount Simulator', client)
+// The configuration overrides the defaults of the vectors: here the site and a meridian limit of 10°.
+using simulator = new MountSimulator('Mount Simulator', client, { config: { site: { latitude: -23, longitude: -46, elevation: 760 }, meridian: { limit: 10 } } })
 
 // Connect, then take over the clock: the mount only moves when advance(seconds) is called.
 simulator.connect()
 simulator.pauseAutomaticTicking()
 simulator.setTime({ utc: Date.UTC(2026, 9, 5, 0), offset: 0 })
-client.sendNumber({ device: simulator.name, name: 'GEOGRAPHIC_COORD', elements: { LAT: -23, LONG: 314, ELEV: 760 } })
+console.log(simulator.mechanical.declination) // -π/2: powered up at the south celestial pole
 console.log(simulator.utcTime, simulator.latitude, simulator.longitude, simulator.elevation) // simulated UTC ms, and the site
 
 // The local sidereal time of the site at a simulated instant, in radians.
@@ -13267,7 +13272,8 @@ simulator.setTrackMode('SIDEREAL')
 simulator.setSlewRate('SPEED_7')
 console.log(simulator.trackMode, simulator.slewRate) // SIDEREAL SPEED_7
 
-// Sync places the axes, then a goto (radians, JNOW) advanced in 0.1 s steps until the slew ends.
+// Sync places the axes, keeping the side of the pier once they have one, then a goto (radians, JNOW)
+// advanced in 0.1 s steps until the slew ends.
 simulator.syncTo(hour(3), deg(20))
 simulator.setTrackingEnabled(true)
 simulator.goTo(hour(4), deg(30))
@@ -13293,17 +13299,15 @@ console.log(simulator.isPulsing) // true
 for (let i = 0; i < 30; i++) simulator.advance(0.1)
 console.log(toArcsec(simulator.declination - declination)) // ≈ 7.52 arcsec
 
-// Where the optical axis pointed over the last second (simulated ms): its path length in radians, and RA/Dec samples.
+// Where the optical axis pointed over the last second (simulated ms), as RA/Dec samples evenly spaced in time.
 const end = simulator.utcTime
 const samples = new Float64Array(2 * 16)
-console.log(simulator.boresightPathLength(end - 1000, end), simulator.sampleBoresightTrajectory(end - 1000, end, 16, samples)) // radians, samples written
-// sampleBoresightPath writes RA, Dec and time-weight triples spaced by path length instead.
+console.log(simulator.sampleBoresightTrajectory(end - 1000, end, 16, samples)) // samples written
 
 // Polar misalignment and periodic error: the optical axis no longer matches the reported coordinate.
 client.sendSwitch({ device: simulator.name, name: 'SIMULATOR_ERROR_FEATURES', elements: { ALIGNMENT: true, PERIODIC_ERROR: true } })
 const { reported, boresight } = simulator.pointingState
 console.log(toArcsec(boresight.declination - reported.declination)) // pointing error in declination, arcsec
-console.log(toArcsec(simulator.pointingErrorBound)) // upper bound of the pointing error, arcsec
 
 // The same boresight alone, the cone and non-orthogonality model, the worm phase and the tracking-rate drift (radians).
 console.log(simulator.boresight, simulator.pointingModel, simulator.wormPhase, simulator.trackingRateOffset)

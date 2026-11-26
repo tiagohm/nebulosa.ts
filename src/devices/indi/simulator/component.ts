@@ -1,4 +1,5 @@
-import { type DefNumberVector, type DefSwitchVector, makeNumberVector, makeSwitchVector, type NewNumberVector, type NewSwitchVector } from '../types'
+import type { DeepPartial } from '../../../core/types'
+import { type DefNumberVector, type DefSwitchVector, makeNumberVector, makeSwitchVector, type NewNumberVector, type NewSwitchVector, type NewTextVector } from '../types'
 import type { SimulatorProperty } from './types'
 
 // Building blocks of a simulated device: a device is a board of independent circuits, each owning its
@@ -36,6 +37,11 @@ export abstract class SimulatorComponent {
 
 	// Handles a switch command, returning whether it was addressed to this circuit.
 	handleSwitch(vector: NewSwitchVector): boolean {
+		return false
+	}
+
+	// Handles a text command, returning whether it was addressed to this circuit.
+	handleText(vector: NewTextVector): boolean {
 		return false
 	}
 
@@ -90,6 +96,41 @@ export function routeSwitch(components: readonly SimulatorComponent[], vector: N
 	}
 
 	return false
+}
+
+// Routes a text command to the first circuit that handles it, returning whether one did.
+export function routeText(components: readonly SimulatorComponent[], vector: NewTextVector) {
+	for (const component of components) {
+		if (component.handleText(vector)) return true
+	}
+
+	return false
+}
+
+// Whether `value` is a plain object merged key by key rather than replaced as a whole.
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+	return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+// Merges `override` into `base` recursively: plain objects are merged key by key, anything else,
+// arrays and tuples included, replaces the base value; an undefined override keeps the base value.
+// Returns a fresh object and mutates neither input.
+function mergeObject(base: object, override: object): object {
+	const merged: Record<string, unknown> = { ...base }
+
+	for (const [key, value] of Object.entries(override)) {
+		if (value === undefined) continue
+		const current = merged[key]
+		merged[key] = isPlainObject(current) && isPlainObject(value) ? mergeObject(current, value) : value
+	}
+
+	return merged
+}
+
+// Builds a configuration from `base` and an optional partial `override`, merged section by section.
+// The merge keeps every key of the base and each override has the shape of the key it replaces.
+export function mergeConfig<T extends object>(base: T, override?: DeepPartial<T>): T {
+	return override === undefined ? base : (mergeObject(base, override) as T)
 }
 
 // One element of a number property bound to the numeric setting `key`: element name, label, setting,

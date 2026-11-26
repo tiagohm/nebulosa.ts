@@ -4,6 +4,7 @@ import type { PlotStarOptions } from '../../../imaging/stars/generator'
 import type { SyntheticAberrationConfig } from '../../../imaging/synthetic/aberration'
 import { type AstronomicalImageNoiseConfig, DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG } from '../../../imaging/synthetic/generator'
 import type { Angle } from '../../../math/units/angle'
+import { mergeConfig } from './component'
 import type { CatalogSourceType, ReadoutMode, TransferFormat } from './types'
 
 // Configuration of the simulated camera, one section per circuit. Every section holds the initial
@@ -294,28 +295,7 @@ export const DEFAULT_CAMERA_SIMULATOR_CONFIG: CameraSimulatorConfig = {
 	trail: { vertices: 33, spacing: 0.5, maxPoints: 16384, maxExtent: 1024 },
 }
 
-// Whether `value` is a plain object merged key by key rather than replaced as a whole.
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-	return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
-// Merges `override` into `base` recursively: plain objects are merged key by key, anything else,
-// arrays and tuples included, replaces the base value; an undefined override keeps the base value.
-// Returns a fresh object and mutates neither input.
-function mergeObject(base: object, override: object): object {
-	const merged: Record<string, unknown> = { ...base }
-
-	for (const [key, value] of Object.entries(override)) {
-		if (value === undefined) continue
-		const current = merged[key]
-		merged[key] = isPlainObject(current) && isPlainObject(value) ? mergeObject(current, value) : value
-	}
-
-	return merged
-}
-
 // Builds the configuration of a camera from the defaults and an optional override.
 export function cameraSimulatorConfig(override?: CameraSimulatorConfigOverride, base: CameraSimulatorConfig = DEFAULT_CAMERA_SIMULATOR_CONFIG): CameraSimulatorConfig {
-	// The merge keeps every key of the defaults and each override has the shape of the key it replaces.
-	return override === undefined ? base : (mergeObject(base, override) as CameraSimulatorConfig)
+	return mergeConfig(base, override)
 }

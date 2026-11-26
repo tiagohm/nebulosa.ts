@@ -700,7 +700,7 @@ describe('mount simulator meridian flip', () => {
 			expect(simulator.sampleBoresightTrajectory(arrivalTime, arrivalTime, 2, jump)).toBe(2)
 			expect(toArcsec(normalizePI(jump[0] - jump[2]))).toBeCloseTo(0, 6)
 			expect(toArcsec(jump[3] - jump[1])).toBeCloseTo(90, 6)
-			expect(simulator.boresightPathLength(startTime, arrivalTime + 1)).toBeGreaterThan(deg(100))
+			expect(pathLength(simulator, startTime, arrivalTime + 1)).toBeGreaterThan(deg(100))
 		} finally {
 			simulator.dispose()
 		}
@@ -721,7 +721,7 @@ describe('mount simulator meridian flip', () => {
 			expect(simulator.pierSide).toBe('EAST')
 			expect(normalizePI(simulator.rightAscension - target.rightAscension)).toBeCloseTo(0, 9)
 			expect(simulator.declination).toBeCloseTo(target.declination, 12)
-			expect(simulator.boresightPathLength(startTime, simulator.utcTime)).toBeGreaterThan(deg(100))
+			expect(pathLength(simulator, startTime, simulator.utcTime)).toBeGreaterThan(deg(100))
 		} finally {
 			simulator.dispose()
 		}
@@ -1055,8 +1055,8 @@ describe('mount simulator meridian flip', () => {
 		}
 	})
 
-	test('clears declination transmission state when sync changes pier side', () => {
-		const { client, simulator } = makeMeridianFlipMount('mount.flip.sync.transmission')
+	test('keeps the physical pier side when a sync crosses the meridian', () => {
+		const { client, simulator } = makeMeridianFlipMount('mount.flip.sync.side')
 
 		try {
 			client.sendSwitch({ device: simulator.name, name: 'SIMULATOR_ERROR_FEATURES', elements: { MECHANICS: true } })
@@ -1064,20 +1064,44 @@ describe('mount simulator meridian flip', () => {
 			simulator.setGuideRate(1, 1)
 			simulator.setTrackingEnabled(true)
 
+			// From the pole, which has no side, a sync takes the side of the coordinate.
 			let lst = simulator.siderealTimeAt(simulator.utcTime)
 			simulator.syncTo(normalizeAngle(lst + hour(1)), deg(20))
 			simulator.pulse('NORTH', 1000)
 			simulator.advance(1)
 			expect(simulator.pierSide).toBe('WEST')
 
+			// A sync moves no axis across the pier, so the tube stays where it is, counterweight up, as a
+			// plate-solved centring after an early flip does.
 			lst = simulator.siderealTimeAt(simulator.utcTime)
 			simulator.syncTo(normalizeAngle(lst - hour(1)), deg(20))
 			const start = simulator.mechanical.declination
 			simulator.pulse('NORTH', 1000)
 			simulator.advance(1)
 
-			expect(simulator.pierSide).toBe('EAST')
+			expect(simulator.pierSide).toBe('WEST')
 			expect(simulator.mechanical.declination).toBeGreaterThan(start)
+		} finally {
+			simulator.dispose()
+		}
+	})
+
+	test('keeps the side of an early flip through the sync of a centring', () => {
+		const { simulator } = makeMeridianFlipMount('mount.flip.sync.early')
+
+		try {
+			const lst = simulator.siderealTimeAt(simulator.utcTime)
+			const target = normalizeAngle(lst + hour(0.5))
+			simulator.syncTo(target, deg(20))
+			expect(simulator.pierSide).toBe('WEST')
+
+			simulator.flipTo(target, deg(20))
+			while (simulator.isSlewing) simulator.advance(0.1)
+			expect(simulator.pierSide).toBe('EAST')
+
+			// The centring syncs the solved coordinate, still before the meridian.
+			simulator.syncTo(normalizeAngle(target + arcsec(30)), deg(20.01))
+			expect(simulator.pierSide).toBe('EAST')
 		} finally {
 			simulator.dispose()
 		}
@@ -1944,10 +1968,11 @@ describe('mount simulator meridian flip', () => {
 			expect(simulator.isSlewing).toBeTrue()
 			expect(simulator.pierSide).toBe('WEST')
 
-			const targetRightAscension = normalizeAngle(simulator.siderealTimeAt(simulator.utcTime) + arcsec(17))
+			// The target transits a little after the replacement goto starts and before it arrives.
+			const targetRightAscension = normalizeAngle(simulator.siderealTimeAt(simulator.utcTime) + arcsec(8))
 			const targetDeclination = deg(20)
 			simulator.goTo(targetRightAscension, targetDeclination)
-			simulator.advance(FAST_FLIP_DURATION)
+			for (let i = 0; i < 10000 && simulator.isSlewing; i++) simulator.advance(0.001)
 
 			expect(simulator.isSlewing).toBeFalse()
 			const expectedAtArrival = expectedPierSide(targetRightAscension, targetDeclination, simulator.siderealTimeAt(simulator.utcTime))
@@ -2432,7 +2457,6 @@ describe('mount simulator pointing errors', () => {
 		try {
 			// The vectors are not empty: they describe a mid-range amateur mount. What keeps the default
 			// simulator perfect is the switch, not the numbers.
-			expect(mount.pointingErrorBound).toBe(0)
 			expect(mount.boresight.rightAscension).toBe(mount.mechanical.rightAscension)
 			expect(mount.boresight.declination).toBe(mount.mechanical.declination)
 
@@ -2442,7 +2466,6 @@ describe('mount simulator pointing errors', () => {
 			client.sendNumber({ device: mount.name, name: 'MOUNT_WIND', elements: { AMPLITUDE: 30 } })
 			mount.advance(10)
 
-			expect(mount.pointingErrorBound).toBe(0)
 			expect(mount.boresight.declination).toBe(mount.mechanical.declination)
 		} finally {
 			mount.dispose()
@@ -2525,17 +2548,13 @@ describe('mount simulator pointing errors', () => {
 		const { client, mount } = makeMount('mount.features.on')
 
 		try {
-			expect(mount.pointingErrorBound).toBe(0)
-
 			// No numbers given: turning the switch on is enough to get a mount with a plausible polar
 			// misalignment, cone error and index error, which is the point of the defaults.
 			client.sendSwitch({ device: mount.name, name: 'SIMULATOR_ERROR_FEATURES', elements: { ALIGNMENT: true } })
-			expect(mount.pointingErrorBound).toBeGreaterThan(arcsec(100))
 			expect(mount.boresight.declination).not.toBe(mount.mechanical.declination)
 
 			// And switching it back off restores an ideal mount without having to zero anything.
 			client.sendSwitch({ device: mount.name, name: 'SIMULATOR_ERROR_FEATURES', elements: { ALIGNMENT: false } })
-			expect(mount.pointingErrorBound).toBe(0)
 			expect(mount.boresight.declination).toBe(mount.mechanical.declination)
 		} finally {
 			mount.dispose()
@@ -2564,7 +2583,6 @@ describe('mount simulator pointing errors', () => {
 			expect(mount.trackingRateOffset).toBe(0)
 			expect(mount.boresight.rightAscension).toBe(mount.mechanical.rightAscension)
 			expect(mount.boresight.declination).toBe(mount.mechanical.declination)
-			expect(mount.pointingErrorBound).toBe(0)
 
 			// And it must stay ideal: the wander of the rate lives in its own state, so leaving it behind
 			// would let the drift keep growing under a family that is no longer simulated.
@@ -2791,7 +2809,7 @@ describe('mount simulator pointing errors', () => {
 			// positions at one timestamp made a lookup there answer with the superseded one, so the frame
 			// came out as a trail running from where the telescope used to point.
 			const startTime = mount.utcTime
-			expect(toArcsec(mount.boresightPathLength(startTime, startTime + 100))).toBeCloseTo(0, 9)
+			expect(toArcsec(pathLength(mount, startTime, startTime + 100))).toBeCloseTo(0, 9)
 		} finally {
 			mount.dispose()
 		}
@@ -2817,7 +2835,7 @@ describe('mount simulator pointing errors', () => {
 			// Stamping both samples with the truncated clock put two different positions under one
 			// timestamp, and the history reads a timestamp as identifying a position: the excursion
 			// vanished and the path came back empty.
-			expect(toArcsec(mount.boresightPathLength(startTime, mount.utcTime + 1))).toBeGreaterThan(50)
+			expect(toArcsec(pathLength(mount, startTime, mount.utcTime + 1))).toBeGreaterThan(50)
 		} finally {
 			mount.dispose()
 		}
@@ -2849,7 +2867,7 @@ describe('mount simulator pointing errors', () => {
 			// only on the next step, the jump was left between two samples a tick apart and the history
 			// interpolated across it, drawing the frame as a trail from the error the mount used to have.
 			mount.advance(0.1)
-			expect(toArcsec(mount.boresightPathLength(startTime, mount.utcTime))).toBeLessThan(1)
+			expect(toArcsec(pathLength(mount, startTime, mount.utcTime))).toBeLessThan(1)
 		} finally {
 			mount.dispose()
 		}
@@ -2870,9 +2888,9 @@ describe('mount simulator pointing errors', () => {
 			expect(angularDistance(before.rightAscension, before.declination, after.rightAscension, after.declination)).toBeGreaterThan(arcsec(100))
 
 			mount.advance(0.1)
-			expect(toArcsec(mount.boresightPathLength(changeTime - 50, changeTime))).toBeLessThan(1)
-			expect(toArcsec(mount.boresightPathLength(changeTime, changeTime + 50))).toBeLessThan(1)
-			expect(toArcsec(mount.boresightPathLength(changeTime - 50, changeTime + 50))).toBeGreaterThan(100)
+			expect(toArcsec(pathLength(mount, changeTime - 50, changeTime))).toBeLessThan(1)
+			expect(toArcsec(pathLength(mount, changeTime, changeTime + 50))).toBeLessThan(1)
+			expect(toArcsec(pathLength(mount, changeTime - 50, changeTime + 50))).toBeGreaterThan(100)
 		} finally {
 			mount.dispose()
 		}
@@ -2897,10 +2915,10 @@ describe('mount simulator pointing errors', () => {
 			// of the step, the arrival sat between two samples a tick apart and the history interpolated
 			// the goto evenly across all of it, so this stretch read as a quarter of a degree of travel
 			// that had finished long before it began.
-			expect(toArcsec(mount.boresightPathLength(startTime + 50, startTime + 100))).toBeLessThan(1)
+			expect(toArcsec(pathLength(mount, startTime + 50, startTime + 100))).toBeLessThan(1)
 
 			// The travel is still there, in the stretch it really happened in.
-			expect(toDeg(mount.boresightPathLength(startTime, startTime + 50))).toBeCloseTo(0.96, 3)
+			expect(toDeg(pathLength(mount, startTime, startTime + 50))).toBeCloseTo(0.96, 3)
 		} finally {
 			mount.dispose()
 		}
@@ -2926,8 +2944,8 @@ describe('mount simulator pointing errors', () => {
 			// before the pieces are walked, stamped the deflection reached at the end of the step onto the
 			// sample taken at the middle of it: all of the buffeting landed in the first half and the
 			// mount stood perfectly still through the second.
-			expect(toArcsec(mount.boresightPathLength(startTime + 50, startTime + 100))).toBeGreaterThan(0)
-			expect(toArcsec(mount.boresightPathLength(startTime, startTime + 50))).toBeGreaterThan(0)
+			expect(toArcsec(pathLength(mount, startTime + 50, startTime + 100))).toBeGreaterThan(0)
+			expect(toArcsec(pathLength(mount, startTime, startTime + 50))).toBeGreaterThan(0)
 		} finally {
 			mount.dispose()
 		}
@@ -2958,7 +2976,7 @@ describe('mount simulator pointing errors', () => {
 			// The mount swung a full overshoot each way through that tick, and an exposure taken over it
 			// has to be blurred by that. Advancing the oscillator in one closed-form jump left the
 			// trajectory with two identical endpoints and no sign of the excursion between them.
-			expect(toArcsec(mount.boresightPathLength(startTime, mount.utcTime))).toBeGreaterThan(100)
+			expect(toArcsec(pathLength(mount, startTime, mount.utcTime))).toBeGreaterThan(100)
 		} finally {
 			mount.dispose()
 		}
@@ -2986,7 +3004,7 @@ describe('mount simulator pointing errors', () => {
 			// three arcseconds out at half the sidereal rate and three back, which a frame exposed over
 			// this step has to be drawn as a trail rather than as a point.
 			expect(toArcsec(Math.abs(mount.mechanical.declination - declination))).toBeCloseTo(0, 9)
-			expect(toArcsec(mount.boresightPathLength(startTime, mount.utcTime))).toBeCloseTo(6, 1)
+			expect(toArcsec(pathLength(mount, startTime, mount.utcTime))).toBeCloseTo(6, 1)
 		} finally {
 			mount.dispose()
 		}
@@ -3010,7 +3028,7 @@ describe('mount simulator pointing errors', () => {
 			const samples = new Float64Array(10)
 			expect(mount.sampleBoresightTrajectory(startTime, mount.utcTime, 5, samples)).toBe(5)
 
-			const rotation = polarAxisRotation(arcsec(3600), arcsec(-2400), mount.latitude)
+			const rotation = visiblePoleRotation(arcsec(3600), arcsec(-2400), mount.latitude)
 
 			for (let i = 0; i < 5; i++) {
 				const time = startTime + i * 250
@@ -3143,8 +3161,6 @@ describe('mount simulator pointing errors', () => {
 
 		try {
 			const { reported, mechanical, boresight } = mount.pointingState
-
-			expect(mount.pointingErrorBound).toBe(0)
 
 			// With perfect geometry the boresight is the mechanical orientation itself, exactly.
 			expect(boresight.rightAscension).toBe(mechanical.rightAscension)
@@ -3459,7 +3475,7 @@ describe('mount simulator pointing errors', () => {
 			const startTime = mount.utcTime
 			mount.advance(2)
 			const endTime = mount.utcTime
-			const path = mount.boresightPathLength(startTime, endTime)
+			const path = pathLength(mount, startTime, endTime)
 			expect(toArcsec(path)).toBeGreaterThan(20)
 
 			// A UTC offset is a timezone for display: no timestamp moves with it and no geometry reads it,
@@ -3467,7 +3483,7 @@ describe('mount simulator pointing errors', () => {
 			// trajectory for it erased the earlier part of the trail of an exposure in progress.
 			mount.setTime({ utc: mount.utcTime, offset: 120 })
 
-			expect(mount.boresightPathLength(startTime, endTime)).toBeCloseTo(path, 12)
+			expect(pathLength(mount, startTime, endTime)).toBeCloseTo(path, 12)
 		} finally {
 			mount.dispose()
 		}
@@ -3942,15 +3958,14 @@ describe('mount simulator pointing errors', () => {
 
 			const utcTime = mount.utcTime
 			const lst = mount.siderealTimeAt(utcTime)
-			const [expectedRightAscension, expectedDeclination] = applyPolarAxisRotation(mount.rightAscension, mount.declination, lst, polarAxisRotation(arcsec(azimuthError), arcsec(altitudeError), mount.latitude))
-			const [firstOrderRightAscension, firstOrderDeclination] = polarAlignmentError(mount.rightAscension, mount.declination, mount.latitude, lst, arcsec(azimuthError), arcsec(altitudeError))
+			const [expectedRightAscension, expectedDeclination] = applyPolarAxisRotation(mount.rightAscension, mount.declination, lst, visiblePoleRotation(arcsec(azimuthError), arcsec(altitudeError), mount.latitude))
+			const [firstOrderRightAscension, firstOrderDeclination] = polarAlignmentError(mount.rightAscension, mount.declination, mount.latitude, lst, arcsec(hemisphere(mount.latitude) * azimuthError), arcsec(hemisphere(mount.latitude) * altitudeError))
 			const boresight = mount.boresight
 
 			expect(normalizePI(boresight.rightAscension - expectedRightAscension)).toBeCloseTo(0, 12)
 			expect(boresight.declination - expectedDeclination).toBeCloseTo(0, 12)
 			// The first-order model differs by the square of the error, a few arcseconds for a quarter degree.
 			expect(toArcsec(angularDistance(boresight.rightAscension, boresight.declination, firstOrderRightAscension, firstOrderDeclination))).toBeLessThan(5)
-			expect(mount.pointingErrorBound).toBeGreaterThan(0)
 		} finally {
 			mount.dispose()
 		}
@@ -3988,7 +4003,7 @@ describe('mount simulator pointing errors', () => {
 		}
 	})
 
-	test('delivers a pulse that falls entirely after the slew arrived', () => {
+	test('refuses a pulse issued while the mount slews', () => {
 		const { client, mount } = makeMount('mount.slew.remainder.pulse', 'GUIDING')
 
 		try {
@@ -3997,17 +4012,20 @@ describe('mount simulator pointing errors', () => {
 			mount.setTrackingEnabled(true)
 			mount.setSlewRate('SPEED_1')
 
-			// The goto takes nine tenths of the step, and the pulse falls inside the tenth that is left.
+			// The goto takes nine tenths of the step; a controller ignores the guide port while it slews.
 			const target = mount.declination + deg(0.135)
 			mount.goTo(mount.rightAscension, target)
 			mount.pulse('NORTH', 10)
+			expect(mount.isPulsing).toBeFalse()
 			mount.advance(0.1)
 
 			expect(mount.isSlewing).toBeFalse()
+			expect(toArcsec(mount.mechanical.declination - target)).toBeCloseTo(0, 6)
 
-			// Ten milliseconds at the full guide rate is about 0.15 arcseconds. Charging the remainder with
-			// a rate averaged over the whole step instead attenuated the pulse by the fraction of the step
-			// the slew had taken, delivering a tenth of it.
+			// Once it arrived, the same pulse is delivered in full: ten milliseconds at the full guide rate
+			// is about 0.15 arcseconds.
+			mount.pulse('NORTH', 10)
+			mount.advance(0.2)
 			expect(toArcsec(mount.mechanical.declination - target)).toBeCloseTo(0.15, 2)
 		} finally {
 			mount.dispose()
@@ -4137,12 +4155,12 @@ describe('mount simulator pointing errors', () => {
 
 			expect(mount.wormPhase).toBe(0)
 			expect(mount.boresight.rightAscension).toBe(mount.mechanical.rightAscension)
-			expect(mount.pointingErrorBound).toBe(0)
 
 			// Giving it a period brings the same amplitudes back, which is what makes the period the gate
 			// rather than the amplitudes being ignored outright.
 			client.sendNumber({ device: mount.name, name: 'MOUNT_PERIODIC_ERROR', elements: { RA_PERIOD: 400 } })
-			expect(toArcsec(mount.pointingErrorBound)).toBeCloseTo(10, 9)
+			mount.advance(100)
+			expect(mount.boresight.rightAscension).not.toBe(mount.mechanical.rightAscension)
 		} finally {
 			mount.dispose()
 		}
@@ -4190,9 +4208,6 @@ describe('mount simulator pointing errors', () => {
 			// twice as fast, back at its own trough.
 			mount.advance(period / 4)
 			expect(toArcsec(normalizePI(mount.boresight.rightAscension - mount.rightAscension))).toBeCloseTo(8 - 3, 6)
-
-			// The margin a consumer sizes from has to cover both.
-			expect(toArcsec(mount.pointingErrorBound)).toBeCloseTo(11, 6)
 		} finally {
 			mount.dispose()
 		}
@@ -4298,8 +4313,6 @@ describe('mount simulator pointing errors', () => {
 			mount.syncTo(mount.siderealTimeAt(mount.utcTime), deg(-52))
 			const offMeridian = mount.boresight
 			expect(toArcsec(offMeridian.declination - mount.mechanical.declination)).toBeCloseTo(-120 * Math.sin(deg(30)), 3)
-
-			expect(toArcsec(mount.pointingErrorBound)).toBeCloseTo(120, 6)
 		} finally {
 			mount.dispose()
 		}
@@ -4312,15 +4325,18 @@ describe('mount simulator pointing errors', () => {
 			client.sendNumber({ device: mount.name, name: 'MOUNT_FLEXURE', elements: { ...NO_FLEXURE, PIER_WEST_DEC: 90 } })
 
 			// Two hours west of the meridian, where a German mount carries the tube on the east side.
+			mount.setSlewRate('SPEED_7')
 			const lst = mount.siderealTimeAt(mount.utcTime)
-			mount.syncTo(normalizeAngle(lst - hour(2)), deg(-20))
+			mount.goTo(normalizeAngle(lst - hour(2)), deg(-20))
+			for (let i = 0; i < 1000 && mount.isSlewing; i++) mount.advance(0.1)
 			expect(mount.pierSide).toBe('EAST')
 			expect(mount.boresight.declination).toBe(mount.mechanical.declination)
 
 			// The same target two hours east of the meridian puts it on the other side of the pier, which
 			// is where the offset applies. What the pair really configures is the difference between the
 			// two, and that difference is what survives a meridian flip.
-			mount.syncTo(normalizeAngle(lst + hour(2)), deg(-20))
+			mount.goTo(normalizeAngle(lst + hour(2)), deg(-20))
+			for (let i = 0; i < 1000 && mount.isSlewing; i++) mount.advance(0.1)
 			expect(mount.pierSide).toBe('WEST')
 			expect(toArcsec(mount.boresight.declination - mount.mechanical.declination)).toBeCloseTo(90, 6)
 		} finally {
@@ -4387,9 +4403,6 @@ describe('mount simulator pointing errors', () => {
 			// And after four hundred seconds, a hundred correlation times, it is still within a few
 			// standard deviations rather than metres away. That is the whole point of the term.
 			expect(peak).toBeLessThan(15)
-
-			// The reported coordinate never sees any of it: the encoders cannot feel the wind.
-			expect(mount.pointingErrorBound).toBeGreaterThan(arcsec(8))
 		} finally {
 			mount.dispose()
 		}
@@ -4774,9 +4787,6 @@ describe('mount simulator pointing errors', () => {
 			const expected = -SIDEREAL_DRIFT_RATE * 3600 * 0.01
 			expect(mount.trackingRateOffset).toBeCloseTo(expected, 12)
 			expect(normalizePI(mount.boresight.rightAscension - reported)).toBeCloseTo(expected, 12)
-
-			// Consumers sizing a margin have to see it, since it is not bounded by any of the geometry.
-			expect(mount.pointingErrorBound).toBeCloseTo(Math.abs(expected), 12)
 		} finally {
 			mount.dispose()
 		}
@@ -4867,3 +4877,23 @@ test('reports manual motion while an axis moves, as a driver does', () => {
 	simulator.dispose()
 	expect(mount.moving).toBeFalse()
 })
+
+function pathLength(mount: MountSimulator, startTime: number, endTime: number, samples: number = 4001) {
+	const out = new Float64Array(samples * 2)
+	const count = mount.sampleBoresightTrajectory(startTime, endTime, samples, out)
+	let length = 0
+	for (let i = 1; i < count; i++) length += angularDistance(out[i * 2 - 2], out[i * 2 - 1], out[i * 2], out[i * 2 + 1])
+	return length
+}
+
+// Sign of the hemisphere of `latitude`: 1 north, the equator included, and -1 south.
+function hemisphere(latitude: Angle) {
+	return latitude < 0 ? -1 : 1
+}
+
+// Rotation of a polar axis misaligned by knobs on the visible-pole convention of the simulator: a
+// positive altitude error above the visible pole and a positive azimuth error east of it.
+function visiblePoleRotation(azimuthError: Angle, altitudeError: Angle, latitude: Angle) {
+	const h = hemisphere(latitude)
+	return polarAxisRotation(h * azimuthError, h * altitudeError, latitude)
+}
