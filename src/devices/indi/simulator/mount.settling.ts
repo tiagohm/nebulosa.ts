@@ -3,7 +3,7 @@ import { clamp } from '../../../math/numerical/math'
 import type { Angle } from '../../../math/units/angle'
 import type { NewNumberVector } from '../types'
 import { type ComponentBus, makeBoundNumberVector, type NumberBinding, readBoundNumberVector, SimulatorComponent } from './component'
-import { MAX_SETTLING_STEPS, SETTLING_SAMPLES_PER_CYCLE, SIMULATION } from './constants'
+import { SIMULATION } from './constants'
 import type { MountSettlingConfig } from './mount.config'
 import { applyNumberVectorValues } from './util'
 
@@ -13,6 +13,16 @@ import { applyNumberVectorValues } from './util'
 // position and the whole episode contributes no net displacement.
 //
 // Angles are radians, rates radians per second and times seconds.
+
+// Points a simulation step puts on one cycle of a ring-down, which is the only motion modelled here that
+// can be faster than the tick. Eight resolves the excursion and its direction; fewer starts to understate
+// the peak a camera integrating the trajectory sees.
+const SETTLING_SAMPLES_PER_CYCLE = 8
+
+// Most sub-steps one simulation step is split into for a ring-down. Reached only near the top of the
+// allowed frequency range, where the excursion is resolved more coarsely rather than not at all; the cap
+// is what keeps a step from writing hundreds of trajectory samples and emptying the history.
+const MAX_SETTLING_STEPS = 32
 
 // Largest damping ratio accepted. Kept just below one so a single underdamped solution covers the
 // whole range; at this value the ring-down is indistinguishable from critical damping, which is what

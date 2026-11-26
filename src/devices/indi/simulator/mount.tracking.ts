@@ -1,11 +1,11 @@
-import { SIDEREAL_DRIFT_RATE } from '../../../core/constants'
+import { ASEC2RAD, DAYSEC, MOON_SIDEREAL_DAYS, SIDEREAL_DRIFT_RATE, SIDEREAL_RATE, TAU } from '../../../core/constants'
 import { clamp } from '../../../math/numerical/math'
 import { mulberry32, normal, type Random } from '../../../math/numerical/random'
 import type { Angle } from '../../../math/units/angle'
 import type { TrackMode } from '../device'
 import { makeSwitchVector, type NewNumberVector, type NewSwitchVector, selectOnSwitch } from '../types'
 import { type ChoiceBinding, type ComponentBus, makeBoundNumberVector, makeChoiceVector, type NumberBinding, readBoundNumberVector, readChoiceVector, SimulatorComponent } from './component'
-import { KING_DRIFT_RATE, LUNAR_DRIFT_RATE, MAIN_CONTROL, SIMULATION, SOLAR_DRIFT_RATE } from './constants'
+import { MAIN_CONTROL, SIMULATION } from './constants'
 import type { MountDriveConfig, MountTrackingRateConfig } from './mount.config'
 import { applyNumberVectorValues } from './util'
 
@@ -17,6 +17,12 @@ import { applyNumberVectorValues } from './util'
 // The error is deliberately not observable from the encoders: it is the drive delivering more or less
 // travel than it is told to, so the controller keeps reporting the position it believes it commanded.
 // That is what makes this error insidious in practice and what unguided imaging actually suffers from.
+
+// Eastward drift of the Sun, the Moon and the King rate relative to the stars, radians per second: what
+// solar, lunar and King tracking take off the sidereal rate.
+const SOLAR_DRIFT_RATE = TAU / (365.2422 * DAYSEC)
+const LUNAR_DRIFT_RATE = TAU / (MOON_SIDEREAL_DAYS * DAYSEC)
+const KING_DRIFT_RATE = (SIDEREAL_RATE - 15.0369) * ASEC2RAD
 
 // Temperature at which the drive is taken to be calibrated, degrees Celsius. The temperature
 // coefficient acts on the departure from this value, so a mount at its calibration temperature shows

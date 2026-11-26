@@ -12668,8 +12668,8 @@ manager.stop(cover)
 ```ts
 import { IndiClientHandlerSet } from 'nebulosa/src/devices/indi/client'
 import { ClientSimulator } from 'nebulosa/src/devices/indi/simulator/client'
-import { COVER_MOVE_TIME_MS } from 'nebulosa/src/devices/indi/simulator/constants'
 import { CoverSimulator } from 'nebulosa/src/devices/indi/simulator/cover'
+import { DEFAULT_COVER_SIMULATOR_CONFIG } from 'nebulosa/src/devices/indi/simulator/cover.config'
 
 using client = new ClientSimulator('cover', new IndiClientHandlerSet())
 using simulator = new CoverSimulator('Dust Cap Simulator', client)
@@ -12677,7 +12677,7 @@ simulator.connect()
 
 // Through the INDI vector, as a client would: Busy during the movement, then Idle and parked.
 client.sendSwitch({ device: simulator.name, name: 'CAP_PARK', elements: { PARK: true } })
-await Bun.sleep(COVER_MOVE_TIME_MS + 100)
+await Bun.sleep(DEFAULT_COVER_SIMULATOR_CONFIG.moveTime + 100)
 
 // The direct form of the switches; stop() cancels the movement (Alert, or Idle with stop(false)).
 simulator.unpark()
@@ -12930,16 +12930,16 @@ manager.slots(wheel, ['Luminance', 'Red', 'Green', 'Blue', 'Ha', 'SII', 'OIII', 
 ```ts
 import { IndiClientHandlerSet } from 'nebulosa/src/devices/indi/client'
 import { ClientSimulator } from 'nebulosa/src/devices/indi/simulator/client'
-import { FILTER_WHEEL_MOVE_TIME_MS } from 'nebulosa/src/devices/indi/simulator/constants'
 import { WheelSimulator } from 'nebulosa/src/devices/indi/simulator/wheel'
+import { DEFAULT_WHEEL_SIMULATOR_CONFIG } from 'nebulosa/src/devices/indi/simulator/wheel.config'
 
 using client = new ClientSimulator('wheel', new IndiClientHandlerSet())
 using simulator = new WheelSimulator('Filter Wheel Simulator', client)
 simulator.connect()
 
-// Move to the 1-based slot 5 (Ha); the time per slot travelled is FILTER_WHEEL_MOVE_TIME_MS.
+// Move to the 1-based slot 5 (Ha); the time per slot travelled is the configured slotTime.
 simulator.moveTo(5)
-await Bun.sleep(FILTER_WHEEL_MOVE_TIME_MS * 8)
+await Bun.sleep(DEFAULT_WHEEL_SIMULATOR_CONFIG.slotTime * 8)
 
 // The same through the INDI vectors: a slot and a slot name.
 client.sendNumber({ device: simulator.name, name: 'FILTER_SLOT', elements: { FILTER_SLOT_VALUE: 2 } })

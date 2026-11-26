@@ -2,7 +2,6 @@ import type { EquatorialCoordinate } from '../../../astronomy/coordinates/coordi
 import { applyEquatorialPointingError, applyPolarAxisRotation, applySkyOffset, IDENTITY_EQUATORIAL_POINTING_MODEL, tubePositionAngle } from '../../../astronomy/coordinates/pointing'
 import { type Angle, normalizeAngle } from '../../../math/units/angle'
 import type { PierSide } from '../device'
-import { MOUNT_TRAJECTORY_CAPACITY } from './constants'
 import type { MountAlignment } from './mount.alignment'
 import type { MountFlexure } from './mount.flexure'
 import type { MountMechanics } from './mount.mechanics'
@@ -21,6 +20,12 @@ import type { MountWind } from './mount.wind'
 // mount's own frame; the polar axis carries that whole frame onto the sky; flexure bends the tube under
 // gravity, by the side of the pier; the worm adds its periodic error; the drift of the drive and the
 // residual of the home sensor are added; the wind deflects the axis along the sky.
+
+// Boresight samples the record keeps. At the default tick this covers a bit over thirteen minutes; an
+// exposure longer than that trails only over the retained window, with everything before it collapsed
+// onto the oldest sample. Three Float64Array of this length cost about 197 KB per simulated mount. Sized
+// for a DARV run, whose legs last several minutes, rather than for an ordinary sub-exposure.
+const MOUNT_TRAJECTORY_CAPACITY = 8192
 
 // Circuits whose state the chain reads.
 export interface MountBoresightCircuits {

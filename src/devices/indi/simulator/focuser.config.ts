@@ -1,6 +1,5 @@
 import type { DeepPartial } from '../../../core/types'
 import { mergeConfig } from './component'
-import { CAMERA_AMBIENT_TEMPERATURE } from './constants'
 
 // Configuration of the simulated focuser, one section per circuit. A simulator is built from
 // DEFAULT_FOCUSER_SIMULATOR_CONFIG merged with the partial override its options carry; the defaults are
@@ -57,11 +56,12 @@ export interface FocuserSimulatorConfig {
 export type FocuserSimulatorConfigOverride = DeepPartial<FocuserSimulatorConfig>
 
 // Defaults of every simulated focuser: a 100000-step drawtube in the middle of its travel, without
-// play, under a temperature swinging 4 °C every 40 seconds so compensation is visible quickly.
+// play, under a temperature swinging 4 °C every 40 seconds about the camera simulator's 18 °C ambient,
+// so compensation is visible quickly.
 export const DEFAULT_FOCUSER_SIMULATOR_CONFIG: FocuserSimulatorConfig = {
 	drive: { maxPosition: 100000, position: 50000, rate: 20000 },
 	gear: { backlash: 0, compensation: false, compensationSteps: 0 },
-	thermometer: { ambient: CAMERA_AMBIENT_TEMPERATURE, amplitude: 4, period: 40 },
+	thermometer: { ambient: 18, amplitude: 4, period: 40 },
 	compensation: { stepsPerDegree: -250, hysteresis: 0.05 },
 }
 

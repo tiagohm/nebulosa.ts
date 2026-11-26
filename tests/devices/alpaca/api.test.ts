@@ -29,8 +29,8 @@ import { ThermometerManager } from '../../../src/devices/indi/manager/thermomete
 import { WeatherManager } from '../../../src/devices/indi/manager/weather'
 import { WheelManager } from '../../../src/devices/indi/manager/wheel'
 import { CameraSimulator } from '../../../src/devices/indi/simulator/camera'
+import { DEFAULT_CAMERA_SIMULATOR_CONFIG } from '../../../src/devices/indi/simulator/camera.config'
 import { ClientSimulator } from '../../../src/devices/indi/simulator/client'
-import { CAMERA_AMBIENT_TEMPERATURE, CAMERA_MAX_BIN, CAMERA_MAX_EXPOSURE, CAMERA_MIN_EXPOSURE, CAMERA_PIXEL_SIZE, CAMERA_SENSOR_HEIGHT, CAMERA_SENSOR_WIDTH } from '../../../src/devices/indi/simulator/constants'
 import { CoverSimulator } from '../../../src/devices/indi/simulator/cover'
 import { DomeSimulator } from '../../../src/devices/indi/simulator/dome'
 import { FlatPanelSimulator } from '../../../src/devices/indi/simulator/flatpanel'
@@ -185,11 +185,11 @@ describe('camera', () => {
 	})
 
 	test('getCameraXSize', async () => {
-		expectOk(await api.camera.getCameraXSize(ID), CAMERA_SENSOR_WIDTH)
+		expectOk(await api.camera.getCameraXSize(ID), DEFAULT_CAMERA_SIMULATOR_CONFIG.sensor.width)
 	})
 
 	test('getCameraYSize', async () => {
-		expectOk(await api.camera.getCameraYSize(ID), CAMERA_SENSOR_HEIGHT)
+		expectOk(await api.camera.getCameraYSize(ID), DEFAULT_CAMERA_SIMULATOR_CONFIG.sensor.height)
 	})
 
 	test('canAbortExposure', async () => {
@@ -221,7 +221,7 @@ describe('camera', () => {
 	})
 
 	test('getCcdTemperature', async () => {
-		expectCloseTo(await api.camera.getCcdTemperature(ID), CAMERA_AMBIENT_TEMPERATURE, 0)
+		expectCloseTo(await api.camera.getCcdTemperature(ID), DEFAULT_CAMERA_SIMULATOR_CONFIG.cooler.ambientTemperature, 0)
 	})
 
 	test('isCoolerOn', async () => {
@@ -237,11 +237,11 @@ describe('camera', () => {
 	})
 
 	test('getExposureMax', async () => {
-		expectOk(await api.camera.getExposureMax(ID), CAMERA_MAX_EXPOSURE)
+		expectOk(await api.camera.getExposureMax(ID), DEFAULT_CAMERA_SIMULATOR_CONFIG.shutter.maxExposure)
 	})
 
 	test('getExposureMin', async () => {
-		expectOk(await api.camera.getExposureMin(ID), CAMERA_MIN_EXPOSURE)
+		expectOk(await api.camera.getExposureMin(ID), DEFAULT_CAMERA_SIMULATOR_CONFIG.shutter.minExposure)
 	})
 
 	test('getExposureResolution', async () => {
@@ -277,7 +277,7 @@ describe('camera', () => {
 	})
 
 	test('getHeatSinkTemperature', async () => {
-		expectCloseTo(await api.camera.getHeatSinkTemperature(ID), CAMERA_AMBIENT_TEMPERATURE, 0)
+		expectCloseTo(await api.camera.getHeatSinkTemperature(ID), DEFAULT_CAMERA_SIMULATOR_CONFIG.cooler.ambientTemperature, 0)
 	})
 
 	test('isImageReady', async () => {
@@ -300,19 +300,19 @@ describe('camera', () => {
 	})
 
 	test('getMaxBinX', async () => {
-		expectOk(await api.camera.getMaxBinX(ID), CAMERA_MAX_BIN)
+		expectOk(await api.camera.getMaxBinX(ID), DEFAULT_CAMERA_SIMULATOR_CONFIG.sensor.maxBin)
 	})
 
 	test('getMaxBinY', async () => {
-		expectOk(await api.camera.getMaxBinY(ID), CAMERA_MAX_BIN)
+		expectOk(await api.camera.getMaxBinY(ID), DEFAULT_CAMERA_SIMULATOR_CONFIG.sensor.maxBin)
 	})
 
 	test('getNumX', async () => {
-		expectOk(await api.camera.getNumX(ID), CAMERA_SENSOR_WIDTH)
+		expectOk(await api.camera.getNumX(ID), DEFAULT_CAMERA_SIMULATOR_CONFIG.sensor.width)
 	})
 
 	test('getNumY', async () => {
-		expectOk(await api.camera.getNumY(ID), CAMERA_SENSOR_HEIGHT)
+		expectOk(await api.camera.getNumY(ID), DEFAULT_CAMERA_SIMULATOR_CONFIG.sensor.height)
 	})
 
 	test('getOffset', async () => {
@@ -336,11 +336,11 @@ describe('camera', () => {
 	})
 
 	test('getPixelSizeX', async () => {
-		expectCloseTo(await api.camera.getPixelSizeX(ID), CAMERA_PIXEL_SIZE)
+		expectCloseTo(await api.camera.getPixelSizeX(ID), DEFAULT_CAMERA_SIMULATOR_CONFIG.sensor.pixelSize)
 	})
 
 	test('getPixelSizeY', async () => {
-		expectCloseTo(await api.camera.getPixelSizeY(ID), CAMERA_PIXEL_SIZE)
+		expectCloseTo(await api.camera.getPixelSizeY(ID), DEFAULT_CAMERA_SIMULATOR_CONFIG.sensor.pixelSize)
 	})
 
 	test('getReadoutMode', async () => {

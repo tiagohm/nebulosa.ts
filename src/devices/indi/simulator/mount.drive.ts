@@ -1,11 +1,11 @@
 import type { EquatorialCoordinate } from '../../../astronomy/coordinates/coordinate'
-import { PIOVERTWO, SIDEREAL_DRIFT_RATE } from '../../../core/constants'
+import { DEG2RAD, PIOVERTWO, SIDEREAL_DRIFT_RATE } from '../../../core/constants'
 import { clamp } from '../../../math/numerical/math'
 import { type Angle, normalizeAngle, normalizePI, toDeg, toHour } from '../../../math/units/angle'
 import { expectedPierSide, type NameAndLabel, type PierSide } from '../device'
 import { findOnSwitch, makeNumberVector, makeSwitchVector, type NewNumberVector, type NewSwitchVector, type PropertyState, selectOnSwitch } from '../types'
 import { type ComponentBus, SimulatorComponent } from './component'
-import { MAIN_CONTROL, SLEW_RATES, SLEW_SPEED_FACTOR } from './constants'
+import { MAIN_CONTROL } from './constants'
 import type { MountAlignment } from './mount.alignment'
 import { advanceMechanicalAxis, clearMechanicalAxis, driveMechanicalAxis, resetMechanicalAxisMotion } from './mount.axis'
 import type { MountBoresight } from './mount.boresight'
@@ -45,6 +45,21 @@ import { applyExclusiveSwitchValues, clampDeclination } from './util'
 // The side of the pier is the physical side of the tube, not the side a coordinate would predict: it
 // changes only when the mount really moves to the other side (a goto, a flip, home or park arriving
 // there) or crosses a pole, and a target tracked through the meridian keeps it.
+
+// Slew-rate presets of manual motion: name, label and angular speed, radians per second.
+export const SLEW_RATES = [
+	{ name: 'SPEED_1', label: ' 0.5°', speed: 0.5 * DEG2RAD },
+	{ name: 'SPEED_2', label: ' 1.0°', speed: 1 * DEG2RAD },
+	{ name: 'SPEED_3', label: ' 2.0°', speed: 2 * DEG2RAD },
+	{ name: 'SPEED_4', label: ' 4.0°', speed: 4 * DEG2RAD },
+	{ name: 'SPEED_5', label: ' 8.0°', speed: 8 * DEG2RAD },
+	{ name: 'SPEED_6', label: '16.0°', speed: 16 * DEG2RAD },
+	{ name: 'SPEED_7', label: '32.0°', speed: 32 * DEG2RAD },
+] as const
+
+// Multiplier applied to the selected slew rate for a goto, flip, home or park, so a commanded slew is
+// faster than nudging the axes by hand.
+export const SLEW_SPEED_FACTOR = 3
 
 // Active home command; only FIND acquires a new physical sensor reference.
 type HomeAction = 'GO' | 'FIND'

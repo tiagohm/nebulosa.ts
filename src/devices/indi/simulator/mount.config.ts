@@ -1,7 +1,6 @@
 import type { DeepPartial } from '../../../core/types'
 import type { TrackMode } from '../device'
 import { mergeConfig } from './component'
-import { GUIDE_JITTER_SEED } from './constants'
 import { TRACKING_RATE_CALIBRATION_TEMPERATURE } from './mount.tracking'
 
 // Configuration of the simulated mount, one section per circuit. Every section holds the initial values
@@ -157,7 +156,7 @@ export type MountSimulatorConfigOverride = DeepPartial<MountSimulatorConfig>
 // Defaults of every simulated mount: a perfect mount at latitude and longitude zero whose error
 // families, when switched on, behave like a typical amateur German equatorial mount.
 export const DEFAULT_MOUNT_SIMULATOR_CONFIG: MountSimulatorConfig = {
-	seed: GUIDE_JITTER_SEED,
+	seed: 0x5f3a1c27,
 	site: { latitude: 0, longitude: 0, elevation: 0 },
 	drive: { slewRate: 'SPEED_2', trackMode: 'SIDEREAL', guideRateRightAscension: 0.5, guideRateDeclination: 0.5 },
 	meridian: { automaticFlip: false, flipHourAngle: 0, limit: 0 },

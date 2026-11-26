@@ -5,7 +5,7 @@ import type { Angle } from '../../../math/units/angle'
 import type { GuideDirection } from '../device'
 import { makeNumberVector, type NewNumberVector, type PropertyState } from '../types'
 import { type ComponentBus, makeBoundNumberVector, type NumberBinding, readBoundNumberVector, SimulatorComponent } from './component'
-import { MAIN_CONTROL, MAX_GUIDE_RATE, MAX_QUEUED_GUIDE_PULSES, SIMULATION } from './constants'
+import { MAIN_CONTROL, SIMULATION } from './constants'
 import type { MountDriveConfig, MountGuidingConfig } from './mount.config'
 import { applyNumberVectorValues, timedGuidePulse } from './util'
 
@@ -14,6 +14,13 @@ import { applyNumberVectorValues, timedGuidePulse } from './util'
 // rates are radians per second. The integration is analytic over the requested interval rather than
 // sampled at the simulation tick, so a pulse shorter than the tick still produces exactly its share
 // of motion.
+
+// Highest guide rate, as a fraction of the sidereal rate.
+export const MAX_GUIDE_RATE = 1
+
+// Most guide pulses that can be outstanding on one axis at a time. Beyond this the queue is full and
+// further commands are dropped, which is what a controller does when driven faster than it executes.
+const MAX_QUEUED_GUIDE_PULSES = 8
 
 // Imperfections of the guide-pulse path between the command and the motor. Every field defaults to a
 // value meaning "ideal", in which case a pulse takes effect immediately and for exactly its duration.
