@@ -8,9 +8,9 @@ import { type ComponentBus, type FlagBinding, makeBoundNumberVector, makeFlagVec
 import { SIMULATION } from './constants'
 import { applyMultiSwitchValues, applyNumberVectorValues } from './util'
 
-// Optics circuit of the simulated camera: the telescope in front of the sensor, where it focuses and
-// how the image degrades across the field. Lengths are millimetres, focus positions focuser steps and
-// angles radians.
+// Optics circuit of the simulated camera: the telescope in front of the sensor, whether the image
+// reaches the sensor mirrored, where it focuses and how the image degrades across the field. Lengths
+// are millimetres, focus positions focuser steps and angles radians.
 
 // Aberration settings, without the overall flag derived from them.
 type AberrationSettings = CameraOpticsConfig['aberration']
@@ -31,6 +31,10 @@ const FEATURES: readonly FlagBinding<'sensorTiltEnabled' | 'backfocusEnabled' | 
 	['DECENTER', 'Decenter', 'decenterEnabled'],
 	['COLLIMATION', 'Collimation', 'collimationEnabled'],
 ]
+
+// Image path to the sensor, SIMULATOR_OPTICAL_TRAIN: whether it goes through a reflection, as through the
+// pickoff prism of an off-axis guider.
+const TRAIN: readonly FlagBinding<'mirrored'>[] = [['MIRRORED', 'Mirrored (OAG)', 'mirrored']]
 
 // Focus model, SIMULATOR_ABERRATION_FOCUS: best focus, range and the best-focus surface, steps.
 const FOCUS: readonly NumberBinding<'bestFocus' | 'focusRange' | 'tilt' | 'tiltAngle' | 'curvature'>[] = [
@@ -64,6 +68,8 @@ export interface CameraOpticsState {
 	readonly aperture: number
 	// Angle the camera is mounted at on the tube, radians.
 	readonly cameraAngle: Angle
+	// Whether the sensor x axis is reversed about the sensor centre after the rotation.
+	readonly mirrored: boolean
 	// Focuser position of best focus, steps; zero disables the focus model.
 	readonly bestFocus: number
 	// Aberrations, `enabled` when any of them is.
@@ -76,9 +82,10 @@ export function cameraPixelScale(pixelSize: number, focalLength: number): Angle 
 	return arcsec(pixelScale(pixelSize, focalLength))
 }
 
-// Telescope, focus model and aberrations.
+// Telescope, image path, focus model and aberrations.
 export class CameraOptics extends SimulatorComponent {
 	readonly #telescope: ReturnType<typeof makeBoundNumberVector>
+	readonly #train: ReturnType<typeof makeFlagVector>
 	readonly #features: ReturnType<typeof makeFlagVector>
 	readonly #focus: ReturnType<typeof makeBoundNumberVector>
 	readonly #shape: ReturnType<typeof makeBoundNumberVector>
@@ -92,10 +99,11 @@ export class CameraOptics extends SimulatorComponent {
 	) {
 		super(bus)
 		this.#telescope = makeBoundNumberVector('TELESCOPE_INFO', 'Telescope Info', SIMULATION, TELESCOPE, config)
+		this.#train = makeFlagVector('SIMULATOR_OPTICAL_TRAIN', 'Optical Train', SIMULATION, TRAIN, config)
 		this.#features = makeFlagVector('SIMULATOR_ABERRATION_FEATURES', 'Aberration Features', SIMULATION, FEATURES, config.aberration)
 		this.#focus = makeBoundNumberVector('SIMULATOR_ABERRATION_FOCUS', 'Aberration Focus', SIMULATION, FOCUS, { ...config.aberration, bestFocus: config.bestFocus })
 		this.#shape = makeBoundNumberVector('SIMULATOR_ABERRATION_SHAPE', 'Aberration Shape', SIMULATION, SHAPE, config.aberration)
-		this.properties = [this.#telescope, this.#features, this.#focus, this.#shape]
+		this.properties = [this.#telescope, this.#train, this.#features, this.#focus, this.#shape]
 	}
 
 	// Focal length, millimetres.
@@ -114,7 +122,7 @@ export class CameraOptics extends SimulatorComponent {
 		const { bestFocus, ...focus } = readBoundNumberVector(this.#focus, FOCUS)
 		const aberration: AberrationSettings = { ...features, ...focus, ...readBoundNumberVector(this.#shape, SHAPE) }
 		const enabled = Object.values(features).some(Boolean)
-		return { focalLength: this.focalLength, aperture: this.aperture, cameraAngle: this.config.cameraAngle, bestFocus, aberration: { ...aberration, enabled } }
+		return { focalLength: this.focalLength, aperture: this.aperture, cameraAngle: this.config.cameraAngle, mirrored: this.#train.elements.MIRRORED.value, bestFocus, aberration: { ...aberration, enabled } }
 	}
 
 	// Handles TELESCOPE_INFO, SIMULATOR_ABERRATION_FOCUS and SIMULATOR_ABERRATION_SHAPE.
@@ -125,10 +133,11 @@ export class CameraOptics extends SimulatorComponent {
 		return true
 	}
 
-	// Handles SIMULATOR_ABERRATION_FEATURES.
+	// Handles SIMULATOR_OPTICAL_TRAIN and SIMULATOR_ABERRATION_FEATURES.
 	handleSwitch(vector: NewSwitchVector) {
-		if (vector.name !== this.#features.name) return false
-		if (applyMultiSwitchValues(this.#features, vector.elements)) this.bus.notify(this.#features)
+		const property = vector.name === this.#train.name ? this.#train : vector.name === this.#features.name ? this.#features : undefined
+		if (property === undefined) return false
+		if (applyMultiSwitchValues(property, vector.elements)) this.bus.notify(property)
 		return true
 	}
 }

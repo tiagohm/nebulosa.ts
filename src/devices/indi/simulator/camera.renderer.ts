@@ -21,7 +21,8 @@ import type { CatalogSourceStar } from './types'
 // shapes each star with the optics, and draws the frame with its noise. Pure and deterministic: the
 // same inputs give the same samples. Sensor coordinates are unbinned pixels with the origin at the
 // first pixel and the boresight at the sensor centre; frame coordinates are binned pixels of the
-// subframe. At a position angle of zero north is towards -y and east towards -x.
+// subframe. At a position angle of zero north is towards -y and east towards -x, or towards +x when the
+// optics mirror the image.
 
 // Smallest defocus, as a fraction of the focus range, drawn as an annulus rather than a focused star.
 const ANNULAR_MIN_DEFOCUS = 1e-6
@@ -80,6 +81,12 @@ function plotOptions(input: CameraFrameInput): PlotStarOptions {
 // stretch inside the subframe, padded by the radius an annulus can reach, is drawn, so a trail far
 // longer than the frame costs no more than one crossing it; `maxPoints` bounds the points of one star.
 // The aberrations of the field are evaluated where each point falls.
+//
+// When the optics mirror the image, the rotated position is reflected in x about the sensor centre,
+// sensorX = 2·centerX − x. Reflecting after the rotation, not before, is what a rotating off-axis
+// guider prism does: the image has the opposite parity and turns by −Δ for a rotation of +Δ, where an
+// unmirrored image turns by +Δ. The trail is drawn between the reflected vertices, so it is mirrored
+// with the stars.
 export function projectFrameStars(input: CameraFrameInput, stars: readonly CatalogSourceStar[], trail: ExposureTrail, spacing: number, maxPoints: number): CameraFrameStar[] {
 	const { readout, optics, psf, pixelScale, sensorWidth, sensorHeight } = input
 	const { x: frameX, y: frameY, width: frameWidth, height: frameHeight, binX, binY } = readout
@@ -88,6 +95,7 @@ export function projectFrameStars(input: CameraFrameInput, stars: readonly Catal
 	const stretches = vertexCount - 1
 	const centerX = (sensorWidth - 1) * 0.5
 	const centerY = (sensorHeight - 1) * 0.5
+	const mirrored = optics.mirrored
 	const projections = vertices.map((vertex) => new Gnomonic(vertex.rightAscension, vertex.declination))
 	const cosines = vertices.map((vertex) => Math.cos(vertex.positionAngle + input.rotation))
 	const sines = vertices.map((vertex) => Math.sin(vertex.positionAngle + input.rotation))
@@ -148,7 +156,9 @@ export function projectFrameStars(input: CameraFrameInput, stars: readonly Catal
 			// East is -x and north -y at a position angle of zero.
 			const dx = -point.x / pixelScale
 			const dy = -point.y / pixelScale
-			sensorX[v] = rotated[v] ? centerX + dx * cosines[v] - dy * sines[v] : centerX + dx
+			const x = rotated[v] ? centerX + dx * cosines[v] - dy * sines[v] : centerX + dx
+			// The reflection of a mirrored image applies after the rotation.
+			sensorX[v] = mirrored ? 2 * centerX - x : x
 			sensorY[v] = rotated[v] ? centerY + dx * sines[v] + dy * cosines[v] : centerY + dy
 			visible[v] = 1
 			anyVisible = true

@@ -92,6 +92,10 @@ export interface CameraOpticsConfig {
 	// Angle the camera is mounted at on the tube, radians, measured like a position angle: the sensor's
 	// up direction this far east of the direction the tube's own orientation points at.
 	readonly cameraAngle: Angle
+	// Whether the image reaches the sensor through one reflection, as through the pickoff prism of an
+	// off-axis guider: the sensor x axis is reversed about the sensor centre after the rotation, so the
+	// image has the opposite parity and turns the opposite way for the same rotator move.
+	readonly mirrored: boolean
 	// Focuser position of best focus, steps. Zero disables the focus model.
 	readonly bestFocus: number
 	// Aberration flags and coefficients; the overall `enabled` flag is derived from the others.
@@ -235,6 +239,7 @@ export const DEFAULT_CAMERA_SIMULATOR_CONFIG: CameraSimulatorConfig = {
 		focalLength: 500,
 		aperture: 80,
 		cameraAngle: 0,
+		mirrored: false,
 		bestFocus: 50000,
 		aberration: {
 			sensorTiltEnabled: false,

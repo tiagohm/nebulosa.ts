@@ -2,7 +2,9 @@ import { describe, expect, test } from 'bun:test'
 import { applyPolarAxisRotation, polarAxisRotation, tubePositionAngle } from '../../../../src/astronomy/coordinates/pointing'
 import { timeUnix } from '../../../../src/astronomy/time/time'
 import { PI } from '../../../../src/core/constants'
-import { type CameraSimulatorConfig, cameraSimulatorConfig } from '../../../../src/devices/indi/simulator/camera.config'
+import { IndiClientHandlerSet } from '../../../../src/devices/indi/client'
+import { CameraSimulator } from '../../../../src/devices/indi/simulator/camera'
+import { type CameraSimulatorConfig, cameraSimulatorConfig, DEFAULT_CAMERA_SIMULATOR_CONFIG } from '../../../../src/devices/indi/simulator/camera.config'
 import { CameraNoise } from '../../../../src/devices/indi/simulator/camera.noise'
 import { CameraOptics, cameraPixelScale } from '../../../../src/devices/indi/simulator/camera.optics'
 import { encodeCameraFrame } from '../../../../src/devices/indi/simulator/camera.output'
@@ -11,14 +13,15 @@ import { CameraReadout } from '../../../../src/devices/indi/simulator/camera.rea
 import { type CameraFrameInput, clipSegment, projectFrameStars, renderCameraFrame } from '../../../../src/devices/indi/simulator/camera.renderer'
 import { CameraSensor } from '../../../../src/devices/indi/simulator/camera.sensor'
 import { type ExposureTrail, type TrailVertex, trailVertexInJ2000 } from '../../../../src/devices/indi/simulator/camera.trail'
-import type { CatalogSourceStar } from '../../../../src/devices/indi/simulator/types'
+import { ClientSimulator } from '../../../../src/devices/indi/simulator/client'
+import type { CatalogSourceStar, SimulatorProperty } from '../../../../src/devices/indi/simulator/types'
 import { analyzeBahtinov } from '../../../../src/imaging/analysis/bahtinov/bahtinov'
 import { bahtinovAxialAngleDistance } from '../../../../src/imaging/analysis/bahtinov/geometry'
 import { createBahtinovWorkspace, resolveBahtinovArea } from '../../../../src/imaging/analysis/bahtinov/preprocess'
 import type { BahtinovAnalysisInput, BahtinovAnalysisOptions } from '../../../../src/imaging/analysis/bahtinov/types'
 import { readImageFromBuffer } from '../../../../src/imaging/model/image'
 import type { Image, ImageRawType } from '../../../../src/imaging/model/types'
-import { type Angle, deg, hour } from '../../../../src/math/units/angle'
+import { type Angle, deg, hour, normalizePI } from '../../../../src/math/units/angle'
 import { TestBus } from '../../../util/bus'
 
 // Unit coverage of the camera's image formation: where the sky lands on the sensor, how a trail
@@ -206,6 +209,94 @@ describe('camera renderer', () => {
 
 		expect(Math.hypot(first[0].x - second[0].x, first[0].y - second[0].y)).toBeLessThan(0.05)
 		expect(Math.hypot(first[1].x - second[1].x, first[1].y - second[1].y)).toBeGreaterThan(50)
+	})
+
+	test('mirrors the field in x about the sensor centre, trails included, and reverses its parity', () => {
+		const plain = frameInput()
+		const mirrored = frameInput({ optics: { SIMULATOR_OPTICAL_TRAIN: { MIRRORED: true } } })
+		expect(plain.optics.mirrored).toBeFalse()
+		expect(mirrored.optics.mirrored).toBeTrue()
+
+		const scale = plain.pixelScale
+		const stars = [star(CENTER[0], CENTER[1]), star(CENTER[0] + (40 * scale) / Math.cos(CENTER[1]), CENTER[1]), star(CENTER[0], CENTER[1] + 25 * scale), star(CENTER[0] - (120 * scale) / Math.cos(CENTER[1]), CENTER[1] - 70 * scale)]
+		const a = projectFrameStars(plain, stars, CENTERED, 0.5, 64)
+		const b = projectFrameStars(mirrored, stars, CENTERED, 0.5, 64)
+		expect(b).toHaveLength(a.length)
+
+		for (let i = 0; i < a.length; i++) {
+			expect(b[i].x).toBeCloseTo(2 * 639.5 - a[i].x, 9)
+			expect(b[i].y).toBeCloseTo(a[i].y, 9)
+		}
+
+		// East towards -x and north towards -y is a left-handed image; the mirror makes it right-handed.
+		const handedness = ([center, east, north]: readonly { readonly x: number; readonly y: number }[]) => Math.sign((east.x - center.x) * (north.y - center.y) - (east.y - center.y) * (north.x - center.x))
+		expect(handedness(a)).toBe(-handedness(b))
+
+		const from = { rightAscension: CENTER[0], declination: CENTER[1], positionAngle: 0 }
+		const to = { rightAscension: CENTER[0] + (20 * scale) / Math.cos(CENTER[1]), declination: CENTER[1] + 10 * scale, positionAngle: 0 }
+		const trail: ExposureTrail = { vertices: [from, to], reference: from, extent: 25 * scale }
+		const plainTrail = projectFrameStars(plain, [star(CENTER[0], CENTER[1])], trail, 0.5, 16384)
+		const mirroredTrail = projectFrameStars(mirrored, [star(CENTER[0], CENTER[1])], trail, 0.5, 16384)
+		expect(mirroredTrail).toHaveLength(plainTrail.length)
+
+		for (let i = 0; i < plainTrail.length; i++) {
+			expect(mirroredTrail[i].x).toBeCloseTo(2 * 639.5 - plainTrail[i].x, 9)
+			expect(mirroredTrail[i].y).toBeCloseTo(plainTrail[i].y, 9)
+			expect(mirroredTrail[i].flux).toBe(plainTrail[i].flux)
+		}
+	})
+
+	test('turns a mirrored image the opposite way for the same rotator move', () => {
+		const scale = frameInput().pixelScale
+		const stars = [star(CENTER[0] + (60 * scale) / Math.cos(CENTER[1]), CENTER[1] - 20 * scale), star(CENTER[0] - (30 * scale) / Math.cos(CENTER[1]), CENTER[1] + 90 * scale), star(CENTER[0] + (10 * scale) / Math.cos(CENTER[1]), CENTER[1] + 140 * scale)]
+		const start = deg(20)
+		const delta = deg(35)
+
+		// Angle in image coordinates of the segment from the first star to each of the others, radians.
+		const angles = (mirrored: boolean, rotation: Angle) => {
+			const input = frameInput({ rotation, optics: { SIMULATOR_OPTICAL_TRAIN: { MIRRORED: mirrored } } })
+			const [first, ...others] = projectFrameStars(input, stars, CENTERED, 0.5, 64)
+			return others.map((other) => Math.atan2(other.y - first.y, other.x - first.x))
+		}
+
+		for (const mirrored of [false, true]) {
+			const before = angles(mirrored, start)
+			const after = angles(mirrored, start + delta)
+
+			for (let i = 0; i < before.length; i++) {
+				expect(normalizePI(after[i] - before[i])).toBeCloseTo(mirrored ? -delta : delta, 9)
+			}
+		}
+	})
+
+	test('persists the mirrored image path, off by default, with the other settings', async () => {
+		expect(DEFAULT_CAMERA_SIMULATOR_CONFIG.optics.mirrored).toBeFalse()
+
+		let saved: SimulatorProperty[] = []
+		let stored: readonly SimulatorProperty[] = []
+		using client = new ClientSimulator('camera-mirror', new IndiClientHandlerSet())
+		using camera = new CameraSimulator('Camera Simulator', client, {
+			save: (_, properties) => {
+				saved = properties.map((property) => structuredClone(property))
+			},
+			load: () => stored,
+		})
+		const mirrored = () => {
+			camera.saveProperties()
+			return saved.find((property) => property.name === 'SIMULATOR_OPTICAL_TRAIN')?.elements.MIRRORED?.value
+		}
+
+		expect(mirrored()).toBeFalse()
+
+		camera.sendSwitch({ device: camera.name, name: 'SIMULATOR_OPTICAL_TRAIN', elements: { MIRRORED: true } })
+		expect(mirrored()).toBeTrue()
+		stored = saved
+
+		// Turned off, then restored by loading what was saved.
+		camera.sendSwitch({ device: camera.name, name: 'SIMULATOR_OPTICAL_TRAIN', elements: { MIRRORED: false } })
+		expect(mirrored()).toBeFalse()
+		await camera.loadProperties()
+		expect(mirrored()).toBeTrue()
 	})
 
 	test('draws a defocused star as an obstructed annulus with anisotropic binning', () => {
