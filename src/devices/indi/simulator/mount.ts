@@ -120,10 +120,10 @@ export class MountSimulator extends DeviceSimulator {
 		this.properties = componentProperties(this.#components)
 		this.propertiesToNotSave = transientComponentProperties(this.#components)
 
-		// Nothing has ticked yet, so the first connection catches the clock up with the wall clock.
+		// Nothing has ticked yet, so the first connection catches the clock up with the wall clock. The axes
+		// are placed, and the coordinate published, only when the mount connects.
 		this.#clock.suspend(now())
-		this.#refreshConfigurations()
-		this.#drive.placeAtStartupPose()
+		this.#applyFeatures()
 	}
 
 	// ---- State ----
@@ -556,6 +556,15 @@ export class MountSimulator extends DeviceSimulator {
 	// rebased the hour angle of the meridian policy. Switching a family off leaves an ideal mount rather
 	// than one frozen wherever the error had carried it.
 	#refreshConfigurations() {
+		const rebased = this.#applyFeatures()
+		this.#drive.refreshReportedCoordinate()
+		this.#recordBoresight()
+		return rebased
+	}
+
+	// Rebuilds the configuration of every circuit gated by an error family without republishing
+	// anything, returning whether withdrawing a ring-down rebased the hour angle of the meridian policy.
+	#applyFeatures() {
 		const enabled = this.#errors.enabled
 		this.#alignment.enabled = enabled.alignment
 		this.#flexure.enabled = enabled.flexure
@@ -566,8 +575,6 @@ export class MountSimulator extends DeviceSimulator {
 		this.#wind.refresh(enabled.wind)
 		const rebased = !enabled.settling && this.#drive.withdrawRingDown()
 		this.#settling.refresh(enabled.settling)
-		this.#drive.refreshReportedCoordinate()
-		this.#recordBoresight()
 		return rebased
 	}
 }
