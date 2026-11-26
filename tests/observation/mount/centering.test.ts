@@ -8,7 +8,8 @@ import { DEC_TAN, DEC_TAN_SIP, RA_TAN, RA_TAN_SIP } from '../../../src/astrometr
 import { angularDistance, equatorialFromJ2000, equatorialToJ2000 } from '../../../src/astronomy/coordinates/coordinate'
 import { timeUnix } from '../../../src/astronomy/time/time'
 import type { MountCommander, MountCommandOptions } from '../../../src/devices/commanders/mount'
-import type { Camera, Mount, MountTargetCoordinate } from '../../../src/devices/indi/device'
+import type { RotatorCommander } from '../../../src/devices/commanders/rotator'
+import type { Camera, Mount, MountTargetCoordinate, Rotator } from '../../../src/devices/indi/device'
 import { failedOperationResult, type OperationContext, OperationCoordinator, type OperationResult, type OperationScope, successfulOperationResult } from '../../../src/devices/orchestration/operation'
 import { abortableDelay, type CooperativeJobHealth } from '../../../src/devices/orchestration/operation.wait'
 import { ResourceArbiter } from '../../../src/devices/orchestration/resource'
@@ -24,6 +25,8 @@ import {
 	type CenteringMeasurement,
 	type CenteringOptions,
 	type CenteringResult,
+	type CenteringRotation,
+	type CenteringRotationCheck,
 	type CenteringServices,
 	type CenteringSolver,
 	type CenteringStep,
@@ -32,6 +35,9 @@ import {
 	centeringCaptureRequest,
 	centeringStalled,
 	exposureMidpoint,
+	plannedRotation,
+	positionAngleError,
+	responseCheck,
 } from '../../../src/observation/mount/centering'
 import { applyPointingOffset, computePointingError } from '../../../src/observation/mount/pointing'
 import { isBinaryTestSkipped, waitUntil } from '../../util'
@@ -383,7 +389,8 @@ describe('centering loop', () => {
 		expect(sky.commands).toEqual([])
 		expect(corrections).toHaveLength(1)
 		const expected = applyPointingOffset(TARGET.rightAscension, TARGET.declination, -deg(10 / 60), 0)
-		expect(arcsec(angularDistance(corrections[0].rightAscension, corrections[0].declination, expected.rightAscension, expected.declination))).toBeLessThan(3)
+		expect(corrections[0].rotator).toBeUndefined()
+		expect(arcsec(angularDistance(corrections[0].mount!.rightAscension, corrections[0].mount!.declination, expected.rightAscension, expected.declination))).toBeLessThan(3)
 	})
 
 	test('a refused correction with sync neither syncs nor slews', async () => {
@@ -532,6 +539,298 @@ describe('centering loop', () => {
 		expect(options.exposureTime).toBe(2)
 	})
 })
+
+// Equatorial TAN solution centered on (rightAscension, declination), radians, whose image top points at `positionAngle`
+// (radians, from north through east), with the handedness of tanSolution, or the mirrored one.
+function orientedSolution(rightAscension: Angle, declination: Angle, positionAngle: Angle, mirrored: boolean = false) {
+	const s = 1e-3
+	const cos = Math.cos(positionAngle)
+	const sin = Math.sin(positionAngle)
+	// +X runs along u, +Y along v, both (east, north); the image top is −v.
+	const u = mirrored ? [-cos, sin] : [cos, -sin]
+	const v = [-sin, -cos]
+	const header: FitsHeader = { CTYPE1: RA_TAN, CTYPE2: DEC_TAN, RADESYS: 'ICRS', CRVAL1: toDeg(normalizeAngle(rightAscension)), CRVAL2: toDeg(declination), CRPIX1: 50.5, CRPIX2: 50.5, CD1_1: s * u[0], CD2_1: s * u[1], CD1_2: s * v[0], CD2_2: s * v[1], NAXIS1: 100, NAXIS2: 100 }
+	return plateSolutionFrom(header)!
+}
+
+// Rotator of the fake commander: its mechanical angle, the moves commanded, and a failure for the next one.
+class FakeRotator {
+	readonly rotator: Rotator
+	readonly moves: number[] = []
+	failMove?: OperationResult<never>
+
+	constructor(angle: number, min: number = 0, max: number = 360) {
+		this.rotator = { name: 'Fake Rotator', connected: true, moving: false, angle: { value: angle, min, max, step: 0.01 } } as Rotator
+	}
+
+	get angle() {
+		return this.rotator.angle.value
+	}
+
+	readonly commander = {
+		moveTo: (_scope: OperationScope, _rotator: Rotator, angle: number) => {
+			if (this.failMove !== undefined) return Promise.resolve(this.failMove)
+			this.moves.push(angle)
+			Object.assign(this.rotator.angle, { value: angle })
+			return Promise.resolve(successfulOperationResult(undefined))
+		},
+	} as unknown as RotatorCommander
+}
+
+// Field of a camera on a rotator: PA of the image top = sense·M + offset, in degrees, when coupled, else the offset
+// alone; the center shifts with the rotation by `pivot` radians about the rotator axis.
+interface RotatingField {
+	readonly sense: 1 | -1
+	readonly offset: number
+	readonly pivot?: number
+	readonly coupled?: boolean
+	readonly mirrored?: boolean
+}
+
+// Solver over the fake sky and the fake rotator.
+function rotatingSolver(sky: FakeMount, rotator: FakeRotator, field: RotatingField): CenteringSolver {
+	const initial = rotator.angle
+	return () => {
+		const [rightAscension, declination] = sky.sky()
+		const pivot = field.pivot ?? 0
+		const m = deg(rotator.angle)
+		const m0 = deg(initial)
+		const center = applyPointingOffset(rightAscension, declination, pivot * (Math.cos(m) - Math.cos(m0)), pivot * (Math.sin(m) - Math.sin(m0)))
+		const positionAngle = field.coupled === false ? field.offset : field.sense * rotator.angle + field.offset
+		return Promise.resolve(orientedSolution(center.rightAscension, center.declination, deg(positionAngle), field.mirrored))
+	}
+}
+
+// Centering with an orientation over the fake sky, a fake rotator and a manual clock.
+function rotationHarness(sky: FakeMount, rotator: FakeRotator, field: RotatingField) {
+	const base = harness(sky, rotatingSolver(sky, rotator, field))
+	const steps: string[] = []
+	const checks: CenteringRotationCheck[] = []
+	const corrections: CenteringCorrection[] = []
+	const measurements: CenteringMeasurement[] = []
+	let unreachable = 0
+	const services: CenteringServices = {
+		...base.services,
+		rotatorCommander: rotator.commander,
+		observer: {
+			step: (step, attempt) => steps.push(`${step} ${attempt}`),
+			measured: (measurement) => measurements.push(measurement),
+			rotationChecked: (check) => checks.push(check),
+			rotationUnreachable: () => unreachable++,
+			beforeCorrection: (correction) => {
+				corrections.push(correction)
+				return undefined
+			},
+		},
+	}
+	const coordinator = new OperationCoordinator(new ResourceArbiter())
+	const run = (positionAngle: number, options: Partial<CenteringOptions> = {}, rotation: Partial<CenteringRotation> | false = {}) =>
+		centerTarget(coordinator, sky.mount, CAMERA, TARGET, { ...OPTIONS, maximumAttempts: 6, orientation: { positionAngle: deg(positionAngle), tolerance: deg(0.5), halfTurn: true }, ...(rotation !== false && { rotation: { rotator: rotator.rotator, ...rotation } }), ...options }, services)
+	return { run, steps, checks, corrections, measurements, unreachable: () => unreachable, starts: base.starts }
+}
+
+describe('centering with a rotator', () => {
+	test('a known sense turns once by the error and the next frame verifies both axes', async () => {
+		for (const sense of [1, -1] as const) {
+			const sky = new FakeMount([TARGET.rightAscension, TARGET.declination], 0, 0)
+			const rotator = new FakeRotator(100)
+			const { run, checks, measurements, steps } = rotationHarness(sky, rotator, { sense, offset: -30 })
+			// PA now: sense·100 − 30; requested 50° away from it.
+			const requested = sense * 100 - 30 + 50
+			const result = await run(normalizeDegrees(requested), {}, { sense: { value: sense } })
+
+			expect(result).toMatchObject({ ok: true, value: { attempts: 2, sense } })
+			expectMoves(rotator.moves, [100 + sense * 50])
+			expect(toDeg((result as { value: CenteringResult }).value.positionAngleError!)).toBeCloseTo(0, 3)
+			expect(checks).toMatchObject([{ attempt: 2, sense, source: 'confirmed' }])
+			expect(checks[0].gain).toBeCloseTo(1, 3)
+			expectMoves(
+				measurements.map(({ rotatorAngle }) => rotatorAngle!),
+				[100, 100 + sense * 50],
+			)
+			expect(steps).toEqual(['exposing 1', 'solving 1', 'rotating 1', 'settling 1', 'exposing 2', 'solving 2'])
+			expect(sky.commands).toEqual([])
+		}
+	})
+
+	test('an unknown sense is probed, learned, and then corrected with at most one extra rotation', async () => {
+		for (const sense of [1, -1] as const) {
+			const sky = new FakeMount([TARGET.rightAscension, TARGET.declination], 0, 0)
+			const rotator = new FakeRotator(100)
+			const { run, checks } = rotationHarness(sky, rotator, { sense, offset: 20 })
+			const result = await run(normalizeDegrees(sense * 100 + 20 + 40))
+
+			expect(result).toMatchObject({ ok: true, value: { attempts: 3, sense } })
+			// The probe turns 10° the way of the error, then the learned sense finishes the move.
+			expect(rotator.moves).toHaveLength(2)
+			expect(rotator.moves[0]).toBe(110)
+			expect(rotator.moves[1]).toBeCloseTo(100 + sense * 40, 6)
+			expect(checks.map(({ source, sense }) => [source, sense])).toEqual([
+				['learned', sense],
+				['confirmed', sense],
+			])
+		}
+	})
+
+	test('a stored sense the field contradicts is relearned and the centering goes on', async () => {
+		const sky = new FakeMount([TARGET.rightAscension, TARGET.declination], 0, 0)
+		const rotator = new FakeRotator(100)
+		const { run, checks } = rotationHarness(sky, rotator, { sense: -1, offset: 0 })
+		const result = await run(normalizeDegrees(-100 + 30), {}, { sense: { value: 1 } })
+
+		expect(result).toMatchObject({ ok: true, value: { sense: -1 } })
+		expect(checks[0]).toMatchObject({ source: 'relearned', sense: -1 })
+	})
+
+	test('a stored sense learned with the other parity is discarded and probed', async () => {
+		const sky = new FakeMount([TARGET.rightAscension, TARGET.declination], 0, 0)
+		const rotator = new FakeRotator(100)
+		const { run, checks } = rotationHarness(sky, rotator, { sense: 1, offset: 0 })
+		const parity = orientedSolution(0, 0, 0).parity
+		const result = await run(140, {}, { sense: { value: 1, parity: parity === 'NORMAL' ? 'FLIPPED' : 'NORMAL' } })
+
+		expect(result).toMatchObject({ ok: true, value: { sense: 1 } })
+		expect(rotator.moves[0]).toBe(110)
+		expect(checks[0]).toMatchObject({ source: 'learned', parity })
+	})
+
+	test('with halfTurn the shorter of θ and θ + 180° is reached; without it the full error is turned', async () => {
+		const near = new FakeRotator(100)
+		const half = rotationHarness(new FakeMount([TARGET.rightAscension, TARGET.declination], 0, 0), near, { sense: 1, offset: 0 })
+		expect(await half.run(270, {}, { sense: { value: 1 } })).toMatchObject({ ok: true })
+		expectMoves(near.moves, [90])
+
+		const far = new FakeRotator(100)
+		const full = rotationHarness(new FakeMount([TARGET.rightAscension, TARGET.declination], 0, 0), far, { sense: 1, offset: 0 })
+		const result = await full.run(270, { orientation: { positionAngle: deg(270), tolerance: deg(0.5), halfTurn: false } }, { sense: { value: 1 } })
+		expect(result).toMatchObject({ ok: true })
+		expectMoves(far.moves, [270])
+	})
+
+	test('a direction past 360° is commanded as its representative inside the limits', async () => {
+		const rotator = new FakeRotator(355)
+		const { run } = rotationHarness(new FakeMount([TARGET.rightAscension, TARGET.declination], 0, 0), rotator, { sense: 1, offset: 0 })
+		expect(await run(15, { orientation: { positionAngle: deg(15), tolerance: deg(0.5), halfTurn: false } }, { sense: { value: 1 } })).toMatchObject({ ok: true })
+		expectMoves(rotator.moves, [15])
+	})
+
+	test('an orientation outside the rotator limits fails before any motion', async () => {
+		for (const sense of [{ value: 1 as const }, undefined]) {
+			const rotator = new FakeRotator(45, 0, 90)
+			const { run, unreachable } = rotationHarness(new FakeMount([TARGET.rightAscension, TARGET.declination], 0, 0), rotator, { sense: 1, offset: 0 })
+			const result = await run(195, { orientation: { positionAngle: deg(195), tolerance: deg(0.5), halfTurn: false } }, { sense })
+
+			expect(result).toMatchObject({ ok: false, reason: 'unexpectedState' })
+			expect((result as { error: string }).error).toContain('outside the limits')
+			expect(rotator.moves).toEqual([])
+			expect(unreachable()).toBe(1)
+		}
+	})
+
+	test('a rotator that does not turn the field fails after its first rotation', async () => {
+		const rotator = new FakeRotator(100)
+		const { run, starts } = rotationHarness(new FakeMount([TARGET.rightAscension, TARGET.declination], 0, 0), rotator, { sense: 1, offset: 0, coupled: false })
+		const result = await run(40)
+
+		expect(result).toMatchObject({ ok: false, reason: 'unexpectedState' })
+		expect((result as { error: string }).error).toContain('did not turn')
+		expect(rotator.moves).toHaveLength(1)
+		expect(starts).toHaveLength(2)
+	})
+
+	test('position and orientation off in one iteration: the rotation comes first, then the slew, and the pivot shift is corrected', async () => {
+		const sky = new FakeMount([TARGET.rightAscension, TARGET.declination], deg(10 / 60), 0)
+		const rotator = new FakeRotator(100)
+		const { run, steps, corrections } = rotationHarness(sky, rotator, { sense: 1, offset: 0, pivot: deg(2 / 60) })
+		const result = await run(160, {}, { sense: { value: 1 } })
+
+		expect(result).toMatchObject({ ok: true })
+		expect(steps.slice(0, 4)).toEqual(['exposing 1', 'solving 1', 'rotating 1', 'correcting 1'])
+		expect(corrections[0].rotator).toEqual({ from: 100, to: 160 })
+		expect(corrections[0].mount).toBeDefined()
+		expect(toDeg(corrections[0].positionAngleError!)).toBeCloseTo(60, 3)
+	})
+
+	test('only measuring reports the orientation and commands nothing', async () => {
+		const sky = new FakeMount([TARGET.rightAscension, TARGET.declination], 0, 0)
+		const rotator = new FakeRotator(100)
+		const { run, measurements } = rotationHarness(sky, rotator, { sense: 1, offset: 0 })
+
+		expect(await run(130, { maximumCorrections: 0 })).toMatchObject({ ok: false, reason: 'unexpectedState' })
+		expect(toDeg(measurements[0].positionAngle!)).toBeCloseTo(100, 3)
+		expect(toDeg(measurements[0].positionAngleError!)).toBeCloseTo(30, 3)
+		expect(rotator.moves).toEqual([])
+		expect(sky.commands).toEqual([])
+
+		expect(await run(100.2, { maximumCorrections: 0 })).toMatchObject({ ok: true, value: { attempts: 1 } })
+	})
+
+	test('an orientation without a rotator is measured, and a wrong one fails at once', async () => {
+		const sky = new FakeMount([TARGET.rightAscension, TARGET.declination], 0, 0)
+		const rotator = new FakeRotator(100)
+		const { run, starts } = rotationHarness(sky, rotator, { sense: 1, offset: 0 })
+		const result = await run(130, {}, false)
+
+		expect(result).toMatchObject({ ok: false, reason: 'unexpectedState' })
+		expect((result as { error: string }).error).toContain('no rotator')
+		expect(starts).toHaveLength(1)
+	})
+
+	test('a failed or cancelled rotation ends the centering with its failure', async () => {
+		const rotator = new FakeRotator(100)
+		rotator.failMove = failedOperationResult('aborted')
+		const { run } = rotationHarness(new FakeMount([TARGET.rightAscension, TARGET.declination], 0, 0), rotator, { sense: 1, offset: 0 })
+		expect(await run(130, {}, { sense: { value: 1 } })).toMatchObject({ ok: false, reason: 'aborted' })
+	})
+
+	test('the auxiliary frames snoop the rotator', async () => {
+		const rotator = new FakeRotator(100)
+		const { run, starts } = rotationHarness(new FakeMount([TARGET.rightAscension, TARGET.declination], 0, 0), rotator, { sense: 1, offset: 0 })
+		await run(100)
+		expect(starts[0].request.rotator).toBe('Fake Rotator')
+		expect(centeringCaptureRequest(CAPTURE, 'a.fit', { name: 'M' }).rotator).toBeUndefined()
+	})
+
+	test('a mirrored field rotates the other way and is learned as such', async () => {
+		const rotator = new FakeRotator(100)
+		const { run, checks } = rotationHarness(new FakeMount([TARGET.rightAscension, TARGET.declination], 0, 0), rotator, { sense: -1, offset: 0, mirrored: true })
+		expect(await run(normalizeDegrees(-100 + 30))).toMatchObject({ ok: true, value: { sense: -1 } })
+		expect(checks[0].parity).toBe(orientedSolution(0, 0, 0, true).parity)
+	})
+})
+
+describe('rotation planning', () => {
+	test('the PA error wraps to a half turn or a whole turn', () => {
+		expect(toDeg(positionAngleError(deg(10), deg(350), false))).toBeCloseTo(20, 9)
+		expect(toDeg(positionAngleError(deg(350), deg(10), false))).toBeCloseTo(-20, 9)
+		expect(toDeg(positionAngleError(deg(190), deg(10), true))).toBeCloseTo(0, 9)
+		expect(toDeg(positionAngleError(deg(100), deg(0), true))).toBeCloseTo(-80, 9)
+		expect(toDeg(positionAngleError(deg(90), deg(0), true))).toBeCloseTo(90, 9)
+		expect(toDeg(positionAngleError(deg(180), deg(0), false))).toBeCloseTo(180, 9)
+	})
+
+	test('the response check learns, confirms, reverses, is inconclusive for a tiny rotation, and fails without response', () => {
+		expect(responseCheck(2, 9.9, 10, undefined, 'NORMAL')).toMatchObject({ sense: 1, source: 'learned' })
+		expect(responseCheck(2, -10.1, 10, 1, 'NORMAL')).toMatchObject({ sense: -1, source: 'relearned' })
+		expect(responseCheck(2, -10.1, 10, -1, 'NORMAL')).toMatchObject({ sense: -1, source: 'confirmed' })
+		expect(responseCheck(2, 0.2, 0.3, 1, 'NORMAL')).toBe('inconclusive')
+		expect(responseCheck(2, 0, 10, undefined, 'NORMAL')).toBeUndefined()
+		expect(responseCheck(2, 5, 10, 1, 'NORMAL')).toBeUndefined()
+	})
+
+	test('a partial range keeps the reachable candidate, and the probe turns the other way when it must', () => {
+		const rotator = { angle: { value: 0, min: -90, max: 90, step: 0.01 } } as Rotator
+		expect(plannedRotation(rotator, 80, 30, false, 1, { minimum: 2, maximum: 10 })).toBeUndefined()
+		expect(plannedRotation(rotator, 80, 30, true, 1, { minimum: 2, maximum: 10 })).toBeCloseTo(-70, 9)
+		expect(plannedRotation(rotator, 85, 30, true, undefined, { minimum: 2, maximum: 10 })).toBeCloseTo(75, 9)
+		expect(plannedRotation(rotator, 0, 1, true, undefined, { minimum: 2, maximum: 10 })).toBeCloseTo(2, 9)
+	})
+})
+
+// Degrees wrapped to [0, 360).
+function normalizeDegrees(value: number) {
+	return ((value % 360) + 360) % 360
+}
 
 test('I46: the centering imports no solver, star detector or binding and creates no Worker', async () => {
 	const root = join(dirname(dirname(dirname(__dirname))), 'src', 'observation')
@@ -816,3 +1115,9 @@ test.skipIf(isBinaryTestSkipped())('a real solver over a FITS of data/ verifies 
 	expect(result).toMatchObject({ ok: true, value: { attempts: 1 } })
 	expect(existsSync(join(directory, 'astap.1.fit'))).toBeFalse()
 })
+
+// Expects the commanded rotator angles, in degrees, within rounding.
+function expectMoves(moves: readonly number[], expected: readonly number[]) {
+	expect(moves).toHaveLength(expected.length)
+	for (let i = 0; i < expected.length; i++) expect(moves[i]).toBeCloseTo(expected[i], 9)
+}

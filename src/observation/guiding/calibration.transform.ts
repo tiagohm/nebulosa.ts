@@ -10,9 +10,15 @@ import type { CalibrationMatrix } from './guider'
 // accumulate: a flip when the mount reports the other side of the pier, then, on an equatorial mount whose RA pulses do
 // not already follow the declination, the RA response scaled by cos(current declination) / cos(source declination), as
 // PHD2's declination compensation. Both scale columns of the forward (axis-to-image) matrix, so their order does not
-// matter, and the inverse is solved again from the result; DEC is never scaled. A context that cannot be trusted is
-// refused, never guessed. Records read from storage are validated here once before use. Angles are radians, rates
-// pixels per millisecond; pure, each call allocates its result.
+// matter, and the inverse is solved again from the result; DEC is never scaled. When the guide camera turns with a
+// camera rotator (an off-axis guider behind it), the guide image turns by σ·ΔM, ΔM the change of the rotator's
+// mechanical angle since the source was measured and σ = ±1 the guide image sense of that camera on that rotator, so
+// both axis directions are rotated by that angle in the image plane, rates kept; the rotation acts on the rows of the
+// forward matrix and the flip and the scale on its columns, so the three commute. An unknown σ is never guessed for a
+// rotation large enough to tell its sign: both candidates are returned for a direction check before guiding. A context
+// that cannot be trusted is refused, never guessed. Records read from storage are validated here once before use.
+// Angles are radians, rotator angles mechanical degrees, rates pixels per millisecond; pure, each call allocates its
+// result.
 
 // Version of GuidingCalibrationRecord, raised when its shape changes.
 export const GUIDING_CALIBRATION_RECORD_VERSION = 1
@@ -31,12 +37,36 @@ export const MAX_COMPENSATED_DECLINATION: Angle = 85 * DEG2RAD
 // reshaping the calibration.
 export const DECLINATION_SCALE_TOLERANCE = 0.01
 
+// Change of the rotator's mechanical angle, in degrees, below which the guide image is taken as not turned: well under
+// any rotator step, and far below what the controller absorbs.
+export const ROTATION_TOLERANCE = 0.05
+
+// Smallest rotation of the guide image, in degrees, a direction check can tell the sign of (provisional): its two
+// candidates are 2·ΔM apart, and a measured direction is accepted within 15° of one and 30° from the other. Below it the
+// rotation of an unknown sense is not applied and nothing is checked; the controller absorbs the error.
+export const DIRECTION_CHECK_MINIMUM_ROTATION = 15
+
 // Mount context of a calibration, as the mount reported it.
 export interface GuidingCalibrationContext {
 	// Declination of the mount, apparent of date (JNow), in radians within [-π/2, π/2]; absent when unknown.
 	readonly declination?: Angle
 	// Side of the pier the mount reported; absent or NEITHER when the mount does not tell.
 	readonly pierSide?: PierSide
+	// Mechanical angle of the camera rotator, in degrees, on the scale the caller keeps across syncs; absent without a
+	// rotator or when unknown.
+	readonly rotatorAngle?: number
+}
+
+// How the guide image follows a camera rotator: fixed (the guide camera does not turn with it, or there is none), or
+// turning, with the guide image sense σ when it is known: the image turns by σ·ΔM in rotateGuidingCalibration's sense.
+export type GuidingCalibrationRotation = { readonly kind: 'fixed' } | { readonly kind: 'turning'; readonly sense?: 1 | -1 }
+
+// A calibration a direction check may choose: derived with one guide image sense.
+export interface GuidingDirectionCandidate {
+	// Guide image sense the calibration was derived with.
+	readonly sense: 1 | -1
+	// Calibration derived with it.
+	readonly calibration: GuidingCalibrationResult
 }
 
 // A solved calibration kept to be reused: the source every calibration used to guide is derived from.
@@ -58,15 +88,17 @@ export interface GuidingCalibrationTransformOptions {
 	readonly declinationCompensation: boolean
 	// Whether the DEC output is reversed after a flip, as flipGuidingCalibration's reverseDecOutput.
 	readonly reverseDecOutputAfterMeridianFlip: boolean
+	// How the guide image follows the camera rotator; absent is fixed.
+	readonly rotation?: GuidingCalibrationRotation
 }
 
 // A transformation applied to the source to derive the calibration used to guide.
-export type GuidingCalibrationTransformation = 'pierFlip' | 'declinationCompensation'
+export type GuidingCalibrationTransformation = 'pierFlip' | 'declinationCompensation' | 'rotation'
 
-// Why a source cannot be used in a context: the pier side or the declination of the source or of the mount now is not
-// known, the source or the declination now is too close to the pole for the RA response to be scaled, or the scaled RA
-// rate is too small to guide with.
-export type GuidingCalibrationRefusal = 'pierSideUnknown' | 'declinationUnknown' | 'sourceNearPole' | 'declinationNearPole' | 'rateTooSmall'
+// Why a source cannot be used in a context: the pier side, the declination, or the angle of a rotator the guide camera
+// turns with, of the source or of the mount now, is not known, the source or the declination now is too close to the
+// pole for the RA response to be scaled, or the scaled RA rate is too small to guide with.
+export type GuidingCalibrationRefusal = 'pierSideUnknown' | 'declinationUnknown' | 'rotatorAngleUnknown' | 'sourceNearPole' | 'declinationNearPole' | 'rateTooSmall'
 
 // Whether and how a source calibration applies in a context: as it is, transformed, or not at all, either because the
 // context is not known well enough to tell or because the geometry needs a new calibration.
@@ -79,6 +111,14 @@ export type GuidingCalibrationApplicability =
 			readonly transformations: readonly GuidingCalibrationTransformation[]
 			// Factor applied to the RA response, cos(current) / cos(source declination); 1 without declination compensation.
 			readonly declinationScale: number
+			// Change of the rotator's mechanical angle since the source, in degrees within (−180, 180]; 0 when the guide image
+			// does not turn or did not turn.
+			readonly rotatorChange: number
+			// Candidates a direction check must choose between before guiding, the expected one first (the known sense, else
+			// +1), whose calibration is `calibration`; absent when the guide image turned less than
+			// DIRECTION_CHECK_MINIMUM_ROTATION or not at all. A known sense is checked too: a sync of the rotator the caller
+			// could not see, or another optical train, would otherwise guide with a wrong geometry.
+			readonly directionCheck?: readonly [GuidingDirectionCandidate, GuidingDirectionCandidate]
 	  }
 	| {
 			readonly status: 'insufficientEvidence' | 'requiresRecalibration'
@@ -95,14 +135,28 @@ const RECALIBRATION_REASONS: ReadonlySet<GuidingCalibrationRefusal> = new Set(['
 // Returns the calibration to guide with in the current context, derived from the source record: flipped when both the
 // source and the mount now report a known side of the pier and they differ, then with its RA response scaled to the
 // current declination when declinationCompensation is on and the scale differs from 1 by more than
-// DECLINATION_SCALE_TOLERANCE. A side of the pier that is unknown on either end, or a declination unknown on either end
-// while compensating, is refused as insufficientEvidence; a source or a declination now beyond the compensation limits,
-// or an RA rate below the calibrator's minimum after scaling, as requiresRecalibration.
+// DECLINATION_SCALE_TOLERANCE, then, when the guide image turns with a rotator whose angle changed by more than
+// ROTATION_TOLERANCE, rotated by σ·ΔM (rotateGuidingCalibration). A rotation of DIRECTION_CHECK_MINIMUM_ROTATION or more
+// returns both candidate senses for a direction check, the known one first; a smaller one of an unknown sense is not
+// applied. A side of the pier that is unknown on either end, a declination unknown on either end while compensating, or
+// the angle of a rotator the guide image turns with unknown on either end, is refused as insufficientEvidence; a source
+// or a declination now beyond the compensation limits, or an RA rate below the calibrator's minimum after scaling, as
+// requiresRecalibration.
 export function effectiveGuidingCalibration(record: GuidingCalibrationRecord, current: GuidingCalibrationContext, options: GuidingCalibrationTransformOptions): GuidingCalibrationApplicability {
 	const reasons: GuidingCalibrationRefusal[] = []
 	const sourceSide = knownPierSide(record.context.pierSide)
 	const currentSide = knownPierSide(current.pierSide)
 	if (sourceSide === undefined || currentSide === undefined) reasons.push('pierSideUnknown')
+
+	const rotation = options.rotation?.kind === 'turning' ? options.rotation : undefined
+	let rotatorChange = 0
+
+	if (rotation !== undefined) {
+		const source = record.context.rotatorAngle
+		const now = current.rotatorAngle
+		if (source === undefined || now === undefined) reasons.push('rotatorAngleUnknown')
+		else rotatorChange = normalizeDegrees(now - source)
+	}
 
 	let declinationScale = 1
 
@@ -139,7 +193,55 @@ export function effectiveGuidingCalibration(record: GuidingCalibrationRecord, cu
 		if (!(calibration.ra.ratePxPerMs >= DEFAULT_GUIDING_CALIBRATOR_CONFIG.minRatePxPerMs)) return refused(['rateTooSmall'])
 	}
 
-	return { status: transformations.length > 0 ? 'transformed' : 'direct', calibration, transformations, declinationScale }
+	if (rotation === undefined || !(Math.abs(rotatorChange) > ROTATION_TOLERANCE)) return { status: transformations.length > 0 ? 'transformed' : 'direct', calibration, transformations, declinationScale, rotatorChange: 0 }
+
+	if (Math.abs(rotatorChange) < DIRECTION_CHECK_MINIMUM_ROTATION) {
+		// Too small a rotation to tell an unknown sense from the other one; the controller absorbs it unapplied.
+		if (rotation.sense === undefined) return { status: transformations.length > 0 ? 'transformed' : 'direct', calibration, transformations, declinationScale, rotatorChange: 0 }
+		return { status: 'transformed', calibration: rotateGuidingCalibration(calibration, rotation.sense * rotatorChange * DEG2RAD), transformations: [...transformations, 'rotation'], declinationScale, rotatorChange }
+	}
+
+	const expected = rotation.sense ?? 1
+	const first: GuidingDirectionCandidate = { sense: expected, calibration: rotateGuidingCalibration(calibration, expected * rotatorChange * DEG2RAD) }
+	const second: GuidingDirectionCandidate = { sense: -expected as 1 | -1, calibration: rotateGuidingCalibration(calibration, -expected * rotatorChange * DEG2RAD) }
+	return { status: 'transformed', calibration: first.calibration, transformations: [...transformations, 'rotation'], declinationScale, rotatorChange, directionCheck: [first, second] }
+}
+
+// Returns the calibration with both axis directions turned by `angle` radians in the image plane (from +X toward +Y,
+// pixels with Y down): the unit vectors, their angles and the columns of the forward matrix rotated, the rates and the
+// measured travel and review kept, the inverse and the determinant solved again (a rotation keeps the determinant).
+export function rotateGuidingCalibration(calibration: GuidingCalibrationResult, angle: Angle): GuidingCalibrationResult {
+	const cos = Math.cos(angle)
+	const sin = Math.sin(angle)
+	const [m00, m01, m10, m11] = calibration.imageMotion
+	const r00 = cos * m00 - sin * m10
+	const r10 = sin * m00 + cos * m10
+	const r01 = cos * m01 - sin * m11
+	const r11 = sin * m01 + cos * m11
+	const determinant = r00 * r11 - r01 * r10
+
+	return {
+		...calibration,
+		ra: rotatedAxis(calibration.ra, cos, sin),
+		dec: rotatedAxis(calibration.dec, cos, sin),
+		imageMotion: [r00, r01, r10, r11],
+		imageToAxis: [r11 / determinant, -r01 / determinant, -r10 / determinant, r00 / determinant],
+		determinant,
+	}
+}
+
+// Returns an axis solution whose unit direction is turned by the rotation of cosine `cos` and sine `sin`, its angle the
+// direction of the result.
+function rotatedAxis<A extends GuidingCalibrationAxisSolution>(axis: A, cos: number, sin: number): A {
+	const unitX = cos * axis.unitX - sin * axis.unitY
+	const unitY = sin * axis.unitX + cos * axis.unitY
+	return { ...axis, unitX, unitY, angle: Math.atan2(unitY, unitX) }
+}
+
+// Returns an angle in degrees wrapped to (−180, 180].
+function normalizeDegrees(angle: number) {
+	const wrapped = angle % 360
+	return wrapped > 180 ? wrapped - 360 : wrapped <= -180 ? wrapped + 360 : wrapped
 }
 
 // Returns the calibration with its RA response scaled by scale (> 0): the RA column of the forward matrix and the RA
@@ -174,6 +276,7 @@ export function validateGuidingCalibrationRecord(value: unknown): GuidingCalibra
 	if (!isRecord(context)) return invalid('the context is not an object')
 	if (context.declination !== undefined && !(isFiniteNumber(context.declination) && Math.abs(context.declination) <= PIOVERTWO)) return invalid('the context declination is out of range')
 	if (context.pierSide !== undefined && context.pierSide !== 'EAST' && context.pierSide !== 'WEST' && context.pierSide !== 'NEITHER') return invalid('the context pier side is unknown')
+	if (context.rotatorAngle !== undefined && !isFiniteNumber(context.rotatorAngle)) return invalid('the context rotator angle is not finite')
 
 	const calibration = value.calibration
 	if (!isRecord(calibration)) return invalid('the calibration is not an object')

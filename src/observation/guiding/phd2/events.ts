@@ -20,6 +20,7 @@ export function phd2EventsOf(event: GuidingEvent): PHD2Events[] {
 		case 'calibrationCleared':
 		case 'calibrationRestored':
 		case 'calibrationTransformed':
+		case 'calibrationDirectionChecked':
 			return [phd2Event('ConfigurationChange', at, {})]
 		case 'stateChanged':
 			// PHD2 sends AppState only when a client connects; later transitions are tracked through the
@@ -43,6 +44,10 @@ export function phd2EventsOf(event: GuidingEvent): PHD2Events[] {
 			return [phd2Event('StartCalibration', at, { Mount: event.guideOutput })]
 		case 'calibrationStep':
 			return [phd2Event('Calibrating', at, phd2CalibratingOf(event.guideOutput, event.diagnostics))]
+		case 'calibrationDirectionCheckStep':
+			return []
+		case 'calibrationDirectionCheckFailed':
+			return [phd2Event('Alert', at, { Msg: `Calibration direction check failed: ${event.message}`, Type: 'warning' })]
 		case 'calibrationCompleted':
 			return [phd2Event('CalibrationComplete', at, { Mount: event.guideOutput })]
 		case 'calibrationFailed':

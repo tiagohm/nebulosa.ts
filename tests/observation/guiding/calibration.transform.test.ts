@@ -1,7 +1,8 @@
 import { describe, expect, test } from 'bun:test'
 import { DEG2RAD } from '../../../src/core/constants'
-import { effectiveGuidingCalibration, GUIDING_CALIBRATION_RECORD_VERSION, type GuidingCalibrationContext, type GuidingCalibrationRecord, scaleRightAscension, validateGuidingCalibrationRecord } from '../../../src/observation/guiding/calibration.transform'
-import type { GuidingCalibrationAxisSolution, GuidingCalibrationResult } from '../../../src/observation/guiding/calibrator'
+import { effectiveGuidingCalibration, GUIDING_CALIBRATION_RECORD_VERSION, type GuidingCalibrationContext, type GuidingCalibrationRecord, rotateGuidingCalibration, scaleRightAscension, validateGuidingCalibrationRecord } from '../../../src/observation/guiding/calibration.transform'
+import { flipGuidingCalibration, type GuidingCalibrationAxisSolution, type GuidingCalibrationResult } from '../../../src/observation/guiding/calibrator'
+import { directionDecision } from '../../../src/observation/guiding/client'
 
 // A calibration with RA along +X at 0.01 px/ms and DEC 80° from it at 0.008 px/ms.
 function calibration(): GuidingCalibrationResult {
@@ -140,6 +141,114 @@ describe('effective calibration', () => {
 		const tiny = scaleRightAscension(slow.calibration, 0.015)
 		const result = effectiveGuidingCalibration({ ...slow, calibration: tiny }, { declination: 84 * DEG2RAD, pierSide: 'EAST' }, OPTIONS)
 		expect(result).toEqual({ status: 'requiresRecalibration', reasons: ['rateTooSmall'] })
+	})
+})
+
+describe('rotation of the guide image', () => {
+	const TURNING = { ...OPTIONS, rotation: { kind: 'turning' } } as const
+	const SOURCE = { declination: 10 * DEG2RAD, pierSide: 'EAST', rotatorAngle: 100 } as const
+
+	test('a rotation of zero is the identity and keeps the inverse consistent', () => {
+		const source = calibration()
+		const rotated = rotateGuidingCalibration(source, 0)
+		expect(rotated.imageMotion.map((value, i) => value - source.imageMotion[i])).toEqual([0, 0, 0, 0])
+		expectInverse(rotateGuidingCalibration(source, 37 * DEG2RAD))
+	})
+
+	test('both axes turn by the angle, rates and determinant kept, and the record stays valid', () => {
+		const source = calibration()
+		const rotated = rotateGuidingCalibration(source, 30 * DEG2RAD)
+		expect(rotated.ra.angle).toBeCloseTo(40 * DEG2RAD, 12)
+		expect(rotated.dec.angle).toBeCloseTo(120 * DEG2RAD, 12)
+		expect(rotated.ra.ratePxPerMs).toBe(source.ra.ratePxPerMs)
+		expect(rotated.determinant).toBeCloseTo(source.determinant, 15)
+		expect(validateGuidingCalibrationRecord({ ...record(SOURCE), calibration: rotated }).ok).toBeTrue()
+	})
+
+	test('the rotation commutes with the pier flip and the RA scale', () => {
+		const source = calibration()
+		const angle = 25 * DEG2RAD
+		const a = rotateGuidingCalibration(scaleRightAscension(flipGuidingCalibration(source), 0.7), angle)
+		const b = scaleRightAscension(flipGuidingCalibration(rotateGuidingCalibration(source, angle)), 0.7)
+		for (let i = 0; i < 4; i++) expect(a.imageMotion[i]).toBeCloseTo(b.imageMotion[i], 15)
+	})
+
+	test('a fixed guide image is never rotated, whatever the rotator did', () => {
+		const result = effectiveGuidingCalibration(record(SOURCE), { ...SOURCE, rotatorAngle: 170 }, { ...OPTIONS, rotation: { kind: 'fixed' } })
+		expect(result).toMatchObject({ status: 'direct', rotatorChange: 0 })
+		expect(effectiveGuidingCalibration(record(SOURCE), { ...SOURCE, rotatorAngle: 170 }, OPTIONS)).toMatchObject({ status: 'direct', rotatorChange: 0 })
+	})
+
+	test('an unknown rotator angle on either end is refused as insufficient evidence', () => {
+		expect(effectiveGuidingCalibration(record({ ...SOURCE, rotatorAngle: undefined }), SOURCE, TURNING)).toEqual({ status: 'insufficientEvidence', reasons: ['rotatorAngleUnknown'] })
+		expect(effectiveGuidingCalibration(record(SOURCE), { ...SOURCE, rotatorAngle: undefined }, TURNING)).toEqual({ status: 'insufficientEvidence', reasons: ['rotatorAngleUnknown'] })
+	})
+
+	test('a small rotation is applied with a known sense and left out with an unknown one, never checked', () => {
+		const known = effectiveGuidingCalibration(record(SOURCE), { ...SOURCE, rotatorAngle: 105 }, { ...OPTIONS, rotation: { kind: 'turning', sense: -1 } })
+		expect(known).toMatchObject({ status: 'transformed', transformations: ['rotation'], rotatorChange: 5 })
+		if (known.status !== 'transformed') return
+		expect(known.directionCheck).toBeUndefined()
+		expect(known.calibration.ra.angle).toBeCloseTo(5 * DEG2RAD, 12)
+
+		const unknown = effectiveGuidingCalibration(record(SOURCE), { ...SOURCE, rotatorAngle: 105 }, TURNING)
+		expect(unknown).toMatchObject({ status: 'direct', rotatorChange: 0 })
+	})
+
+	test('a large rotation offers both senses for a direction check, the known one first, through the 0°/360° wrap', () => {
+		const unknown = effectiveGuidingCalibration(record({ ...SOURCE, rotatorAngle: 350 }), { ...SOURCE, rotatorAngle: 30 }, TURNING)
+		expect(unknown).toMatchObject({ status: 'transformed', rotatorChange: 40 })
+		if (unknown.status !== 'transformed') return
+		expect(unknown.directionCheck!.map(({ sense }) => sense)).toEqual([1, -1])
+		expect(unknown.calibration).toBe(unknown.directionCheck![0].calibration)
+		expect(unknown.directionCheck![0].calibration.ra.angle).toBeCloseTo(50 * DEG2RAD, 12)
+		expect(unknown.directionCheck![1].calibration.ra.angle).toBeCloseTo(-30 * DEG2RAD, 12)
+
+		const known = effectiveGuidingCalibration(record(SOURCE), { ...SOURCE, rotatorAngle: 60 }, { ...OPTIONS, rotation: { kind: 'turning', sense: -1 } })
+		expect(known).toMatchObject({ status: 'transformed', rotatorChange: -40 })
+		if (known.status !== 'transformed') return
+		expect(known.directionCheck!.map(({ sense }) => sense)).toEqual([-1, 1])
+		expect(known.calibration.ra.angle).toBeCloseTo(50 * DEG2RAD, 12)
+	})
+
+	test('a pier flip and a rotation apply together', () => {
+		const result = effectiveGuidingCalibration(record(SOURCE), { ...SOURCE, pierSide: 'WEST', rotatorAngle: 110 }, { ...OPTIONS, rotation: { kind: 'turning', sense: 1 } })
+		expect(result).toMatchObject({ status: 'transformed', transformations: ['pierFlip', 'rotation'] })
+	})
+
+	test('a stored record with a non-finite rotator angle is invalid', () => {
+		expect(validateGuidingCalibrationRecord({ ...record(SOURCE), context: { ...SOURCE, rotatorAngle: Number.NaN } }).ok).toBeFalse()
+	})
+})
+
+describe('direction decision', () => {
+	const source = calibration()
+	const candidates = [
+		{ sense: 1, calibration: rotateGuidingCalibration(source, 40 * DEG2RAD) },
+		{ sense: -1, calibration: rotateGuidingCalibration(source, -40 * DEG2RAD) },
+	] as const
+
+	test('chooses the candidate the star moved along, at the calibrated rate', () => {
+		const angle = -30 * DEG2RAD
+		const decision = directionDecision(candidates, 8 * Math.cos(angle), 8 * Math.sin(angle), 800)
+		expect(decision.chosen?.sense).toBe(-1)
+		expect(decision.angleError).toBeCloseTo(0, 6)
+		expect(decision.rateRatio).toBeCloseTo(1, 6)
+	})
+
+	test('refuses a direction near neither, a rate far off, and no motion', () => {
+		expect(directionDecision(candidates, 0, -8, 800).chosen).toBeUndefined()
+		const angle = 50 * DEG2RAD
+		expect(directionDecision(candidates, 3 * Math.cos(angle), 3 * Math.sin(angle), 800).message).toContain('rate')
+		expect(directionDecision(candidates, 0, 0, 800).message).toContain('did not move')
+	})
+
+	test('refuses when both candidates are too close to tell apart', () => {
+		const close = [
+			{ sense: 1, calibration: rotateGuidingCalibration(source, 5 * DEG2RAD) },
+			{ sense: -1, calibration: rotateGuidingCalibration(source, -5 * DEG2RAD) },
+		] as const
+		expect(directionDecision(close, 8 * Math.cos(15 * DEG2RAD), 8 * Math.sin(15 * DEG2RAD), 800).chosen).toBeUndefined()
 	})
 })
 

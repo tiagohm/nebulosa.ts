@@ -169,6 +169,10 @@ export interface GuiderCalibrationRestoredEvent extends GuidingEventBase<'calibr
 	readonly transformations: readonly GuidingCalibrationTransformation[]
 	// Factor applied to the RA response for the declination; 1 without declination compensation.
 	readonly declinationScale: number
+	// Change of the rotator's mechanical angle since the source, in degrees; 0 when the guide image did not turn.
+	readonly rotatorChange: number
+	// Whether the calibration waits for a direction check before the controller guides with it.
+	readonly directionCheck: boolean
 }
 
 // The calibration in use was derived again from its source for a new mount context.
@@ -178,6 +182,40 @@ export interface GuiderCalibrationTransformedEvent extends GuidingEventBase<'cal
 	readonly transformations: readonly GuidingCalibrationTransformation[]
 	// Factor applied to the RA response for the declination; 1 without declination compensation.
 	readonly declinationScale: number
+	// Change of the rotator's mechanical angle since the source, in degrees; 0 when the guide image did not turn.
+	readonly rotatorChange: number
+	// Whether the calibration waits for a direction check before the controller guides with it.
+	readonly directionCheck: boolean
+}
+
+// A direction check chose the calibration of a turned guide image, which the controller now guides with.
+export interface GuiderCalibrationDirectionCheckedEvent extends GuidingEventBase<'calibrationDirectionChecked'> {
+	readonly guideOutput: string
+	// Guide image sense of the chosen calibration.
+	readonly sense: 1 | -1
+	// Whether the chosen one was the expected candidate (the known sense, else +1).
+	readonly expected: boolean
+	// Angle between the measured displacement and the chosen RA direction, in degrees.
+	readonly angleError: number
+	// Measured RA rate over the chosen calibration's.
+	readonly rateRatio: number
+}
+
+// A guide frame a direction check consumed, before the controller guides again.
+export interface GuiderCalibrationDirectionCheckStepEvent extends GuidingEventBase<'calibrationDirectionCheckStep'> {
+	readonly guideOutput: string
+	// Frame consumed.
+	readonly frameId: number
+	// What the frame did: sent the RA pulse, measured the displacement and sent the pulse back, or waited (no
+	// measurement, or the pulses refused).
+	readonly phase: 'pulse' | 'measure' | 'wait'
+}
+
+// No candidate of a direction check fit the motion of the star, so the calibration was dropped and a new one started.
+export interface GuiderCalibrationDirectionCheckFailedEvent extends GuidingEventBase<'calibrationDirectionCheckFailed'> {
+	readonly guideOutput: string
+	// Why, meant for people.
+	readonly message: string
 }
 
 // Guiding started with a valid calibration.
@@ -293,6 +331,9 @@ export type GuidingEvent =
 	| GuiderCalibrationFlippedEvent
 	| GuiderCalibrationRestoredEvent
 	| GuiderCalibrationTransformedEvent
+	| GuiderCalibrationDirectionCheckedEvent
+	| GuiderCalibrationDirectionCheckStepEvent
+	| GuiderCalibrationDirectionCheckFailedEvent
 	| GuiderGuidingStartedEvent
 	| GuiderGuidingStoppedEvent
 	| GuiderLoopingStoppedEvent

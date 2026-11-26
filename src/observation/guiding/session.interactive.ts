@@ -7,7 +7,7 @@ import { guideOutputKey, type ResourceRequest, resourceKey } from '../../devices
 import { toArcsec } from '../../math/units/angle'
 import { type CameraExposureConfiguration, configureCameraExposure } from '../capture/capture'
 import type { CameraCaptureClock } from '../capture/types'
-import type { GuidingCalibrationContext, GuidingCalibrationRecord } from './calibration.transform'
+import type { GuidingCalibrationContext, GuidingCalibrationRecord, GuidingCalibrationRotation } from './calibration.transform'
 import type { GuidePulseAdmission, GuiderClient, GuiderClientConnectOptions, GuiderClientHandler, GuidingCalibrationRestore } from './client'
 import { type DitherPhase, type DitherRequest, type DitherResult, settleOnAbort } from './ditherer'
 import type { GuiderState, GuidingEvent } from './events'
@@ -69,6 +69,7 @@ export type InteractiveGuidingClient = Pick<
 	| 'clearCalibration'
 	| 'flipCalibration'
 	| 'setCalibrationContext'
+	| 'setCalibrationRotation'
 	| 'exportCalibration'
 	| 'restoreCalibration'
 	| 'reassessCalibration'
@@ -330,6 +331,12 @@ export class InteractiveGuidingSession {
 	// Declares the mount context the next solved calibration is recorded with (GuiderClient.setCalibrationContext).
 	setCalibrationContext(context: GuidingCalibrationContext) {
 		this.client.setCalibrationContext(context)
+	}
+
+	// Declares how the guide image follows a camera rotator for the next restore or reassessment
+	// (GuiderClient.setCalibrationRotation).
+	setCalibrationRotation(rotation: GuidingCalibrationRotation) {
+		this.client.setCalibrationRotation(rotation)
 	}
 
 	// Returns the source of the calibration in use, or undefined without one (GuiderClient.exportCalibration).

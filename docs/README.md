@@ -6521,8 +6521,12 @@ The FITS World Coordinate System (Greisen and Calabretta) describes in header ke
 
 These pure TypeScript functions read a plain `FitsHeader` object, from a file or written by hand, and convert between pixels and the sky for `RA---TAN`/`DEC--TAN` and their `-SIP` forms; for any other projection (`SIN`, `ARC`, `TPV`...) use [WCSLIB Equatorial Projection](#wcslib-equatorial-projection). Pixel coordinates are FITS ones, 1-based with the center of the first pixel at (1, 1); header values are degrees and results radians. The linear part may be given as `CD`, as `PC` with `CDELT`, or as `CDELT` with `CROTA2`. Sky to pixel uses the inverse `AP`/`BP` polynomials when present and otherwise inverts the forward polynomial iteratively, so a SIP round trip is exact only as far as that inverse goes. Non-zero constant and linear SIP terms, as ASTAP writes them, are evaluated as written, so the reference pixel then does not map exactly to `CRVAL`. A malformed SIP header gives `undefined` rather than a silent fallback to plain TAN.
 
+The orientation of the image at a pixel is the position angle, from north through east, of the image top: the direction of decreasing row, as a frame is drawn without a vertical flip. Unlike the global `orientation` of a [Plate Solution](#plate-solution), taken from the CD matrix alone, it is local: north and east are projected along the great circles leaving the sky position of that pixel, so it follows the convergence of the meridians, the distortion, and the parity of the solution, and stays defined at a celestial pole inside the field. It is the angle a rotator or a framing tool must reproduce to frame the same field.
+
 ```ts
+import { plateSolutionFrom } from 'nebulosa/src/astrometry/solvers/platesolver'
 import { cd, cdFromCdelt, cdMatrix, DEC_TAN, DEC_TAN_SIP, hasCd, isWcsFitsKeyword, matrixKind, pc2cd, RA_TAN, RA_TAN_SIP, tanProject, tanUnproject } from 'nebulosa/src/astrometry/wcs/fits.wcs'
+import { imageTopPositionAngle, imageTopPositionAngleAt } from 'nebulosa/src/astrometry/wcs/orientation'
 import { deg, toDeg } from 'nebulosa/src/math/units/angle'
 
 // A TAN header of 0.0005°/pixel (1.8″), centered at RA 83.8°, Dec -5.4°, with the reference pixel at (500.5, 400.5).
@@ -6550,6 +6554,13 @@ console.log(tanUnproject(header, x, y)!.map(toDeg)) // [ 83.85, -5.3 ] — degre
 // The same header with an order-2 SIP distortion.
 const sip = { ...header, CTYPE1: RA_TAN_SIP, CTYPE2: DEC_TAN_SIP, A_ORDER: 2, B_ORDER: 2, A_2_0: 1e-5, A_1_1: -2e-6, B_0_2: 1.5e-5, B_1_1: 3e-6 }
 console.log(tanProject(sip, deg(83.85), deg(-5.3))) // [ 400.7881521810434, 599.9590962083622 ] — no AP/BP, inverted by iteration
+
+// Position angle of the image top at a FITS pixel, radians in [0, 2π): south at the center, as north is +Y.
+console.log(toDeg(imageTopPositionAngle(header, 500.5, 400.5)!), toDeg(imageTopPositionAngle(header, 1, 1)!)) // 180 179.97551336926108
+
+// The same at the pixel of a sky position (radians), or at the image center when it falls outside the image.
+const solution = plateSolutionFrom({ ...header, NAXIS1: 1000, NAXIS2: 800 })!
+console.log(toDeg(imageTopPositionAngleAt(solution, deg(83.85), deg(-5.3))!), toDeg(imageTopPositionAngleAt(solution, deg(90), deg(-5.3))!)) // 179.99538146416916 180
 ```
 
 ### FITS WCS Geometry Updates
@@ -9854,11 +9865,14 @@ A guider corrects the drift of a star by sending timed pulses to the two mount a
 
 A calibration belongs to the optical train, the guide rate, the declination and the side of the pier at which it was measured: recalibrate when the optics or the guide rate change. A meridian flip turns the image by 180 degrees, which `flipGuidingCalibration` applies to the matrix. `effectiveGuidingCalibration` derives the calibration to guide with from a stored record in another context, always from the record so transformations never accumulate: it flips once when the known pier sides differ and, with declination compensation, scales the RA rate by `cos(current) / cos(source)`, since an RA pulse moves the star in proportion to the cosine of the declination; DEC is never scaled. It refuses when a pier side or declination is unknown, and asks for a recalibration near the pole. Turn declination compensation off for a mount whose guide rate already follows the declination, or the pulses are compensated twice.
 
+A guide camera behind a camera rotator (an off-axis guider) turns with it, so a rotation of ΔM turns both axis directions in the guide image by σ·ΔM, rates unchanged; `rotateGuidingCalibration` applies it, and it commutes with the flip and the scale. The guide image sense σ is not the main camera's: the pickoff prism of an off-axis guider mirrors the image, so it is told by a short direction check rather than assumed. `effectiveGuidingCalibration` applies a small rotation with a known σ and leaves one of an unknown σ out; for a rotation large enough to tell the two senses apart it returns both candidates, and the guider client sends one RA pulse and its return and keeps the candidate the star moved along (`directionDecision`), or calibrates again when neither fits, as after a sync of the rotator it was not told about.
+
 ```ts
 import { DEG2RAD } from 'nebulosa/src/core/constants'
 import { assessGuidingCalibration } from 'nebulosa/src/observation/guiding/calibration.quality'
-import { effectiveGuidingCalibration, GUIDING_CALIBRATION_RECORD_VERSION, type GuidingCalibrationRecord } from 'nebulosa/src/observation/guiding/calibration.transform'
+import { effectiveGuidingCalibration, GUIDING_CALIBRATION_RECORD_VERSION, type GuidingCalibrationRecord, rotateGuidingCalibration } from 'nebulosa/src/observation/guiding/calibration.transform'
 import { flipGuidingCalibration, GuidingCalibrator } from 'nebulosa/src/observation/guiding/calibrator'
+import { directionDecision } from 'nebulosa/src/observation/guiding/client'
 
 // frame(id): GuideFrame — the tracker result of the latest guide exposure with the image size in pixels.
 // pulse(command): sends the RA and DEC pulses (ms) the calibrator asked for and waits for their end.
@@ -9891,6 +9905,21 @@ console.log(flipped.imageMotion) // both axis columns negated; the commanded dir
 const record: GuidingCalibrationRecord = { version: GUIDING_CALIBRATION_RECORD_VERSION, calibration: result, context: { declination: 10 * DEG2RAD, pierSide: 'EAST' }, acquiredAt: Date.now() }
 const west = effectiveGuidingCalibration(record, { declination: 50 * DEG2RAD, pierSide: 'WEST' }, { declinationCompensation: true, reverseDecOutputAfterMeridianFlip: false })
 if (west.status === 'transformed') console.log(west.transformations, west.declinationScale) // ['pierFlip', 'declinationCompensation'] 0.6527
+
+// The guide image turned 30° in the image plane with a camera rotator: both axes turned, rates kept.
+console.log(rotateGuidingCalibration(result, 30 * DEG2RAD).ra.angle - result.ra.angle) // 0.5236 (mod 2π)
+
+// A record measured with the rotator at 100°, reused at 140° with an unknown guide image sense: two candidates to check.
+const turned = effectiveGuidingCalibration({ ...record, context: { ...record.context, rotatorAngle: 100 } }, { declination: 10 * DEG2RAD, pierSide: 'EAST', rotatorAngle: 140 }, { declinationCompensation: true, reverseDecOutputAfterMeridianFlip: false, rotation: { kind: 'turning' } })
+if (turned.status === 'transformed')
+	console.log(
+		turned.rotatorChange,
+		turned.directionCheck?.map(({ sense }) => sense),
+	) // 40 [ 1, -1 ]
+
+// The star moved 8 px along the RA direction of the second candidate after an RA pulse of 800 ms.
+const [, second] = (turned.status === 'transformed' && turned.directionCheck) || []
+if (second) console.log(directionDecision(turned.directionCheck!, 8 * second.calibration.ra.unitX, 8 * second.calibration.ra.unitY, 800).chosen?.sense) // -1 when the rate matches
 
 // Starts over for a new calibration run, keeping the configuration.
 calibrator.reset()
@@ -10361,13 +10390,15 @@ A slew lands where the mount believes the target is. The pointing error of the m
 
 The solver is a function of the caller (ASTAP, astrometry.net, a Worker, a process). It must yield the event loop and honor its abort signal. The timeout is cooperative: the solve is still awaited after the abort, and a solver that never ends is reported unresponsive and then faulted, so later centerings do not call it again. An observer can follow each step and veto a correction before anything is commanded.
 
+The same loop can also bring the field to a requested orientation: the position angle of the image top (see [FITS TAN and SIP Coordinate Mapping](#fits-tan-and-sip-coordinate-mapping)), measured at the pixel of the target so the remaining position error does not disturb it near a pole. For a camera on a rotator the sky angle is θ = s·M + φ, M the mechanical angle the driver reports, so from one measurement the rotator is sent to M + s·e for an error e, and only the sense s is needed, never the offset φ: the driver's angle is never synced. An unknown sense is probed with a small rotation; after every rotation the field must have turned with the rotator, which learns or corrects the sense, or ends the run when the rotator does not carry the camera. With a half-turn equivalence θ and θ + 180° frame the same rectangle, so a meridian flip keeps the orientation without turning the rotator. The rotation comes before the mount correction in an iteration, and one frame after the last motion of either proves both.
+
 ```ts
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { astapPlateSolve } from 'nebulosa/src/astrometry/solvers/astap'
 import { abortableDelay } from 'nebulosa/src/devices/orchestration/operation.wait'
-import { deg, hour } from 'nebulosa/src/math/units/angle'
-import { centerTarget } from 'nebulosa/src/observation/mount/centering'
+import { deg, hour, toDeg } from 'nebulosa/src/math/units/angle'
+import { centerTarget, plannedRotation, positionAngleError, responseCheck } from 'nebulosa/src/observation/mount/centering'
 
 // coordinator, mountCommander, cameraCapturer, mount and camera as in Device Commanders and Device Camera Capture.
 // capture: CenteringCaptureOptions — the exposure, binning and gain of the auxiliary frame.
@@ -10392,6 +10423,15 @@ const result = await centerTarget(
 )
 
 console.log(result) // { ok: true, value: { attempts, separation, solution } } — final separation in radians
+
+// With orientation: { positionAngle: deg(120), tolerance: deg(0.5), halfTurn: true } and rotation: { rotator } in the
+// options and rotatorCommander in the services, it also turns the rotator until the PA of the image top is 120° (or 300°).
+// The PA error, wrapped to a half turn: 120° requested, 290° measured.
+console.log(toDeg(positionAngleError(deg(120), deg(290), true))) // 10
+// The rotator angle (degrees) that corrects an error of 10° from 45°: with a known sense, or a probe without one.
+console.log(plannedRotation(rotator, 45, 10, true, -1, { minimum: 2, maximum: 10 }), plannedRotation(rotator, 45, 30, true, undefined, { minimum: 2, maximum: 10 })) // 35 55
+// The response check of a rotation of 10° that turned the field by −9.8°: the sense learned, −1.
+console.log(responseCheck(2, -9.8, 10, undefined, 'NORMAL')) // { attempt: 2, sense: -1, parity: 'NORMAL', gain: 0.98, source: 'learned' }
 ```
 
 ### Pointing Model Calibration Plan
@@ -11591,7 +11631,7 @@ import { DomeCommander, domeAzimuth } from 'nebulosa/src/devices/commanders/dome
 import { FlatPanelCommander } from 'nebulosa/src/devices/commanders/flatpanel'
 import { FocuserCommander, focuserPosition } from 'nebulosa/src/devices/commanders/focuser'
 import { PowerCommander } from 'nebulosa/src/devices/commanders/power'
-import { RotatorCommander, rotatorAngle } from 'nebulosa/src/devices/commanders/rotator'
+import { reachableRotatorAngle, RotatorCommander, rotatorAngle } from 'nebulosa/src/devices/commanders/rotator'
 import { WeatherCommander } from 'nebulosa/src/devices/commanders/weather'
 import { WheelCommander, wheelSlot } from 'nebulosa/src/devices/commanders/wheel'
 import { IndiClientHandlerSet } from 'nebulosa/src/devices/indi/client'
@@ -11688,6 +11728,9 @@ await wheelCommander.setNames(coordinator, wheel, ['L', 'R', 'G', 'B', 'Ha', 'SI
 // The targets the commands resolve: a focuser position (steps), a wheel slot, a rotator angle (degrees) and a
 // dome azimuth (radians), each rounded, wrapped or clamped to the device; domeAltitude does the same for altitude.
 console.log(focuserPosition(focuser, 1e9), wheelSlot(wheel, 2.6), rotatorAngle(rotator, 370), toDeg(domeAzimuth(dome, deg(-10)))) // 100000 3 10 350 with the simulators
+
+// The rotator angle of a direction without clipping: undefined when the limits exclude it, so it can be refused.
+console.log(reachableRotatorAngle(rotator, 370)) // 10
 
 lifecycle.dispose()
 simulator.dispose()

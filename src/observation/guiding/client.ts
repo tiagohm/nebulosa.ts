@@ -10,8 +10,9 @@ import type { GuideOutputManager } from '../../devices/indi/manager/guideoutput'
 import type { BlobEncoding } from '../../devices/indi/types'
 import { type Image, type ImageRawType, makeImageRawTypedArray } from '../../imaging/model/types'
 import { clamp } from '../../math/numerical/math'
+import { toDeg } from '../../math/units/angle'
 import { DEFAULT_GUIDING_ASSISTANT_CONFIG, GuidingAssistant, type GuidingAssistantConfig, type GuidingAssistantResult } from './assistant'
-import { effectiveGuidingCalibration, GUIDING_CALIBRATION_RECORD_VERSION, type GuidingCalibrationApplicability, type GuidingCalibrationContext, type GuidingCalibrationRecord } from './calibration.transform'
+import { effectiveGuidingCalibration, GUIDING_CALIBRATION_RECORD_VERSION, type GuidingCalibrationApplicability, type GuidingCalibrationContext, type GuidingCalibrationRecord, type GuidingCalibrationRotation, type GuidingDirectionCandidate } from './calibration.transform'
 import { type CalibrationPulseCommand, flipGuidingCalibration, type GuidingCalibrationConfig, type GuidingCalibrationDiagnostics, type GuidingCalibrationResult, GuidingCalibrator } from './calibrator'
 import { DitherGenerator, type DitherMode } from './dither'
 import type { GuiderState, GuidingEvent, GuidingEventData, GuidingEventType } from './events'
@@ -261,6 +262,10 @@ export class GuiderClient {
 	#source?: GuidingCalibrationRecord
 	// Mount context the caller last declared, recorded with the next solved calibration.
 	#calibrationContext: GuidingCalibrationContext = {}
+	// How the guide image follows a camera rotator, as the caller last declared it.
+	#rotation: GuidingCalibrationRotation = { kind: 'fixed' }
+	// Direction check the calibration in use waits for before the controller guides with it.
+	#directionCheck?: DirectionCheck
 	// Incremented whenever the calibration the guider uses changes, so a sample can be told from one taken with another.
 	#calibrationGeneration = 0
 	#frame?: GuideFrame
@@ -617,6 +622,7 @@ export class GuiderClient {
 
 	// Clears the solved calibration and its source and resets the guider/calibrator state machines.
 	clearCalibration() {
+		this.#directionCheck = undefined
 		this.#source = undefined
 		this.#dropCalibration('calibration cleared')
 	}
@@ -627,6 +633,7 @@ export class GuiderClient {
 		this.#abortGuidingAssistantForTransition(reason)
 
 		this.#calibration = undefined
+		this.#directionCheck = undefined
 		this.#calibrationGeneration++
 		this.#calibrator.reset()
 		this.#tracker.reset()
@@ -794,6 +801,17 @@ export class GuiderClient {
 		this.#calibrationContext = context
 	}
 
+	// Declares how the guide image follows a camera rotator, used by the next restore or reassessment (see
+	// effectiveGuidingCalibration); the calibration in use is left as it is.
+	setCalibrationRotation(rotation: GuidingCalibrationRotation) {
+		this.#rotation = rotation
+	}
+
+	// Returns whether the calibration in use waits for a direction check before the controller guides with it.
+	getDirectionCheckPending() {
+		return this.#directionCheck !== undefined
+	}
+
 	// Returns the source of the calibration in use (the solution as solved or restored, with the context it is valid in),
 	// or undefined without one. The record is immutable and safe to keep.
 	exportCalibration() {
@@ -820,8 +838,8 @@ export class GuiderClient {
 
 		this.#source = record
 		this.#calibrationContext = context
-		this.#useCalibration(applicability.calibration)
-		this.emitEvent('calibrationRestored', { guideOutput: this.#guideOutput?.name ?? '', transformations: applicability.transformations, declinationScale: applicability.declinationScale })
+		this.#useCalibration(applicability.calibration, applicability.directionCheck)
+		this.emitEvent('calibrationRestored', { guideOutput: this.#guideOutput?.name ?? '', transformations: applicability.transformations, declinationScale: applicability.declinationScale, rotatorChange: applicability.rotatorChange, directionCheck: applicability.directionCheck !== undefined })
 		return applicability
 	}
 
@@ -842,19 +860,21 @@ export class GuiderClient {
 			return applicability
 		}
 
-		this.#useCalibration(applicability.calibration)
-		this.emitEvent('calibrationTransformed', { guideOutput: this.#guideOutput?.name ?? '', transformations: applicability.transformations, declinationScale: applicability.declinationScale })
+		this.#useCalibration(applicability.calibration, applicability.directionCheck)
+		this.emitEvent('calibrationTransformed', { guideOutput: this.#guideOutput?.name ?? '', transformations: applicability.transformations, declinationScale: applicability.declinationScale, rotatorChange: applicability.rotatorChange, directionCheck: applicability.directionCheck !== undefined })
 		return applicability
 	}
 
 	// Returns how the record applies in context with the transform options of this client.
 	#applicabilityOf(record: GuidingCalibrationRecord, context: GuidingCalibrationContext) {
-		return effectiveGuidingCalibration(record, context, { declinationCompensation: this.options.declinationCompensation !== false, reverseDecOutputAfterMeridianFlip: this.options.reverseDecOutputAfterMeridianFlip === true })
+		return effectiveGuidingCalibration(record, context, { declinationCompensation: this.options.declinationCompensation !== false, reverseDecOutputAfterMeridianFlip: this.options.reverseDecOutputAfterMeridianFlip === true, rotation: this.#rotation })
 	}
 
 	// Makes calibration the one in use: on the running guider when guiding (keeping its lock), else for the next guider.
-	#useCalibration(calibration: GuidingCalibrationResult) {
+	// With candidates, the controller guides with it only once a direction check chose among them (#processDirectionCheck).
+	#useCalibration(calibration: GuidingCalibrationResult, candidates?: readonly [GuidingDirectionCandidate, GuidingDirectionCandidate]) {
 		this.#calibration = calibration
+		this.#directionCheck = candidates && { candidates, phase: 'start', badFrames: 0 }
 		this.#calibrationGeneration++
 		const sessionState = this.#paused ? this.#resumeState : this.#appState
 
@@ -1071,6 +1091,8 @@ export class GuiderClient {
 				this.#source = undefined
 				this.#calibrationGeneration++
 			}
+
+			this.#directionCheck = undefined
 
 			this.#calibrator.reset()
 			this.emitEvent('calibrationStarted', { guideOutput: this.#guideOutput.name })
@@ -1499,6 +1521,7 @@ export class GuiderClient {
 
 		if (step.completed !== undefined) {
 			this.#calibration = step.completed
+			this.#directionCheck = undefined
 			this.#source = { version: GUIDING_CALIBRATION_RECORD_VERSION, calibration: step.completed, context: this.#calibrationContext, acquiredAt: Date.now() }
 			this.#calibrationGeneration++
 			this.#guider = this.#makeGuider(this.#calibration)
@@ -1514,8 +1537,14 @@ export class GuiderClient {
 		return this.#pulseCalibration(step.pulse?.ra.direction, step.pulse?.ra.duration, step.pulse?.dec.direction, step.pulse?.dec.duration)
 	}
 
-	// Runs the guide controller, applies settle tracking, and returns the max pulse delay.
+	// Runs the guide controller, applies settle tracking, and returns the max pulse delay. A pending direction check takes
+	// the frame first.
 	#processGuidingFrame(frame: GuideFrame) {
+		if (this.#directionCheck !== undefined) {
+			const delay = this.#processDirectionCheck(frame, this.#directionCheck)
+			if (delay !== undefined) return delay
+		}
+
 		this.#updateLockShift(frame)
 		const command = this.#guider.processFrame(frame)
 		const acceptedMeasurement =
@@ -1590,6 +1619,87 @@ export class GuiderClient {
 		}
 
 		return { ...command, ra: pulse.ra, dec: pulse.dec }
+	}
+
+	// Advances a direction check by one guiding frame, before the controller sees it, and returns the pulse delay of a
+	// frame it consumed, or undefined once it ended and the frame goes on to the controller. The check sends one RA pulse
+	// long enough to move the star DIRECTION_CHECK_TRAVEL_PX at the expected rate (at least the calibration step, at most
+	// the pulse ceiling), measures the displacement on the next frame and sends the opposite pulse to bring the star
+	// back, and the frame after that applies the decision (directionDecision): the chosen candidate becomes the
+	// calibration in use (calibrationDirectionChecked), or, when none fits, the calibration and its source are dropped
+	// and a new calibration starts at once (calibrationDirectionCheckFailed). A frame without a measurement waits, and
+	// DIRECTION_CHECK_BAD_FRAMES of them fail the check. Nothing is sent while the pulses would be refused.
+	#processDirectionCheck(frame: GuideFrame, check: DirectionCheck): number | undefined {
+		const step = (phase: 'pulse' | 'measure' | 'wait') => this.emitEvent('calibrationDirectionCheckStep', { guideOutput: this.#guideOutput?.name ?? '', frameId: frame.frameId ?? 0, phase })
+
+		if (this.#paused || !this.#guideOutputActive) {
+			step('wait')
+			return 0
+		}
+
+		if (check.phase === 'end') {
+			this.#directionCheck = undefined
+			const decision = check.decision!
+
+			if (decision.chosen === undefined) {
+				this.emitEvent('calibrationDirectionCheckFailed', { guideOutput: this.#guideOutput?.name ?? '', message: decision.message ?? 'the direction check failed' })
+				this.#calibration = undefined
+				this.#source = undefined
+				this.#calibrationGeneration++
+				this.#calibrator.reset()
+				this.#tracker.reset()
+				this.emitEvent('calibrationStarted', { guideOutput: this.#guideOutput?.name ?? '' })
+				this.#resumeState = 'Calibrating'
+				this.#setAppState('Calibrating')
+				return 0
+			}
+
+			this.#calibration = decision.chosen.calibration
+			this.#calibrationGeneration++
+			this.#guider = this.#makeGuider(decision.chosen.calibration)
+			this.#avgDistanceNeedReset = true
+			this.emitEvent('calibrationDirectionChecked', { guideOutput: this.#guideOutput?.name ?? '', sense: decision.chosen.sense, expected: decision.chosen === check.candidates[0], angleError: decision.angleError!, rateRatio: decision.rateRatio! })
+			return undefined
+		}
+
+		const measurement = frame.tracking.measurement
+
+		if (measurement === undefined) {
+			if (++check.badFrames >= DIRECTION_CHECK_BAD_FRAMES) {
+				check.phase = 'end'
+				check.decision = { message: 'the guide star was not measured during the direction check' }
+			}
+
+			step('wait')
+			return 0
+		}
+
+		const expected = check.candidates[0].calibration
+
+		if (check.phase === 'start') {
+			const ceiling = this.#admission?.maximumDuration ?? this.maxPulseDuration()
+			const duration = Math.min(Math.max(this.#calibrator.config.raPulse, DIRECTION_CHECK_TRAVEL_PX / expected.ra.ratePxPerMs), ceiling)
+			const sent = this.#pulseAxis(expected.ra.direction, duration)
+
+			if (sent <= 0) {
+				step('wait')
+				return 0
+			}
+
+			check.start = [measurement.x, measurement.y]
+			check.duration = sent
+			check.phase = 'measure'
+			step('pulse')
+			return sent
+		}
+
+		const [x0, y0] = check.start!
+		check.decision = directionDecision(check.candidates, measurement.x - x0, measurement.y - y0, check.duration!)
+		// Back where the star stood, whatever was decided, so the lock is found again where it was.
+		const sent = this.#pulseAxis(expected.ra.direction === 'WEST' ? 'EAST' : 'WEST', check.duration)
+		check.phase = 'end'
+		step('measure')
+		return sent
 	}
 
 	// Sends one calibration pulse pair and returns the largest applied delay.
@@ -2326,6 +2436,72 @@ function calibrationResultToPHD2Data(calibration: GuidingCalibrationResult): PHD
 		yRate: calibration.dec.ratePxPerMs,
 		yParity: calibration.dec.direction === 'NORTH' ? '+' : '-',
 	}
+}
+
+// Star travel a direction check aims its RA pulse at, in pixels: long enough for a centroid error of a few tenths of a
+// pixel to leave its direction within a few degrees, short enough to keep the star well inside the search region.
+const DIRECTION_CHECK_TRAVEL_PX = 8
+
+// Largest angle, in degrees, between the measured displacement and the RA direction of the accepted candidate
+// (provisional).
+const DIRECTION_CHECK_ACCEPT = 15
+
+// Smallest angle, in degrees, between the measured displacement and the RA direction of the rejected candidate
+// (provisional).
+const DIRECTION_CHECK_REJECT = 30
+
+// Largest relative difference between the measured RA rate and the accepted candidate's (provisional).
+const DIRECTION_CHECK_RATE = 0.3
+
+// Frames in a row without a measurement that fail a direction check.
+const DIRECTION_CHECK_BAD_FRAMES = 3
+
+// Direction check of a calibration derived for a turned guide image, in progress.
+interface DirectionCheck {
+	// Candidates, the expected one first; the calibration in use is the first one's until the check ends.
+	readonly candidates: readonly [GuidingDirectionCandidate, GuidingDirectionCandidate]
+	// start: waits for a measured frame to send the RA pulse; measure: measures the displacement and sends the pulse
+	// back; end: the next frame applies the decision.
+	phase: 'start' | 'measure' | 'end'
+	// Star position before the pulse, in pixels.
+	start?: readonly [number, number]
+	// Duration of the RA pulse sent, in milliseconds.
+	duration?: number
+	// Frames without a measurement so far.
+	badFrames: number
+	// Outcome, once measured.
+	decision?: DirectionDecision
+}
+
+// Outcome of a direction check: the candidate chosen with its evidence, or why none was.
+export interface DirectionDecision {
+	// Candidate chosen; absent when none fits.
+	readonly chosen?: GuidingDirectionCandidate
+	// Angle between the displacement and the chosen candidate's RA direction, in degrees.
+	readonly angleError?: number
+	// Measured RA rate over the chosen candidate's.
+	readonly rateRatio?: number
+	// Why no candidate was chosen, meant for people.
+	readonly message?: string
+}
+
+// Decides a direction check from the displacement (dx, dy) of the star, in pixels, after an RA pulse of `duration` ms
+// in the RA direction of the candidates: the candidate whose RA unit vector lies within DIRECTION_CHECK_ACCEPT degrees
+// of the displacement while the other lies at least DIRECTION_CHECK_REJECT degrees from it, and whose RA rate is within
+// DIRECTION_CHECK_RATE of the measured one; none otherwise, with the reason.
+export function directionDecision(candidates: readonly [GuidingDirectionCandidate, GuidingDirectionCandidate], dx: number, dy: number, duration: number): DirectionDecision {
+	const travel = Math.hypot(dx, dy)
+	if (!(travel > 0) || !(duration > 0)) return { message: 'the guide star did not move during the direction check' }
+
+	const angles = candidates.map(({ calibration: { ra } }) => toDeg(Math.acos(clamp((dx * ra.unitX + dy * ra.unitY) / travel, -1, 1))))
+	const best = angles[0] <= angles[1] ? 0 : 1
+	const chosen = candidates[best]
+	const angleError = angles[best]
+	const rateRatio = travel / duration / chosen.calibration.ra.ratePxPerMs
+
+	if (!(angleError <= DIRECTION_CHECK_ACCEPT) || !(angles[1 - best] >= DIRECTION_CHECK_REJECT)) return { message: `the guide star moved ${angleError.toFixed(0)}° from the nearest expected direction` }
+	if (!(Math.abs(rateRatio - 1) <= DIRECTION_CHECK_RATE)) return { message: `the guide star moved at ${(rateRatio * 100).toFixed(0)}% of the calibrated rate` }
+	return { chosen, angleError, rateRatio }
 }
 
 // Remaining distance below which a fast recenter is done on both axes, in pixels, as PHD2's.

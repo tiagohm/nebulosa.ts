@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeEach, expect, spyOn, test } from 'bun:test'
-import { RotatorCommander, rotatorAngle } from '../../../src/devices/commanders/rotator'
+import { RotatorCommander, reachableRotatorAngle, rotatorAngle } from '../../../src/devices/commanders/rotator'
 import { IndiClientHandlerSet } from '../../../src/devices/indi/client'
 import type { Rotator } from '../../../src/devices/indi/device'
 import { RotatorManager } from '../../../src/devices/indi/manager/rotator'
@@ -177,6 +177,72 @@ test('answers an unreachable direction with the limit fewest degrees away from i
 	expect(rotatorAngle(narrow, 80)).toBe(90)
 	expect(rotatorAngle(narrow, -300)).toBe(90)
 	expect(rotatorAngle(narrow, 305)).toBe(200)
+})
+
+test('resolves a direction to its representative inside the limits without clipping', () => {
+	const unsigned = { angle: { value: 0, min: 0, max: 360 } } as unknown as Rotator
+	const signed = { angle: { value: 0, min: -180, max: 180 } } as unknown as Rotator
+	const half = { angle: { value: 0, min: 0, max: 180 } } as unknown as Rotator
+	const centered = { angle: { value: 0, min: -90, max: 90 } } as unknown as Rotator
+
+	expect(reachableRotatorAngle(unsigned, 45)).toBe(45)
+	expect(reachableRotatorAngle(unsigned, 0)).toBe(0)
+	expect(reachableRotatorAngle(unsigned, 360)).toBe(360)
+	expect(reachableRotatorAngle(unsigned, -10)).toBe(350)
+	expect(reachableRotatorAngle(unsigned, 400)).toBe(40)
+	expect(reachableRotatorAngle(unsigned, 720)).toBe(0)
+
+	expect(reachableRotatorAngle(signed, 350)).toBe(-10)
+	expect(reachableRotatorAngle(signed, -190)).toBe(170)
+	expect(reachableRotatorAngle(signed, 180)).toBe(180)
+	expect(reachableRotatorAngle(signed, -180)).toBe(-180)
+	expect(reachableRotatorAngle(signed, 540)).toBe(-180)
+
+	expect(reachableRotatorAngle(half, 90)).toBe(90)
+	expect(reachableRotatorAngle(half, 180)).toBe(180)
+	expect(reachableRotatorAngle(half, 0)).toBe(0)
+	expect(reachableRotatorAngle(half, 360)).toBe(0)
+	expect(reachableRotatorAngle(half, -180)).toBe(180)
+	expect(reachableRotatorAngle(half, 270)).toBeUndefined()
+	expect(reachableRotatorAngle(half, -1)).toBeUndefined()
+	expect(reachableRotatorAngle(half, 181)).toBeUndefined()
+
+	expect(reachableRotatorAngle(centered, -90)).toBe(-90)
+	expect(reachableRotatorAngle(centered, 90)).toBe(90)
+	expect(reachableRotatorAngle(centered, 300)).toBe(-60)
+	expect(reachableRotatorAngle(centered, 450)).toBe(90)
+	expect(reachableRotatorAngle(centered, 180)).toBeUndefined()
+	expect(reachableRotatorAngle(centered, 91)).toBeUndefined()
+	expect(reachableRotatorAngle(centered, -91)).toBeUndefined()
+})
+
+test('agrees with the commanded angle whenever the direction is reachable', () => {
+	const ranges = [
+		{ min: 0, max: 360 },
+		{ min: -180, max: 180 },
+		{ min: 0, max: 180 },
+		{ min: -90, max: 90 },
+		{ min: 10, max: 350 },
+		{ min: 90, max: 200 },
+	]
+
+	for (const range of ranges) {
+		const rotator = { angle: { value: 0, ...range } } as unknown as Rotator
+
+		for (let angle = -720; angle <= 720; angle += 7.5) {
+			const reachable = reachableRotatorAngle(rotator, angle)
+			const commanded = rotatorAngle(rotator, angle)
+
+			if (reachable === undefined) {
+				expect(commanded === range.min || commanded === range.max).toBeTrue()
+			} else {
+				expect(reachable).toBe(commanded)
+				expect(reachable).toBeGreaterThanOrEqual(range.min)
+				expect(reachable).toBeLessThanOrEqual(range.max)
+				expect((((reachable - angle) % 360) + 360) % 360).toBe(0)
+			}
+		}
+	}
 })
 
 test('homes after observing the homing motion and supports synchronization and reversal', async () => {

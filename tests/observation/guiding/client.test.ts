@@ -202,6 +202,9 @@ class MountSimulator {
 	decAxis: readonly [number, number] = DEC_AXIS
 	// Multiplier of the RA travel of a pulse; cos(declination) of a pointing away from the equator.
 	raScale = 1
+	// Rotation of the guide image, in radians from +X toward +Y, applied to every pulse's travel; a guide camera turned
+	// by a camera rotator.
+	rotation = 0
 
 	// Number of recorded pulses already converted into motion.
 	#consumed = 0
@@ -216,8 +219,10 @@ class MountSimulator {
 			const polarity = ra ? this.raPolarity : this.decPolarity
 			const sign = (direction === 'WEST' || direction === 'NORTH' ? 1 : -1) * polarity
 
-			this.offsetX += sign * travel * axis[0]
-			this.offsetY += sign * travel * axis[1]
+			const cos = Math.cos(this.rotation)
+			const sin = Math.sin(this.rotation)
+			this.offsetX += sign * travel * (cos * axis[0] - sin * axis[1])
+			this.offsetY += sign * travel * (sin * axis[0] + cos * axis[1])
 		}
 
 		this.#consumed = pulses.length
@@ -3424,6 +3429,79 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 
 		harness.client.clearCalibration()
 		expect(harness.client.exportCalibration()).toBeUndefined()
+	})
+
+	test('a rotation of the guide image is checked by one pulse and its return, then guided with the sense found', async () => {
+		for (const sense of [1, -1] as const) {
+			const harness = makeHarness({ calibrator: FAST_CALIBRATION })
+			harness.client.setCalibrationContext({ declination: 0, pierSide: 'WEST', rotatorAngle: 100 })
+			await calibrate(harness)
+			await establishLockReference(harness)
+			const before = harness.client.getCalibrationData()
+
+			// The rotator turned 40°; the guide image turned with the sense the test chose, which the client does not know.
+			harness.mount.rotation = sense * 40 * DEG2RAD
+			harness.client.setCalibrationRotation({ kind: 'turning' })
+			const reassessed = harness.client.reassessCalibration({ declination: 0, pierSide: 'WEST', rotatorAngle: 140 })
+			expect(reassessed).toMatchObject({ status: 'transformed', transformations: ['rotation'], rotatorChange: 40 })
+			expect(harness.client.getDirectionCheckPending()).toBeTrue()
+			const pulses = harness.guideOutputManager.pulses.length
+
+			for (let i = 0; i < 3; i++) await feedFrame(harness)
+
+			const [checked] = nativeOf(harness.native, 'calibrationDirectionChecked')
+			expect(checked).toMatchObject({ sense, expected: sense === 1 })
+			expect(checked.angleError).toBeLessThan(5)
+			expect(checked.rateRatio).toBeCloseTo(1, 1)
+			// One RA pulse out and one back, nothing else, during the check.
+			expect(harness.guideOutputManager.pulses.slice(pulses).map(({ direction }) => direction)).toEqual([before.xParity === '+' ? 'WEST' : 'EAST', before.xParity === '+' ? 'EAST' : 'WEST'])
+			expect(harness.client.getDirectionCheckPending()).toBeFalse()
+			expect(Math.cos(harness.client.getCalibrationData().xAngle - before.xAngle - sense * 40 * DEG2RAD)).toBeCloseTo(1, 3)
+			expect(harness.client.getAppState()).toBe('Guiding')
+
+			await establishLockReference(harness)
+			harness.mount.offsetX += 3
+			harness.mount.offsetY -= 2
+			const distances: number[] = []
+
+			for (let i = 0; i < 8; i++) {
+				await feedFrame(harness)
+				const step = nativeOf(harness.native, 'guideStep').at(-1)!
+				distances.push(Math.hypot(step.dx, step.dy))
+			}
+
+			expect(distances.at(-1)!).toBeLessThan(distances[0] / 2)
+		}
+	}, 60000)
+
+	test('a guide image that did not turn as either sense fails the check and calibrates again', async () => {
+		const harness = makeHarness({ calibrator: FAST_CALIBRATION })
+		harness.client.setCalibrationContext({ declination: 0, pierSide: 'WEST', rotatorAngle: 100 })
+		await calibrate(harness)
+		await establishLockReference(harness)
+
+		// The rotator reports 40° but the guide image turned 90°: a sync the caller could not see.
+		harness.mount.rotation = 90 * DEG2RAD
+		harness.client.setCalibrationRotation({ kind: 'turning', sense: 1 })
+		harness.client.reassessCalibration({ declination: 0, pierSide: 'WEST', rotatorAngle: 140 })
+
+		for (let i = 0; i < 3; i++) await feedFrame(harness)
+
+		expect(nativeOf(harness.native, 'calibrationDirectionCheckFailed')).toHaveLength(1)
+		expect(nativeOf(harness.native, 'calibrationDirectionChecked')).toHaveLength(0)
+		expect(harness.client.getAppState()).toBe('Calibrating')
+		expect(harness.client.getCalibrated()).toBeFalse()
+		expect(harness.client.exportCalibration()).toBeUndefined()
+	}, 30000)
+
+	test('a guide image that does not turn with the rotator is never rotated nor checked', async () => {
+		const harness = makeHarness({ calibrator: FAST_CALIBRATION })
+		harness.client.setCalibrationContext({ declination: 0, pierSide: 'WEST', rotatorAngle: 100 })
+		await calibrate(harness)
+
+		harness.client.setCalibrationRotation({ kind: 'fixed' })
+		expect(harness.client.reassessCalibration({ declination: 0, pierSide: 'WEST', rotatorAngle: 140 }).status).toBe('direct')
+		expect(harness.client.getDirectionCheckPending()).toBeFalse()
 	})
 
 	test('a hand flip flips the source with its pier side, so a reassessment does not undo it', async () => {

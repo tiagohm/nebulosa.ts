@@ -352,3 +352,18 @@ export function rotatorAngle(rotator: Rotator, angle: number) {
 
 	return wrapped - max <= min + 360 - wrapped ? max : min
 }
+
+// Resolves a requested direction, in degrees, to the representative inside the rotator's published limits
+// [angle.min, angle.max]: the angle itself when inside, else its equivalent in the turn starting at the lower
+// limit, the one rotatorAngle commands. Undefined when the limits exclude that direction, which rotatorAngle
+// would instead clip to a limit; nothing is ever clipped here, so a caller can refuse an orientation the
+// mechanism cannot reach rather than frame a different one.
+export function reachableRotatorAngle(rotator: Pick<Rotator, 'angle'>, angle: number): number | undefined {
+	const { min, max } = rotator.angle
+
+	if (angle >= min && angle <= max) return angle
+
+	const wrapped = angle - 360 * Math.floor((angle - min) / 360)
+
+	return wrapped <= max ? wrapped : undefined
+}
