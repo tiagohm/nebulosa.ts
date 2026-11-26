@@ -57,11 +57,6 @@ export const CAMERA_BLOB_PADDING = 16384
 // stars. Past this cap the trailing edge of a displaced field thins out, which is an acceptable
 // trade for an error already far larger than the sensor itself.
 export const CAMERA_MAX_SCENE_MARGIN = 1024
-// Simulated weather station driver re-read period (seconds): default plus the range advertised on
-// WEATHER_UPDATE. The simulator only stores the value; it schedules nothing from it.
-export const WEATHER_DEFAULT_UPDATE_PERIOD = 60
-export const WEATHER_MIN_UPDATE_PERIOD = 1
-export const WEATHER_MAX_UPDATE_PERIOD = 3600
 
 // Mount slew-rate presets (name/label and angular speed in radians/second).
 export const SLEW_RATES = [

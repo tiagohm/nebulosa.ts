@@ -53,6 +53,14 @@ export abstract class BoardSimulator extends DeviceSimulator {
 		this.#transient = transientComponentProperties(components)
 	}
 
+	// Publishes a property, except one of the circuits' while disconnected: disconnection deleted those,
+	// and a client applies a set vector whether or not it saw the definition, so a command that still
+	// reaches a circuit must not repopulate them. The common properties stay defined across a
+	// disconnection and keep publishing, so their acknowledgements are never lost.
+	protected notify(message: SimulatorProperty) {
+		if (this.isConnected || !this.#properties.includes(message)) super.notify(message)
+	}
+
 	// Routes a text command to the circuit that owns it.
 	sendText(vector: NewTextVector) {
 		super.sendText(vector)

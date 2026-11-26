@@ -4,8 +4,8 @@ import { IndiClientHandlerSet } from '../../../src/devices/indi/client'
 import type { Weather } from '../../../src/devices/indi/device'
 import { WeatherManager } from '../../../src/devices/indi/manager/weather'
 import { ClientSimulator } from '../../../src/devices/indi/simulator/client'
-import { WEATHER_DEFAULT_UPDATE_PERIOD, WEATHER_MAX_UPDATE_PERIOD, WEATHER_MIN_UPDATE_PERIOD } from '../../../src/devices/indi/simulator/constants'
 import { WeatherSimulator } from '../../../src/devices/indi/simulator/weather'
+import { DEFAULT_WEATHER_SIMULATOR_CONFIG } from '../../../src/devices/indi/simulator/weather.config'
 import type { PropertyState } from '../../../src/devices/indi/types'
 import { DeviceLifecycle } from '../../../src/devices/orchestration/device.lifecycle'
 import { OperationCoordinator, failedOperationResult } from '../../../src/devices/orchestration/operation'
@@ -34,7 +34,7 @@ beforeEach(() => {
 afterEach(async () => {
 	await operationCoordinator.cancelAll()
 	const weather = getWeather()
-	if (weather.connected) weatherManager.setUpdatePeriod(weather, WEATHER_DEFAULT_UPDATE_PERIOD)
+	if (weather.connected) weatherManager.setUpdatePeriod(weather, DEFAULT_WEATHER_SIMULATOR_CONFIG.updatePeriod)
 	weatherManager.disconnect(weather)
 })
 
@@ -71,14 +71,14 @@ test('sets the update period clamped to the published range and resolves once it
 		expect(weather.updatePeriod!.value).toBe(30)
 
 		expect(await weatherCommander.setUpdatePeriod(operationCoordinator, weather, 0)).toMatchObject({ ok: true })
-		expect(weather.updatePeriod!.value).toBe(WEATHER_MIN_UPDATE_PERIOD)
+		expect(weather.updatePeriod!.value).toBe(DEFAULT_WEATHER_SIMULATOR_CONFIG.minimumUpdatePeriod)
 
 		expect(await weatherCommander.setUpdatePeriod(operationCoordinator, weather, 1e6)).toMatchObject({ ok: true })
-		expect(weather.updatePeriod!.value).toBe(WEATHER_MAX_UPDATE_PERIOD)
+		expect(weather.updatePeriod!.value).toBe(DEFAULT_WEATHER_SIMULATOR_CONFIG.maximumUpdatePeriod)
 
 		expect(setUpdatePeriod).toHaveBeenNthCalledWith(1, weather, 30)
-		expect(setUpdatePeriod).toHaveBeenNthCalledWith(2, weather, WEATHER_MIN_UPDATE_PERIOD)
-		expect(setUpdatePeriod).toHaveBeenNthCalledWith(3, weather, WEATHER_MAX_UPDATE_PERIOD)
+		expect(setUpdatePeriod).toHaveBeenNthCalledWith(2, weather, DEFAULT_WEATHER_SIMULATOR_CONFIG.minimumUpdatePeriod)
+		expect(setUpdatePeriod).toHaveBeenNthCalledWith(3, weather, DEFAULT_WEATHER_SIMULATOR_CONFIG.maximumUpdatePeriod)
 		expect(isFree(weather)).toBeTrue()
 	} finally {
 		setUpdatePeriod.mockRestore()

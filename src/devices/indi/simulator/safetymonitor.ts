@@ -1,100 +1,53 @@
 import type { IndiClientHandler } from '../client'
 import { DeviceInterfaceType } from '../device'
-import { makeLightVector, makeSwitchVector, type NewNumberVector, type NewSwitchVector, type PropertyState, selectOnSwitch } from '../types'
+import { BoardSimulator, type BoardSimulatorOptions } from './board'
 import type { ClientSimulator } from './client'
-import { MAIN_CONTROL } from './constants'
-import { DeviceSimulator } from './device'
-import type { DeviceSimulatorOptions, SimulatorProperty } from './types'
+import { SafetyMonitorCondition } from './safetymonitor.condition'
+import { type SafetyCondition, type SafetyMonitorSimulatorConfig, type SafetyMonitorSimulatorConfigOverride, safetyMonitorSimulatorConfig } from './safetymonitor.config'
 
-// Fail-closed INDI safety-monitor simulation with a passive status light and simulator-only controls.
+// Fail-closed INDI safety-monitor simulation: a board with the condition the simulator-only selector
+// sets and the passive status light it drives.
 
-// Simulates an AUXILIARY INDI Safety Monitor driver. Public status is read-only; the SIMULATOR_SAFETY
-// switch selects safe, unsafe, warning, or unknown conditions for tests and interactive sessions.
-export class SafetyMonitorSimulator extends DeviceSimulator {
+// Options of a simulated safety monitor.
+export interface SafetyMonitorSimulatorOptions extends BoardSimulatorOptions {
+	// Override of DEFAULT_SAFETY_MONITOR_SIMULATOR_CONFIG.
+	readonly config?: SafetyMonitorSimulatorConfigOverride
+}
+
+// Simulates an AUXILIARY INDI Safety Monitor driver. The public status is read-only; the
+// SIMULATOR_SAFETY switch selects safe, unsafe, warning or unknown conditions.
+export class SafetyMonitorSimulator extends BoardSimulator {
 	readonly type = 'safetyMonitor'
 
-	// Standard aggregate INDI safety property; only Ok maps to a safe domain value.
-	readonly #safetyStatus = makeLightVector('', 'SAFETY_STATUS', 'Safety', MAIN_CONTROL, ['SAFETY', 'Safety', 'Idle'])
-	// Simulator-only condition selector used to drive the passive safety property.
-	readonly #simulatorSafety = makeSwitchVector('', 'SIMULATOR_SAFETY', 'Safety Condition', MAIN_CONTROL, 'OneOfMany', 'rw', ['SAFE', 'Safe', false], ['UNSAFE', 'Unsafe', false], ['WARNING', 'Warning', false], ['UNKNOWN', 'Unknown', true])
+	// Configuration the monitor was built with.
+	readonly configuration: SafetyMonitorSimulatorConfig
 
-	// Properties defined while the simulator is connected.
-	protected readonly properties: readonly SimulatorProperty[] = [this.#safetyStatus, this.#simulatorSafety]
-	// The derived public status is rebuilt from the saved simulator condition.
-	protected readonly propertiesToNotSave: readonly SimulatorProperty[] = [this.#safetyStatus]
+	readonly #condition: SafetyMonitorCondition
 
-	// Creates a fail-closed safety simulator and advertises the INDI AUXILIARY interface bit.
 	constructor(
 		name: string,
 		client: ClientSimulator,
-		readonly options?: DeviceSimulatorOptions,
+		readonly options?: SafetyMonitorSimulatorOptions,
 		handler: IndiClientHandler = client.handler,
 	) {
-		super(name, client, handler, DeviceInterfaceType.AUXILIARY, 'safetymonitor.simulator')
-
-		for (const property of this.properties) property.device = name
-		this.driverInfo.elements.DRIVER_EXEC.value = 'safetymonitor.simulator'
+		super(name, client, handler, DeviceInterfaceType.AUXILIARY, 'safetymonitor.simulator', options?.now)
+		this.configuration = safetyMonitorSimulatorConfig(options?.config)
+		this.#condition = new SafetyMonitorCondition(this.bus, this.configuration)
+		this.install(this.#condition)
 	}
 
-	// Drops emissions for properties deleted on disconnect while keeping common controls observable.
-	protected notify(message: SimulatorProperty) {
-		if (this.isConnected || !this.properties.includes(message)) super.notify(message)
+	// Selected condition.
+	get condition() {
+		return this.#condition.condition
 	}
 
-	// Updates the standard status and emits a LightVector only when the aggregate condition changes.
-	#setState(state: PropertyState) {
-		const element = this.#safetyStatus.elements.SAFETY
-		if (this.#safetyStatus.state === state && element.value === state) return false
-
-		this.#safetyStatus.state = state
-		element.value = state
-		this.notify(this.#safetyStatus)
-		return true
-	}
-
-	// Selects the public safe/unsafe state. False represents a definite Alert condition.
+	// Selects the safe or unsafe condition: false is a definite Alert.
 	setSafe(safe: boolean) {
-		selectOnSwitch(this.#simulatorSafety, safe ? 'SAFE' : 'UNSAFE')
-		this.notify(this.#simulatorSafety)
-		this.#setState(safe ? 'Ok' : 'Alert')
+		this.#condition.setCondition(safe ? 'SAFE' : 'UNSAFE')
 	}
 
-	// SafetyMonitor has no numeric controls.
-	sendNumber(vector: NewNumberVector) {}
-
-	// Handles connection and simulator-only condition changes while preserving base CONFIG behavior.
-	sendSwitch(vector: NewSwitchVector) {
-		super.sendSwitch(vector)
-
-		switch (vector.name) {
-			case 'CONNECTION':
-				if (vector.elements.CONNECT === true) this.connect()
-				else if (vector.elements.DISCONNECT === true) this.disconnect()
-				return
-			case 'SIMULATOR_SAFETY':
-				if (vector.elements.SAFE === true) this.setSafe(true)
-				else if (vector.elements.UNSAFE === true) this.setSafe(false)
-				else if (vector.elements.WARNING === true) {
-					selectOnSwitch(this.#simulatorSafety, 'WARNING')
-					this.notify(this.#simulatorSafety)
-					this.#setState('Busy')
-				} else if (vector.elements.UNKNOWN === true) {
-					selectOnSwitch(this.#simulatorSafety, 'UNKNOWN')
-					this.notify(this.#simulatorSafety)
-					this.#setState('Idle')
-				}
-		}
-	}
-
-	// Rebuilds the derived passive status after persisted simulator controls are restored.
-	protected onPropertiesLoaded() {
-		const elements = this.#simulatorSafety.elements
-		this.#setState(elements.SAFE.value ? 'Ok' : elements.UNSAFE.value ? 'Alert' : elements.WARNING.value ? 'Busy' : 'Idle')
-	}
-
-	// Disconnects and removes all simulator properties and client registration.
-	dispose() {
-		this.disconnect()
-		super.dispose()
+	// Selects any condition.
+	setCondition(condition: SafetyCondition) {
+		this.#condition.setCondition(condition)
 	}
 }

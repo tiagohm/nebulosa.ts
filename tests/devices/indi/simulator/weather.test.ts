@@ -201,8 +201,13 @@ describe('weather simulator', () => {
 		expect(emitted).toEqual([])
 	})
 
-	test('stores the update period without scheduling a timer', async () => {
-		const { manager, client, simulator } = setup()
+	test('re-reads its sensors once every update period', async () => {
+		const handler = new IndiClientHandlerSet()
+		const manager = new WeatherManager()
+		handler.add(manager)
+		let now = 1000
+		using client = new ClientSimulator('weather-period', handler)
+		using simulator = new WeatherSimulator('Weather Simulator', client, { now: () => now })
 
 		simulator.connect()
 		await waitUntil(() => manager.get(client, simulator.name)?.connected === true)
@@ -213,13 +218,20 @@ describe('weather simulator', () => {
 		expect(weather.updatePeriod!.min).toBe(1)
 		expect(weather.updatePeriod!.max).toBe(3600)
 
-		// Nothing must move on its own: a timer would repopulate the readings.
+		simulator.tick()
 		const readings = manager.lastUpdatedAt(weather)!
-		await Bun.sleep(150)
+
+		// Nothing moves before the period has passed.
+		now += 14999
+		simulator.tick()
 		expect(manager.lastUpdatedAt(weather)).toBe(readings)
 
-		simulator.dispose()
-		client[Symbol.dispose]()
+		// A real driver re-reads its sensors on that period, republishing readings that did not move.
+		await Bun.sleep(5)
+		now += 1
+		simulator.tick()
+		expect(manager.lastUpdatedAt(weather)!).toBeGreaterThan(readings)
+		expect(weather.temperature).toBe(16.8)
 	})
 
 	test('rebuilds the public parameters from the persisted controls', async () => {
